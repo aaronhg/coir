@@ -207,11 +207,26 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - 記 `scan.missing`（uuid+子 uuid → path），讓仍被 prefab/scene 以 `__uuid__` 引用者浮現為**具名「缺來源檔」孤兒**（不是裸 uuid）；UI 紅標、CLI 印路徑、`--json` 加 `path/missingSource`。
 - 報告加**摺疊「缺來源檔的 meta（已略過）」審計區**（`droppedMetaReport`）：列出全部、標「仍被引用（斷線要修）/ 無人引用（殘留可刪）」。精準度靠 `scan.missingReferenced`——在**所有指向資產的點**（`resolveUuid` + atlas/font 衍生邊 + 路徑型 spine via `missingByPath`）記錄，才抓得到「活著的 `.atlas` 仍列出一張已刪 page」這種只看 JSON 會漏的案例。
 
+### 11.5 `/` 快速搜尋大升級
+從「只比對檔名」變成**多來源模糊搜尋**：`buildSearchIndex` 攤平 asset／frame（sprite-frame 名）／usage（edge.locations）三種，每筆 `target` 都是真實資產 uuid。比對改子序列模糊（`matchScore`：精確>前綴>子字串>子序列），**命中字 VSCode 式高亮**（`fuzzyMatch` 回位置、標所有出現處，所以 `prefab` 連檔名與資料夾一起亮）。範圍前綴 `@`frame `#`type `>`usage、貼 uuid 直跳；每筆右欄顯示 `←被依賴∑ →依賴∑`（0 不畫）；打字回捲到頂。
+
+### 11.6 命名 **Coir** + 發佈
+- 取名：`Cocos` 本就是椰子屬，依賴樹⇄椰子樹的雙關 →「Coir（椰殼纖維）」。改 `package.json`/`bin`(`cag`→`coir`)/`localStorage`/`<title>`/docs；目錄 `assets-graph`→`coir`（給使用者一支 `rename-to-coir.sh`，順帶搬 `.claude` 記憶）。
+- **stale `dist/*.LICENSE.txt`**：webpack 沒清 `dist/`，留著舊 cytoscape/fcose 的 bezier/spring 授權銘牌——與「無第三方相依」矛盾 → 刪掉並加 `output.clean:true`；production 關 sourcemap、`publicPath:'auto'` 讓 gh-pages 友善。
+- GitHub Pages：`index.html`＋committed `dist/app.bundle.js` 直接從 `main`/root 上線（加 `.nojekyll`、MIT `LICENSE`），README 放 Live Demo badge。
+
+### 11.7 多語系 + 首航 UX
+- **i18n**（繁中＋English，零相依）：所有可見字串集中到 `src/browser/i18n.js`（`MESSAGES` + `t(key,vars)` `{var}` 插值），靜態 HTML 用 `data-i18n` / `data-i18n-html` / `data-i18n-ph` / `data-i18n-title`（中文留作 fallback）。banner 下拉切換 → `relocalize()` 重掃＋重繪；自動偵測 `navigator.language`。`src/core/` 零字串；**CLI 固定英文**、集中在 `USAGE`＋`M` 物件（一個測試斷言改 `(missing source)`）。
+- **首航卡片**：剛進來中央浮卡片（選擇按鈕＋說明），全螢幕遮罩，只有語系/`?`/GitHub 抬到遮罩之上（z-index 48）可按。
+- **說明 modal**（`?`，z-index 55）：分頁/拓撲/搜尋/快捷鍵，底部 GitHub 連結；🥥 favicon（emoji SVG）、banner GitHub 圖示。
+- 拓撲欄頭改符號 `←層N`/`→層N`＋層0 染色（避免與 palette 的 `←數量` 撞義）；usage popup 右上角加複製鈕。
+
 ---
 
 ## 12. 最終狀態
 
-- **形式**：純前端（HTML+JS，無第三方執行期庫，~27KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載。
+- **形式**：純前端（HTML+JS，無第三方執行期庫，~40KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT）。
+- **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
 - **三分頁 + 全域型別篩選 bar**：清單（可排序資產表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
 - **無頭工具**：`test/node-run.js`（整份報告回歸）＋ `src/cli.js`（`deps`/`uses`/`closure`/`find`，`--where` 展開位置、`--type` 型別剪枝、`--json` 結構化；`bin` 註冊 `coir`，零執行期相依）。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，18 個案例）。

@@ -251,7 +251,7 @@ test('orphan to a source-less meta is labelled with its known path', () => {
   assert.equal(unknown.path, null);
   // text form prints the path for the known one, the raw uuid for the unknown
   const txt = cli('deps', 'Shop.prefab', '--out').stdout;
-  assert.match(txt, /ghost\.png  \(缺來源檔\)/);
+  assert.match(txt, /ghost\.png  \(missing source\)/);
   assert.ok(txt.includes(U.missing));
 });
 

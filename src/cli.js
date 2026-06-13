@@ -28,16 +28,35 @@ const VIA_W = 12;
 const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
 
-const USAGE = `用法:
+const USAGE = `Usage:
   node src/cli.js <projectDir> deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [--json] [--limit N]
   node src/cli.js <projectDir> uses    <asset> [--depth N] [--type T] [--where] [--json] [--limit N]
   node src/cli.js <projectDir> closure <asset> [--type T] [--list] [--json]
   node src/cli.js <projectDir> find    <query> [--type T] [--json] [--limit N]
 
-<asset>: 完整路徑 / basename / uuid / uuid@sub
---type : 只保留指定型別(逗號分隔)。deps/uses 樹會保留「通往該型別」的中間路徑
-         型別 = 資產類型(非列上的 edge kind);可用:${KNOWN_TYPES.join(' ')}
-         (專案另可能有副檔名衍生型別,如 text;實際清單見 --type 打錯時的提示)`;
+<asset>: full path / basename / uuid / uuid@sub
+--type : keep only the given asset types (comma-separated); on the deps/uses tree it
+         keeps the intermediate path leading to those types.
+         types = asset types (not the edge kinds shown in the listing); known: ${KNOWN_TYPES.join(' ')}
+         (a project may add extension-derived types like 'text'; a wrong --type prints the full list)`;
+
+// All other user-facing CLI text, centralized (CLI is fixed English).
+const M = {
+  scanFail: (m) => `scan failed: ${m}`,
+  unknownTypes: (ts) => `⚠ unknown type(s) (won't match anything): ${ts}`,
+  availTypes: (ts) => `  available types: ${ts}`,
+  unknownCmd: (c) => `unknown command "${c}"`,
+  needTarget: (c) => `command "${c}" needs a target`,
+  notFound: (q) => `✗ not found: "${q}"`,
+  ambiguous: (q, n) => `✗ "${q}" matches ${n} assets — use the full path:`,
+  more: (n) => `    … ${n} more`,
+  metaDerived: '(meta-derived — no nodePath)',
+  matched: ' (matched)',
+  missingSrc: '(missing source)',
+  listHint: '  (add --list to print each asset)',
+  noMatch: (q) => `(no match for "${q}")`,
+  findMore: (n) => `  … ${n} more (raise --limit)`,
+};
 
 function parseArgs(argv) {
   const [projectDir, command, ...rest] = argv;
@@ -165,7 +184,7 @@ function renderTreeText(scan, tree, dir, flags, lines) {
         `${n.e.weight > 1 ? `  (${n.e.weight}×)` : ''}${n.revisit ? '  ↻' : ''}`);
       if (flags.where) {
         if (n.e.locations.length) for (const loc of n.e.locations) lines.push(`${indent}    ${locText(scan, loc)}`);
-        else lines.push(`${indent}    (meta-derived — 無 nodePath)`);
+        else lines.push(`${indent}    ${M.metaDerived}`);
       }
       walk(n.children);
     }
@@ -201,18 +220,18 @@ function cmdDeps(scan, maps, uuid, flags) {
     const tree = sideTree(scan, maps, uuid, 'out', flags);
     const orph = filt ? [] : orphansOf(scan, uuid); // orphans are untyped → dropped when filtering
     const n = filt ? countMatches(scan, tree, flags.types) : (maps.out.get(uuid) || []).length + orph.length;
-    lines.push(n ? `  depends-on ${n}${filt ? ' (符合)' : ''}:` : `  depends-on 0${filt ? ' (符合)' : ''}`);
+    lines.push(n ? `  depends-on ${n}${filt ? M.matched : ''}:` : `  depends-on 0${filt ? M.matched : ''}`);
     renderTreeText(scan, tree, 'out', flags, lines);
     for (const o of orph.slice(0, flags.limit)) {
       const known = scan.missing && scan.missing.get(mainUuid(o.ref));
-      lines.push(`    ${'↯ orphan'.padEnd(VIA_W)} → ${known ? `${known}  (缺來源檔)` : o.ref}`);
+      lines.push(`    ${'↯ orphan'.padEnd(VIA_W)} → ${known ? `${known}  ${M.missingSrc}` : o.ref}`);
       if (flags.where && o.loc) lines.push(`        ${locText(scan, o.loc)}`);
     }
   }
   if (showIn) {
     const tree = sideTree(scan, maps, uuid, 'in', flags);
     const n = filt ? countMatches(scan, tree, flags.types) : (maps.inc.get(uuid) || []).length;
-    let head = n ? `  used-by ${n}${filt ? ' (符合)' : ''}:` : `  used-by 0${filt ? ' (符合)' : ''}`;
+    let head = n ? `  used-by ${n}${filt ? M.matched : ''}:` : `  used-by 0${filt ? M.matched : ''}`;
     if (!n && !filt && !a.inResources && a.type !== 'scene') head += '   ⚠ unreferenced';
     lines.push(head);
     renderTreeText(scan, tree, 'in', flags, lines);
@@ -266,7 +285,7 @@ function cmdClosure(scan, uuid, flags) {
   const filt = flags.types.size ? `  [type: ${[...flags.types].join(',')}]` : '';
   const lines = [`${c.root} → ${count} assets, ${kb(totalSize)}${filt}`, `  ${bt}`];
   if (flags.list) for (const i of items) lines.push(`    ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}`);
-  else lines.push('  (加 --list 印出每一個)');
+  else lines.push(M.listHint);
   console.log(lines.join('\n'));
 }
 
@@ -281,9 +300,9 @@ function cmdFind(scan, query, flags) {
   const lim = flags.limit === Infinity ? 50 : flags.limit;
   const shown = matches.slice(0, lim);
   if (flags.json) { console.log(JSON.stringify(shown.map((a) => ({ path: a.path, type: a.type, uuid: a.uuid })))); return; }
-  if (!matches.length) { console.log(`(無符合 "${query}")`); return; }
+  if (!matches.length) { console.log(M.noMatch(query)); return; }
   const lines = shown.map((a) => `  ${a.type.padEnd(10)} ${a.path}`);
-  if (matches.length > shown.length) lines.push(`  … 還有 ${matches.length - shown.length} 筆(--limit 調整)`);
+  if (matches.length > shown.length) lines.push(M.findMore(matches.length - shown.length));
   console.log(lines.join('\n'));
 }
 
@@ -293,7 +312,7 @@ async function main() {
 
   let scan;
   try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets'))); }
-  catch (e) { console.error(`掃描失敗:${e.message}`); process.exit(1); }
+  catch (e) { console.error(M.scanFail(e.message)); process.exit(1); }
 
   // --type matches an asset's TYPE, not the edge KIND printed on each row. Warn on
   // values that no asset carries (typos, or edge kinds like `texture`/`sprite-frame`
@@ -303,24 +322,24 @@ async function main() {
     for (const a of scan.assets.values()) known.add(a.type);
     const unknown = [...flags.types].filter((t) => !known.has(t));
     if (unknown.length) {
-      console.error(`⚠ 未知型別(不會有相符):${unknown.join(', ')}`);
-      console.error(`  可用型別:${[...known].sort().join(' ')}`);
+      console.error(M.unknownTypes(unknown.join(', ')));
+      console.error(M.availTypes([...known].sort().join(' ')));
     }
   }
 
   if (command === 'find') { cmdFind(scan, target, flags); return; }
 
   if (!['deps', 'uses', 'closure'].includes(command)) {
-    console.error(`未知命令 "${command}"\n\n${USAGE}`); process.exit(1);
+    console.error(`${M.unknownCmd(command)}\n\n${USAGE}`); process.exit(1);
   }
-  if (!target) { console.error(`命令 "${command}" 需要一個目標\n\n${USAGE}`); process.exit(1); }
+  if (!target) { console.error(`${M.needTarget(command)}\n\n${USAGE}`); process.exit(1); }
 
   const r = resolveTarget(scan, target);
-  if (r.notFound) { console.error(`✗ 找不到 "${target}"`); process.exit(2); }
+  if (r.notFound) { console.error(M.notFound(target)); process.exit(2); }
   if (r.candidates) {
-    console.error(`✗ "${target}" 對應 ${r.candidates.length} 個資產,請用完整路徑指定:`);
+    console.error(M.ambiguous(target, r.candidates.length));
     for (const p of r.candidates.slice(0, 20)) console.error(`    ${p}`);
-    if (r.candidates.length > 20) console.error(`    … 還有 ${r.candidates.length - 20} 筆`);
+    if (r.candidates.length > 20) console.error(M.more(r.candidates.length - 20));
     process.exit(2);
   }
 
