@@ -2,6 +2,9 @@
   "name": "coir",
   "version": "0.1.0",
   "description": "Coir — load a Cocos Creator 3.8 project in the browser and explore asset usage + dependency topology",
+  "homepage": "https://aaronhg.github.io/coir/",
+  "repository": { "type": "git", "url": "https://github.com/aaronhg/coir.git" },
+  "bugs": "https://github.com/aaronhg/coir/issues",
   "type": "module",
   "bin": {
     "coir": "src/cli.js"

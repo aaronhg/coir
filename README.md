@@ -1,6 +1,10 @@
 # Coir — Cocos 資源依賴拓撲
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-open-4fc3f7?style=flat-square)](https://aaronhg.github.io/coir/) [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950?style=flat-square)](LICENSE) ![Cocos Creator](https://img.shields.io/badge/Cocos_Creator-3.8.x-9575cd?style=flat-square) ![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950?style=flat-square)
+
 > *Coir（椰殼纖維）：像梳理交織的椰纖一樣，把專案裡盤根錯節的資產依賴理出來；與 Cocos（椰子屬）同源。*
+
+**▶ 線上試用（需 Chrome / Edge）：<https://aaronhg.github.io/coir/>** — 開啟後選你的 Cocos 專案目錄即可；全程在瀏覽器端執行，**不上傳任何檔案**。
 
 載入一個 **Cocos Creator 3.8.x** 專案，於瀏覽器端建立資產的**使用情形**與**依賴拓撲圖**，涵蓋圖檔、圖集（TexturePacker plist / Spine）、點陣字（fnt）、prefab、scene、與 Cocos component 腳本。
 
