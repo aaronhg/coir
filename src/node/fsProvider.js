@@ -1,3 +1,4 @@
+// @ts-check
 // Node FileProvider: turn an on-disk assets/ directory into the FileProvider
 // the DOM-free core (scan.js) consumes. Shared by the CLI and the headless test
 // runner. Paths are POSIX-relative to assetsRoot.
@@ -5,6 +6,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+/** @returns {import('../../types/index.js').FileProvider} */
 export function makeFsProvider(assetsRoot) {
   return {
     async listFiles() {

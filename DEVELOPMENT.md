@@ -221,6 +221,30 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - **說明 modal**（`?`，z-index 55）：分頁/拓撲/搜尋/快捷鍵，底部 GitHub 連結；🥥 favicon（emoji SVG）、banner GitHub 圖示。
 - 拓撲欄頭改符號 `←層N`/`→層N`＋層0 染色（避免與 palette 的 `←數量` 撞義）；usage popup 右上角加複製鈕。
 
+### 11.8 外掛化（型別＋邊可擴充）
+動機：讓別人容易加新資產型別與新邊，而不必動 `scan.js` 核心。把原本 inline 的 meta 衍生邊（atlas/font/particle/spine 三件組）抽成 `src/core/plugins/` 下**一型一檔**的 plugin（每個檔同時帶該型別的 `importerTypes`/`typeByExt`、`edges(ctx)`、`colors`），`index.js` 匯出 `BUILTIN_PLUGINS`／`PLUGINS`（內建即全部，外部 plugin 由呼叫端組合）。
+
+- **介面**：plugin 是純物件 `{ name, importerTypes?, typeByExt?, jsonSourceExts?, rootTypes?, colors?, messages?, edges(ctx)? }`；`edges` **只用 `ctx`**（index＋`addEdge`/`resolveUuid`／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），不 import 任何東西 → 第三方 plugin 零 build step。
+- **接線**：`scanProject(fp,{plugins=PLUGINS})` 預設吃 registry，所以 **CLI／node-run／瀏覽器同一套**；`meta.js` 改 `buildTypeResolver(plugins)`＋`knownTypes(plugins)`（移除靜態 `KNOWN_TYPES`/`normalizeType`，baseline `IMPORTER_TYPE` 不含 atlas/font/particle/spine——那些回到各自 plugin）；`analyze.js` 的 root 型別 union `scan.rootTypes`；`ui.js` 把 plugin `colors` 併進 `TYPE_COLOR`、`messages` 經新增的 `registerMessages` 併進 i18n（皆在 `setScan` 首次繪製前）。
+- **註冊路徑**（優先序：內建 → 全域 → 專案 → `--plugin`）：內建 → 加檔到 `index.js`；**repo 外**（CLI/node，`src/node/loadPlugins.js`）→ `coir.plugins.mjs` 自動載入(coir 根=跨專案全域、被掃專案根=該專案)＋`--plugin <file>`，皆 gitignore、不進 repo；免 rebuild（瀏覽器）→ `window.coir.use(plugin)`（userscript 可跨專案常駐）。`local.js` 已退場（與 repo 根的 `coir.plugins.mjs` 重疊，後者更乾淨：在 `src/` 外、免 rebuild）。
+- **刻意留 core**：JSON `__uuid__`/`__type__` 引擎（3a–3c）與 component 剪枝＋`extends`（3b/3e）耦合太深、不外掛化,但 plugin 可經 `ctx.scripts` 唯讀取用。
+- **驗證**：既有 18 個測試逐字綠（atlas/script/prefab/scene 路徑 byte-identical），`npm run build` 通過,另以合成專案確認搬移後的 font/particle/spine 邊（含多頁 atlas→page texture）全數產生。
+
+### 11.9 型別化(JSDoc + `.d.ts`,不改成 `.ts`)
+評估過全量 TS,但它會撞到本專案兩條底線(零 runtime 相依、clone 即可直跑 `node src/cli.js`)。改走中間路線:**檔案維持 `.js`,型別走 JSDoc + 一份手寫 `types/index.d.ts`**,只多 `typescript`/`@types/node` 兩個 **devDep**(runtime 仍零相依)。
+
+- **型別**:`types/index.d.ts` 宣告資料模型(`Asset`/`SubAsset`/`Edge`/`EdgeLocation`/`ScanResult`/`Adjacency`)與**外掛契約**(`Plugin`/`PluginContext`),經 `package.json` `"types"` 隨套件 ship——外掛作者一行 `/** @type {import('coir').Plugin} */` 就有 `ctx.addEdge`/`ctx.assets` 的 autocomplete 與檢查。
+- **設定**:`tsconfig.json` `allowJs`+`checkJs:false`+`strict:false`+`noEmit`;檢查**逐檔 opt-in** 靠 `// @ts-check`,目前涵蓋全部非瀏覽器檔(`src/core/**`、`src/node/**`);DOM 重的 `src/browser/**` 刻意不檢(投報率低)。`npm run typecheck`=`tsc --noEmit`。
+- **不變的**:無 `.ts`、無 loader、無 build step——`node src/cli.js`、`node --test`、webpack 全部照舊;JSDoc 編譯後消失,runtime 不受影響。
+- **驗證**:`typecheck` 0 error(並以注入 `ctx.addEge` typo 確認 `// @ts-check` 真的生效、契約型別真的擋得住);`npm test` 18/18、`npm run build` bundle 不變、CLI 直跑不變。之後要收緊就翻 `checkJs:true`/`strict:true` 並補 browser 檔。
+
+### 11.10 repo 外的 plugin 載入 + 拓撲導覽強化
+**外部 plugin 載入**(讓 project-specific 規則住在 coir 外):`coir.plugins.mjs` config 從 **coir 根**(全域/跨專案)與**被掃專案根**(該專案)自動載入,加上 `--plugin <檔>`(CLI)與 `window.coir.use()`(瀏覽器 runtime)。CLI/node 走 `src/node/loadPlugins.js`;**瀏覽器**新增:`loadGlobalPlugins`(`webpackIgnore` 動態 import dev server serve 的那份)+ `loadProjectPlugins`(用 File System Access handle 讀被選專案那份、blob URL import,每次選專案重讀)。四個來源由 `dedupePlugins` 收斂(general→specific,同名後者覆蓋),開啟專案後狀態列列出生效的非內建 plugin、標 `來源.名稱`(`global`/`project`/`use`)。
+
+**拓撲/清單導覽**(一連串鍵盤/滑鼠回饋):拓撲 `−`/`+` 上一動/下一動(`navHistory`/`navForward` 的 centre+selection 歷史)、`Delete` 回清單、每個 cell hover 顯示複製完整路徑鈕、同名兄弟列自動補「彼此差異的最短目錄」(`distinguishingDirs`);清單 `↑↓` 鍵盤游標、單擊選中、雙擊/`Enter` 設為中心、切回清單時捲到選中/中心列並閃一下;型別篩選＋搜尋字串持久化到 `localStorage`(`coir.filter`,還原時與專案實際型別取交集)。`Tab` 循環三分頁、`Esc` 清篩選、`Ctrl/⌘+P`=快速搜尋、`Ctrl/⌘+R`=選目錄。
+
+**一輪 code review 修掉的**:`−`/`+` 加 modifier 守門(不攔 `Cmd/Ctrl±` 縮放)、CLI `--plugin` 加 `!startsWith('-')` 守門(不吞後面旗標)、`Esc` 加 typing 判斷(打字中不清篩選)。
+
 ---
 
 ## 12. 最終狀態

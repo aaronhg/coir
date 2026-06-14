@@ -18,12 +18,18 @@
 // root is always kept). On closure/find/--json it just filters the flat list.
 
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { scanProject } from './core/scan.js';
 import { closureReport } from './core/analyze.js';
 import { looksCompressed, decompressUuid, mainUuid } from './core/uuid.js';
-import { KNOWN_TYPES } from './core/meta.js';
+import { knownTypes } from './core/meta.js';
+import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
+import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
 
+const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
+
+const KNOWN_TYPES = knownTypes(PLUGINS);
 const VIA_W = 12;
 const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
@@ -38,7 +44,10 @@ const USAGE = `Usage:
 --type : keep only the given asset types (comma-separated); on the deps/uses tree it
          keeps the intermediate path leading to those types.
          types = asset types (not the edge kinds shown in the listing); known: ${KNOWN_TYPES.join(' ')}
-         (a project may add extension-derived types like 'text'; a wrong --type prints the full list)`;
+         (a project may add extension-derived types like 'text'; a wrong --type prints the full list)
+--plugin <file> : load an extra plugin module (repeatable). Auto-loaded too:
+         <coirRoot>/coir.plugins.mjs (global) and <projectDir>/coir.plugins.mjs
+         (per project) — keep your plugins out of the coir repo (both gitignored).`;
 
 // All other user-facing CLI text, centralized (CLI is fixed English).
 const M = {
@@ -60,7 +69,7 @@ const M = {
 
 function parseArgs(argv) {
   const [projectDir, command, ...rest] = argv;
-  const flags = { dir: null, depth: 1, where: false, json: false, list: false, limit: Infinity, types: new Set() };
+  const flags = { dir: null, depth: 1, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [] };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
@@ -76,6 +85,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.slice(8), 10) || Infinity;
     else if (a === '--type') { if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('-')) addTypes(rest[++i]); }
     else if (a.startsWith('--type=')) addTypes(a.slice(7));
+    else if (a === '--plugin') { if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('-')) flags.plugins.push(rest[++i]); }
+    else if (a.startsWith('--plugin=')) flags.plugins.push(a.slice(9));
     else if (!a.startsWith('-')) pos.push(a);
   }
   return { projectDir, command, target: pos[0], flags };
@@ -310,8 +321,18 @@ async function main() {
   const { projectDir, command, target, flags } = parseArgs(process.argv.slice(2));
   if (!projectDir || !command) { console.error(USAGE); process.exit(1); }
 
+  // Built-ins + coir-root global config + project-local config + --plugin files.
+  // External plugins thus live outside the coir repo (most specific last).
+  const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
+  const plugins = dedupePlugins([
+    ...PLUGINS,
+    ...await loadConfigPlugins(COIR_ROOT),                       // cross-project / global
+    ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)), // this project only
+    ...await loadPluginFiles(flags.plugins),                    // --plugin <file>
+  ]);
+
   let scan;
-  try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets'))); }
+  try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets')), { plugins }); }
   catch (e) { console.error(M.scanFail(e.message)); process.exit(1); }
 
   // --type matches an asset's TYPE, not the edge KIND printed on each row. Warn on

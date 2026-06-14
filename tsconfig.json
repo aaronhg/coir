@@ -1,0 +1,20 @@
+{
+  // Type-checking ONLY (noEmit) — files stay .js, no build step, no runtime deps.
+  // checkJs:false → a file is checked only when it opts in with `// @ts-check`,
+  // so the rollout is incremental and `npm run typecheck` stays green. strict is
+  // off for the first pass (low friction); tighten later (see DEVELOPMENT.md).
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.js", "types/**/*.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}

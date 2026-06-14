@@ -1,3 +1,7 @@
 node_modules/
 dist/*.map
 .DS_Store
+
+# Cross-project / global plugin config, auto-loaded from the coir root (never shipped)
+/coir.plugins.mjs
+/coir.plugins.js

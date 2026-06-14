@@ -20,14 +20,15 @@
 ## 開始使用
 
 ```bash
-npm install      # 只裝 webpack 工具鏈（無第三方執行期相依），僅首次
-npm run dev      # 啟動 webpack dev server：http://localhost:8080（存檔自動重編譯＋熱重載）
+npm install       # 裝 webpack 工具鏈 + typescript（皆 dev-only，無第三方執行期相依），僅首次
+npm run dev       # 啟動 webpack dev server：http://localhost:8080（存檔自動重編譯＋熱重載）
+npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期相依）
 # 正式打包： npm run build  → 產出 dist/app.bundle.js（minified，可用任意靜態伺服器部署）
 ```
 
 瀏覽器開 `http://localhost:8080` → 點「選擇 Cocos 專案目錄」→ 選遊戲專案根目錄（含 `assets/` 的那層；直接選 `assets/` 亦可）。
 
-> 純前端，**無第三方執行期相依**（先前的 cytoscape 力導向圖檢視已移除，只剩純 DOM）。由 **webpack** 打包（production bundle ~27KB）；開發用 `npm run dev`（webpack-dev-server，改 `src/` 即時重載），設定在 `webpack.config.cjs`（`.cjs` 因為 `package.json` 是 `type:module`）。
+> 純前端，**無第三方執行期相依**（先前的 cytoscape 力導向圖檢視已移除，只剩純 DOM）。由 **webpack** 打包（production bundle ~46KB）；開發用 `npm run dev`（webpack-dev-server，改 `src/` 即時重載），設定在 `webpack.config.cjs`（`.cjs` 因為 `package.json` 是 `type:module`）。
 
 ## 功能
 
@@ -36,12 +37,12 @@ npm run dev      # 啟動 webpack dev server：http://localhost:8080（存檔自
 ### 清單（＝層0）
 - 可排序資產表：名稱／目錄／類型／大小／**被依賴**／**被依賴∑**／**依賴**／**依賴∑**。「目錄」欄只顯示資料夾（`a/b/c.prefab` → `a/b/`）。
 - `被依賴` / `依賴` 是**直接**度數；帶 `∑` 的兩欄是**傳遞閉包**大小——`依賴∑` = 載入它會被帶進的資產總數（打包量）、`被依賴∑` = 改它會牽動的資產總數（影響範圍）。
-- 點一列＝選為拓撲中心（該列高亮）。搜尋框可即時過濾路徑。
+- **單擊**＝選中（該列高亮）、**雙擊**（或 `Enter`）＝設為拓撲中心；`↑↓` 在列間切換。搜尋框可即時過濾路徑。
 
 ### 拓撲
 - **雙向、固定 5 欄滑動視窗、永遠全展**的依賴樹：被依賴往左展、依賴往右展、層0 置中；視窗以選中項的「距中心位移」滑動；偵測循環顯示 `↻`。只列資產。欄頭以符號表示方向＋層號（`←層2` `←層1` ◆ `→層1` `→層2`），層0 欄染色。
 - 選中一個節點會**自動浮出「用在哪」**：它與樹中相鄰父節點那條邊的使用位置（節點路徑 · 元件.屬性 · frame；按鈕 ClickEvent 顯示 `▶ 方法()`）。popup 右上角有**複製鈕**，把所有使用位置複製到剪貼簿。
-- **鍵盤／手勢**：`↑↓` 同欄、`←→`（或 Mac 兩指橫滑）跨欄並選「畫面垂直中央最近」者、`Enter` 設為新中心、`Ctrl/Cmd+C` 複製名稱、`r` 還原上次位置（存於 `localStorage`）。
+- **鍵盤／手勢**：`Tab` 切換分頁、`Esc` 清空類型篩選、`/` 或 `Ctrl/Cmd+P` 快速搜尋、`Ctrl/Cmd+R` 選擇專案目錄；拓撲內 `↑↓` 同欄、`←→`（或 Mac 兩指橫滑）跨欄並選「畫面垂直中央最近」者、`Enter` 設為新中心、`−` 上一動、`+` 下一動、`Delete` 回清單、`Ctrl/Cmd+C` 複製名稱。
 - **`/` 快速搜尋**：模糊比對（`mscn` 也能找到 `MainScene`），**命中字會高亮**；跨多種來源——檔名／路徑、**uuid**（貼上即跳）、**sprite-frame 名**（找某一格在哪張圖集）、**使用位置**（節點路徑·元件.屬性·ClickEvent）。範圍前綴：`@` 找 frame、`#` 篩型別、`>` 找用途；每一筆右側顯示 `←被依賴∑ →依賴∑`，選任何一筆都會跳到對應的資產。
 
 ### 全域類型篩選（bar）
@@ -80,8 +81,94 @@ npm run dev      # 啟動 webpack dev server：http://localhost:8080（存檔自
 依賴邊：
 - `"__uuid__": "<uuid>"` 或 `"<uuid>@<子id>"` → 資產 / 子資產（完整 uuid，不壓縮）。
 - `"__type__": "<23字壓縮uuid>"` → 腳本元件，以 `decompressUuid` 還原（Cocos v2.0.10 演算法，3.x `__type__` 沿用）。
-- 推導邊：圖集→底圖、字型→底圖、粒子→底圖、spine 三件組；以及 component → 基底 component 的 `extends`（類別繼承）邊。
+- 推導邊：圖集→底圖、字型→底圖、粒子→底圖、spine 三件組（皆為**內建外掛**，可再擴充，見下方「外掛」）；以及 component → 基底 component 的 `extends`（類別繼承）邊。
 - cc.Button 的 ClickEvent 接線：`_componentId`（壓縮的處理腳本 uuid）+ `handler`（方法名）→ 一條 script 邊，位置記為 `click → 方法()`。
+
+## 外掛（擴充型別與邊）
+
+型別與依賴邊都可外掛。內建的「圖集→底圖／字型→底圖／粒子→底圖／Spine 三件組」就是四個內建外掛（`src/core/plugins/{atlas,font,particle,spine}.js`，每檔同時帶該型別的對應、邊邏輯與顏色）。要新增一種資產型別或一種邊，寫一個 plugin 即可，不必動核心。
+
+```js
+/** @type {import('coir').Plugin} */   // 型別隨套件 ship（types/index.d.ts），一行就有 ctx autocomplete
+export default {
+  name: 'my-plugin',
+  importerTypes: { 'my-importer': 'mytype' }, // importer → 型別
+  typeByExt:     { '.xyz': 'mytype' },          // 副檔名 → 型別
+  rootTypes:     ['mytype'],                     // 永不算「未使用」
+  colors:        { mytype: '#26a69a' },          // 瀏覽器型別顏色
+  async edges(ctx) {                             // 資產索引定版後產生邊
+    for (const a of ctx.assets.values()) { /* ctx.addEdge(from, to, kind, loc?) */ }
+  },
+};
+```
+
+`edges(ctx)` 只用 `ctx`（資產索引＋`addEdge`/`resolveUuid`／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），**不 import 任何東西** → 第三方 plugin 零 build step。
+
+**註冊方式**（優先序：內建 → 全域 → 專案 → `--plugin`／`use()`；同名由更 specific 的覆蓋，`dedupePlugins`）：
+
+| 方式 | 位置 | 生效範圍 |
+|---|---|---|
+| 內建 | `src/core/plugins/` + `index.js` | CLI＋瀏覽器（綁進 build） |
+| 全域 | `<coir 根>/coir.plugins.mjs`（gitignore） | 每次掃描，跨專案 |
+| 專案 | `<你的專案>/coir.plugins.mjs` | 只該專案 |
+| 臨時 | `coir … --plugin <檔>` | 該次查詢 |
+| 瀏覽器 runtime | `window.coir.use(plugin)`（選專案前） | 該頁 |
+
+> 全域與專案的 `coir.plugins.mjs` **CLI 與瀏覽器都會自動載入** —— 瀏覽器透過 dev server 取得 coir 根那份、用 File System Access 讀被選專案那份（每次選專案重讀，要選含 `assets/` 的專案根目錄）。開啟專案後右上狀態列會列出生效的非內建 plugin，標成 `來源.名稱`（`global`／`project`／`use`）。
+
+### 範例：`audio-call`（把 `audioPlay('x')` 連到音檔）
+
+「以字串名稱於執行期載入」的呼叫（如 `audioPlay('lobby_bgm')`）靜態看不出依賴。這個 plugin 掃 component 原始碼、把呼叫的名字對到同名音檔，連出 `Lobby.ts → lobby_bgm.mp3/.ogg`，補上「已知限制」裡動態載入灰區的一隅。完整可用、零相依：
+
+```js
+const FUNCS = ['audioPlay'];                       // 你專案的播放函式名（可多個）
+const CALL_RE = new RegExp(String.raw`\b(?:${FUNCS.join('|')})\s*\(\s*['"\`]([^'"\`]+)['"\`]`, 'g');
+
+/** @type {import('coir').Plugin} */
+export default {
+  name: 'audio-call',
+  async edges(ctx) {
+    const { assets, addEdge, scripts } = ctx;
+
+    // 音檔 basename（去副檔名）→ [資產]，所以 .mp3 / .ogg 都對得上
+    const byName = new Map();
+    for (const a of assets.values()) {
+      if (a.type !== 'audio') continue;
+      const name = a.path.slice(a.path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+      if (!byName.has(name)) byName.set(name, []);
+      byName.get(name).push(a);
+    }
+    if (!byName.size) return;
+
+    for (const a of assets.values()) {
+      if (a.type !== 'script') continue;            // ctx.assets 只含 component 腳本
+      const text = scripts.text.get(a.uuid);         // 3b 已讀好的原始碼，不必重讀
+      if (!text) continue;
+      for (const m of text.matchAll(CALL_RE)) {
+        const arg = m[1];
+        const name = arg.slice(arg.lastIndexOf('/') + 1); // 'audio/lobby_bgm' → 'lobby_bgm'
+        for (const audio of byName.get(name) || []) {
+          addEdge(a.uuid, audio.uuid, 'audio', { nodePath: null, component: null, property: `audioPlay("${arg}")` });
+        }
+      }
+    }
+  },
+};
+```
+
+放進 `<你的專案>/coir.plugins.mjs`（或 coir 根的全域檔）後，CLI 就查得到 —— 哪支腳本播某個音檔：
+
+```text
+$ coir ./MyGame uses audio/lobby_bgm.mp3 --where
+audio/lobby_bgm.mp3 (audio)
+  used-by 1:
+    audio        ← script/Lobby.ts  (2×)
+        —  audioPlay("lobby_bgm")
+```
+
+反向（某腳本播了哪些音）：`coir ./MyGame deps script/Lobby.ts --out --type audio --where`。
+
+限制（刻意）：只看得到 **component 腳本**（純 util 模組已被剪枝）；只解**字串字面值**（`audioPlay(this.bgm)` 無法）；參數要對得上音檔 basename（撞名會連到全部同名音檔）。
 
 ## 無頭工具（Node）
 
@@ -106,6 +193,8 @@ npm run cli -- <專案目錄> find    <查詢> [--type T]                     # 
 
 `<資產>` 可用完整路徑／basename／uuid／`uuid@sub` 指定（撞名印候選並 `exit 2`）。`--where` 展開每條邊的使用位置（節點路徑 · 元件.屬性 · frame）。`--type` 只保留指定型別：在 `deps`/`uses` **樹**上會**保留通往該型別的中間路徑**（同瀏覽器拓撲的篩選），在 `closure`/`find`/`--json` 上則是過濾平面清單。
 
+外掛在 CLI 也生效：`<coir 根>/coir.plugins.mjs`（全域）與 `<專案>/coir.plugins.mjs`（該專案）會自動載入，或用 `--plugin <檔>` 指定（見「外掛」）。
+
 ## 架構
 
 ```
@@ -116,6 +205,7 @@ src/core/      # 與 DOM/瀏覽器無關的純核心，Node 與瀏覽器共用
   scan.js      #   掃描 FileProvider → 資產索引 + 依賴邊
   graph.js     #   鄰接表、依賴/被依賴閉包
   analyze.js   #   未使用、孤兒、圖集利用率、體積、閉包、缺來源檔 meta 報告
+  plugins/     #   內建外掛（atlas/font/particle/spine）+ registry（index.js）；型別與邊可外掛擴充
 src/browser/   # 瀏覽器層（純 DOM，無第三方執行期庫）
   fsapi.js     #   File System Access → FileProvider
   ui.js        #   三分頁（清單／拓撲／報告）+ 全域類型篩選 + `/` 搜尋 + 互動
@@ -123,19 +213,22 @@ src/browser/   # 瀏覽器層（純 DOM，無第三方執行期庫）
   app.js       #   進入點
 src/node/
   fsProvider.js #  Node fs → FileProvider（node-run.js 與 cli.js 共用）
+  loadPlugins.js #  載入 repo 外的外掛（coir.plugins.mjs 全域/專案、--plugin）
 src/cli.js        # 無頭依賴查詢 CLI（deps/uses/closure/find，bin: coir）
 test/node-run.js  # 整份報告的無頭驗證器
 test/cli.test.js  # node:test：對合成專案跑 cli.js 端對端
 index.html        # 應用外殼 + CSS（載入 dist/app.bundle.js）
 webpack.config.cjs # webpack 設定（entry=src/browser/app.js、dev server）
-dist/app.bundle.js # webpack 打包輸出（純 DOM，~27KB）
+dist/app.bundle.js # webpack 打包輸出（純 DOM，~46KB）
+types/index.d.ts   # 型別宣告（資料模型 + Plugin/PluginContext 契約；隨套件 ship）
+tsconfig.json      # 型別檢查設定（allowJs/checkJs，tsc --noEmit）
 ```
 
 `FileProvider` 介面：`listFiles()` / `readText(path)` / `size(path)`，路徑相對於 `assets/`。瀏覽器（`fsapi.js`）與 Node（`node/fsProvider.js`）各有一份實作，因此解析邏輯可無頭測試（`npm test`）。
 
 ## 已知限制
 
-- **動態載入灰區**：以字串路徑於執行期載入者（`resources/` 下的 `loadDir`、或程式碼自行 `load('xxx')`）無法靜態追蹤。故未使用判定一律略過 `resources/`；但 `resources/` 外、純由程式載入的資產（例如某些以程式挑選的點陣數字圖集）可能被列為「未使用」——這是靜態掃描的本質盲區，不一定是真的沒用到。
+- **動態載入灰區**：以字串路徑於執行期載入者（`resources/` 下的 `loadDir`、或程式碼自行 `load('xxx')`）無法靜態追蹤。故未使用判定一律略過 `resources/`；但 `resources/` 外、純由程式載入的資產（例如某些以程式挑選的點陣數字圖集）可能被列為「未使用」——這是靜態掃描的本質盲區，不一定是真的沒用到。若有固定慣例（如 `audioPlay('x')`、`load('dir/x')`），可寫一個 plugin 把這類字串呼叫解析成邊（見「外掛」），把部分灰區補回。
 - 整圖被當 `SpriteAtlas` 取用時，個別框的使用情形無法靜態得知（已標記「整圖動態取用」）。
 - 目前針對 **3.8.x** 格式；3.5.2 序列化格式相容，核心可直接套用（如遇差異於 `meta.js` / `scan.js` 微調）。**不**支援 2.x（`.fire` 場景、舊版 meta）。
 - 圖集利用率的位元組級「浪費面積」尚未計算（目前以框數比例呈現）。

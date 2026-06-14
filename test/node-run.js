@@ -11,8 +11,12 @@ import { buildAdjacency } from '../src/core/graph.js';
 import {
   summary, unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, closureReport,
 } from '../src/core/analyze.js';
+import { fileURLToPath } from 'node:url';
 import { makeFsProvider } from '../src/node/fsProvider.js';
+import { PLUGINS, dedupePlugins } from '../src/core/plugins/index.js';
+import { loadConfigPlugins } from '../src/node/loadPlugins.js';
 
+const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (node-run.js is in test/)
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`;
 
 async function main() {
@@ -20,8 +24,16 @@ async function main() {
   if (!projectDir) { console.error('usage: node test/node-run.js <projectDir> [center]'); process.exit(1); }
   const assetsRoot = path.join(projectDir, 'assets');
 
+  const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
+  const plugins = dedupePlugins([
+    ...PLUGINS,
+    ...await loadConfigPlugins(COIR_ROOT),
+    ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)),
+  ]);
+
   const t0 = Date.now();
   const scan = await scanProject(makeFsProvider(assetsRoot), {
+    plugins,
     onProgress: ({ phase, done, total }) => {
       if (done === total) process.stderr.write(`  ${phase}: ${done}/${total}\n`);
     },

@@ -1,3 +1,4 @@
+// @ts-check
 // Graph helpers over the scan result: adjacency, neighbour lookup and the
 // transitive dependency closure used for "what does this scene/prefab bundle".
 

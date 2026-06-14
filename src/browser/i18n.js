@@ -21,12 +21,14 @@ const MESSAGES = {
     'help.title': '說明',
     'help.close': '關閉',
     'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資產的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
-      + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資產表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。點一列＝設為拓撲中心。</li>'
+      + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資產表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為拓撲中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
       + '<li><b>拓撲</b> — 以選中資產為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗。選一個節點會自動顯示它「用在哪」。</li>'
       + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資產體積、缺來源檔的 meta。</li></ul>'
       + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關枝。</p>'
       + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 用途/節點；貼上 uuid 直接跳。</p>'
-      + '<h3>快捷鍵（拓撲）</h3><ul><li><kbd>↑</kbd> <kbd>↓</kbd> 同欄上下、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄</li><li><kbd>Enter</kbd> 把選中項設為新中心</li><li><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱、<kbd>r</kbd> 還原上次位置</li></ul>',
+      + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁、<kbd>Esc</kbd> 清空類型篩選</li>'
+      + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> 選擇專案目錄</li>'
+      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Delete</kbd> 回清單、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li></ul>',
     'help.github': '在 GitHub 上查看 ↗',
     // banner / status
     'stats': '{assets} 資產 · {edges} 邊 · {orphans} 孤兒參照',
@@ -34,6 +36,7 @@ const MESSAGES = {
     'status.reading': '讀取目錄…',
     'status.scanning': '掃描 {n} 個檔案…',
     'status.error': '錯誤：{msg}',
+    'status.plugins': '外掛：{names}',
     // filter bar
     'filter.label': '類型篩選',
     'filter.labelTopo': '類型篩選 · 層0鄰域',
@@ -50,6 +53,7 @@ const MESSAGES = {
     // 拓撲
     'topo.hint': '從「清單」選一個資產，或按 / 搜尋，作為中心。',
     'topo.layer': '層',
+    'topo.copyPath': '複製完整路徑',
     'usage.header': '在 {file} 內 · {n} 處',
     'usage.root': '(根節點)',
     'usage.copyTitle': '複製全部到剪貼簿',
@@ -102,18 +106,21 @@ const MESSAGES = {
     'help.title': 'Help',
     'help.close': 'Close',
     'help.body': '<h3>What it is</h3><p>Load a <b>Cocos Creator 3.8.x</b> project to analyze asset <b>usage</b> and the <b>dependency topology</b>. Everything runs in your browser — no files are uploaded.</p>'
-      + '<h3>Three tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click a row to centre the topology on it.</li>'
+      + '<h3>Three tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click to select, double-click (or <kbd>Enter</kbd>) to centre the topology on it; <kbd>↑</kbd> <kbd>↓</kbd> move between rows.</li>'
       + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window. Selecting a node auto-shows where it is used.</li>'
       + '<li><b>Reports</b> — unused, orphan refs, atlas utilization, asset size, source-less metas.</li></ul>'
       + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports, and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
       + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node; paste a uuid to jump.</p>'
-      + '<h3>Shortcuts (Topology)</h3><ul><li><kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns</li><li><kbd>Enter</kbd> set the selection as the new centre</li><li><kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name, <kbd>r</kbd> restore last position</li></ul>',
+      + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab, <kbd>Esc</kbd> clear type filter</li>'
+      + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> choose project folder</li>'
+      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Delete</kbd> to list, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li></ul>',
     'help.github': 'View on GitHub ↗',
     'stats': '{assets} assets · {edges} edges · {orphans} orphan refs',
     'err.noFsApi': 'This browser lacks the File System Access API — use Chrome / Edge over http://localhost',
     'status.reading': 'Reading folder…',
     'status.scanning': 'Scanning {n} files…',
     'status.error': 'Error: {msg}',
+    'status.plugins': 'plugins: {names}',
     'filter.label': 'Type filter',
     'filter.labelTopo': 'Type filter · layer-0 neighbourhood',
     'filter.all': '✕ all',
@@ -127,6 +134,7 @@ const MESSAGES = {
     'list.cap': ' (first {cap})',
     'topo.hint': 'Pick an asset in the List, or press / to search, as the centre.',
     'topo.layer': 'L',
+    'topo.copyPath': 'Copy full path',
     'usage.header': 'in {file} · {n} sites',
     'usage.root': '(root node)',
     'usage.copyTitle': 'Copy all to clipboard',
@@ -176,6 +184,13 @@ export function setLocale(l) {
   if (!MESSAGES[l]) return;
   locale = l;
   try { localStorage.setItem('coir.lang', l); } catch { /* ignore */ }
+}
+// Merge plugin-contributed strings into the catalog: `{ 'zh-Hant': {...}, en: {...} }`.
+// Plugin keys override only their own entries; call before the next render.
+export function registerMessages(byLocale) {
+  for (const loc of Object.keys(byLocale || {})) {
+    MESSAGES[loc] = { ...(MESSAGES[loc] || {}), ...byLocale[loc] };
+  }
 }
 export function t(key, vars) {
   const s = (MESSAGES[locale] && MESSAGES[locale][key]) ?? MESSAGES[FALLBACK][key] ?? key;

@@ -3,25 +3,32 @@
   "version": "0.1.0",
   "description": "Coir — load a Cocos Creator 3.8 project in the browser and explore asset usage + dependency topology",
   "homepage": "https://aaronhg.github.io/coir/",
-  "repository": { "type": "git", "url": "https://github.com/aaronhg/coir.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaronhg/coir.git"
+  },
   "bugs": "https://github.com/aaronhg/coir/issues",
   "type": "module",
   "bin": {
     "coir": "src/cli.js"
   },
+  "types": "./types/index.d.ts",
   "files": [
     "src",
+    "types",
     "README.md"
   ],
   "scripts": {
     "dev": "webpack serve --mode development --config webpack.config.cjs",
-    "start": "webpack serve --mode development --config webpack.config.cjs",
     "build": "webpack --mode production --config webpack.config.cjs",
     "scan": "node test/node-run.js",
     "cli": "node src/cli.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3",
     "webpack": "^5.95.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.1.0"

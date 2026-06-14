@@ -1,3 +1,4 @@
+// @ts-check
 // Parse a Cocos Creator 3.x `.meta` file into a normalized asset record.
 //
 // A `.meta` is JSON: { ver, importer, uuid, files, subMetas, userData }.
@@ -5,41 +6,58 @@
 // "<mainUuid>@<subId>" and whose `importer` is the sub-asset kind
 // ("texture", "sprite-frame", ...). Sub-metas can nest (image -> texture).
 
-// importer value -> normalized node type used across the tool.
+// importer value -> normalized node type (built-in BASELINE). Types that also
+// carry edge logic — atlas, font, particle, spine, plus the ext-derived
+// spine-atlas — live in their plugin under src/core/plugins/ and are merged on
+// top via buildTypeResolver. With no plugins this baseline is what you get.
 const IMPORTER_TYPE = {
   image: 'image',
   texture: 'texture',
   'sprite-frame': 'sprite-frame',
-  'sprite-atlas': 'atlas',
-  'bitmap-font': 'font',
-  'ttf-font': 'font',
   prefab: 'prefab',
   scene: 'scene',
   typescript: 'script',
   javascript: 'script',
-  'spine-data': 'spine',
   'audio-clip': 'audio',
   material: 'material',
   effect: 'effect',
   'animation-clip': 'anim',
-  particle: 'particle',
   json: 'json',
   'physics-material': 'physics-material',
 };
 
-// Distinct normalized types assigned from known importers, plus the ext-derived
-// spine `.atlas` ('spine-atlas'). Project-specific extensions can add more at
-// runtime (normalizeType falls back to the file extension), so this is the stable
-// vocabulary for help text / discoverability, not a closed set.
-export const KNOWN_TYPES = [...new Set([...Object.values(IMPORTER_TYPE), 'spine-atlas'])].sort();
-
-export function normalizeType(importer, ext) {
-  if (IMPORTER_TYPE[importer]) return IMPORTER_TYPE[importer];
-  // The spine .atlas file uses importer "*"; disambiguate by extension.
-  if (ext === '.atlas') return 'spine-atlas';
-  if (importer === '*' || importer == null) return ext ? ext.slice(1) : 'unknown';
-  return importer;
+// Build the importer/ext → type resolver, merging plugin `importerTypes` and
+// `typeByExt` over the baseline. Importer match wins, then ext, then the
+// extension-derived fallback (so project-specific types still resolve). Passing
+// the built-in plugin set reproduces the original mapping exactly.
+export function buildTypeResolver(plugins = []) {
+  const importerTypes = { ...IMPORTER_TYPE };
+  const typeByExt = {};
+  for (const p of plugins) {
+    if (p.importerTypes) Object.assign(importerTypes, p.importerTypes);
+    if (p.typeByExt) Object.assign(typeByExt, p.typeByExt);
+  }
+  return (importer, ext) => {
+    if (importerTypes[importer]) return importerTypes[importer];
+    if (ext && typeByExt[ext]) return typeByExt[ext]; // e.g. spine's ".atlas" (importer "*")
+    if (importer === '*' || importer == null) return ext ? ext.slice(1) : 'unknown';
+    return importer;
+  };
 }
+
+// The stable type vocabulary for help text / discoverability — the baseline plus
+// every type any plugin can assign. NOT a closed set (the resolver still falls
+// back to the file extension for unknown importers).
+export function knownTypes(plugins = []) {
+  const types = new Set(Object.values(IMPORTER_TYPE));
+  for (const p of plugins) {
+    for (const v of Object.values(p.importerTypes || {})) types.add(v);
+    for (const v of Object.values(p.typeByExt || {})) types.add(v);
+  }
+  return [...types].sort();
+}
+
+const defaultResolve = buildTypeResolver();
 
 function lower(s) {
   return typeof s === 'string' ? s.toLowerCase() : s;
@@ -70,7 +88,7 @@ function collectSubAssets(subMetas, out) {
 
 // `metaPath` is the path of the .meta file; the asset's source file is the same
 // path with the trailing ".meta" removed.
-export function parseMeta(metaPath, text) {
+export function parseMeta(metaPath, text, resolveType = defaultResolve) {
   let json;
   try {
     json = JSON.parse(text);
@@ -91,7 +109,7 @@ export function parseMeta(metaPath, text) {
     metaPath,
     ext,
     importer,
-    type: normalizeType(importer, ext),
+    type: resolveType(importer, ext),
     userData: json.userData || null,
     subAssets,
   };

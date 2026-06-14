@@ -10,13 +10,16 @@ import {
 } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { decompressUuid } from '../core/uuid.js';
-import { t, setLocale, getLocale, applyStaticI18n } from './i18n.js';
+import { PLUGINS } from '../core/plugins/index.js';
+import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
 
+// Baseline colors for the core (non-plugin) types. Plugin-owned types (atlas,
+// font, particle, spine, spine-atlas) bring their own `colors`, merged in by
+// setScan — so each plugin is the single source of truth for its type's color.
 const TYPE_COLOR = {
-  image: '#4fc3f7', texture: '#4dd0e1', atlas: '#ba68c8', 'sprite-frame': '#4fc3f7',
-  spine: '#f06292', 'spine-atlas': '#f48fb1', font: '#ffd54f', prefab: '#81c784',
+  image: '#4fc3f7', texture: '#4dd0e1', 'sprite-frame': '#4fc3f7', prefab: '#81c784',
   scene: '#ff8a65', script: '#90a4ae', audio: '#a1887f', anim: '#4db6ac',
-  material: '#9575cd', effect: '#7e57c2', particle: '#ffb74d',
+  material: '#9575cd', effect: '#7e57c2',
   json: '#b0bec5', text: '#b0bec5', orphan: '#ef5350',
 };
 const typeColor = (t) => TYPE_COLOR[t] || '#b0bec5';
@@ -49,11 +52,15 @@ let tab = 'list';
 let treeRoot = null;           // centre asset (層0)
 let selectedKey = null;        // selected key (root uuid, or a side-prefixed key)
 let lastCells = [];            // cells from the last renderTopo (keyboard nav)
+let navHistory = [];           // topology back-stack of { treeRoot, selectedKey }  (− = 上一動)
+let navForward = [];           // topology forward-stack  (+ = 下一動)
+let listSel = null;            // 清單鍵盤游標的 uuid (↑↓ 切換、Enter 設為中心)
+let listClickTimer = null;     // 清單單擊/雙擊 區分
 let cellClickTimer = null;
 let paletteItems = [];
 let paletteIdx = 0;
 let searchIndex = null; // lazily-built multi-source palette index (assets/frames/usage)
-const STORE_KEY = 'coir.sel';
+const FILTER_KEY = 'coir.filter'; // 持久化清單過濾（搜尋字串 + 型別篩選）
 
 export function initUI({ onPick }) {
   applyStaticI18n(); // localize the static shell for the detected/saved locale
@@ -64,11 +71,11 @@ export function initUI({ onPick }) {
   $('helpBtn').onclick = () => { $('help').hidden = false; };
   $('helpClose').onclick = () => { $('help').hidden = true; };
   $('help').onclick = (e) => { if (e.target === $('help')) $('help').hidden = true; }; // backdrop closes
-  $('search').oninput = renderTable;
+  $('search').oninput = () => { saveFilter(); renderTable(); };
   for (const b of document.querySelectorAll('.btabs button')) b.onclick = () => setTab(b.dataset.tab);
   document.body.addEventListener('click', (e) => {
     const t = e.target.closest('[data-uuid]');
-    if (!t || t.closest('#topo') || t.closest('#palette')) return; // those handle themselves
+    if (!t || t.closest('#topo') || t.closest('#palette') || t.closest('#nodeList')) return; // 清單列自有單擊/雙擊處理
     if (scan && scan.assets.has(t.dataset.uuid)) focus(t.dataset.uuid);
   });
   const pin = $('paletteInput');
@@ -99,6 +106,37 @@ function setTab(t) {
   if (t !== 'topo') closeUsage();
   if (t === 'topo') renderTopo();
   else if (t === 'reports') renderReports(); // reflect the current global filter
+  else if (t === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
+}
+// On 拓撲→清單: scroll the selected node's row into view (else the centre's), and flash it.
+function scrollListToSelection() {
+  const list = $('nodeList');
+  const sel = selectedUuid();
+  let target = sel ? list.querySelector(`tr[data-uuid="${sel}"]`) : null;
+  if (!target && treeRoot) target = list.querySelector(`tr[data-uuid="${treeRoot}"]`);
+  if (!target) return;
+  setListSel(target.dataset.uuid, false); // 進清單時把它設為鍵盤游標
+  requestAnimationFrame(() => {
+    target.scrollIntoView({ block: 'center' });
+    target.classList.remove('flash');
+    void target.offsetWidth;           // reflow → restart the flash if re-triggered
+    target.classList.add('flash');
+    setTimeout(() => target.classList.remove('flash'), 1200);
+  });
+}
+// ---- 清單鍵盤游標：↑↓ 切換列、Enter 設為中心 -------------------------------
+function listRows() { return [...$('nodeList').querySelectorAll('tbody tr[data-uuid]')]; }
+function setListSel(uuid, scroll) {
+  listSel = uuid;
+  for (const r of listRows()) r.classList.toggle('lsel', r.dataset.uuid === uuid);
+  if (scroll) { const el = $('nodeList').querySelector('tr.lsel'); if (el) el.scrollIntoView({ block: 'nearest' }); }
+}
+function moveListSel(delta) {
+  const rows = listRows();
+  if (!rows.length) return;
+  const i = rows.findIndex((r) => r.dataset.uuid === listSel);
+  if (i < 0) { setListSel(rows[delta > 0 ? 0 : rows.length - 1].dataset.uuid, true); return; } // 無游標→端點
+  setListSel(rows[Math.max(0, Math.min(rows.length - 1, i + delta))].dataset.uuid, true);
 }
 function setStatus(msg) { $('status').textContent = msg || ''; }
 function onProgress({ phase, done, total }) { setStatus(`${phase} ${done}/${total}`); }
@@ -117,8 +155,14 @@ function relocalize() {
 }
 
 // ---- data ----------------------------------------------------------------
-function setScan(s, name) {
-  scan = s; adj = s.adjacency; treeRoot = null; selectedKey = null; selectedTypes = new Set();
+function setScan(s, name, plugins = PLUGINS) {
+  // Fold plugin presentation into the UI before the first render: type colors
+  // into TYPE_COLOR (plugin wins), localized strings into the i18n catalog.
+  for (const p of plugins) {
+    if (p.colors) Object.assign(TYPE_COLOR, p.colors);
+    if (p.messages) registerMessages(p.messages);
+  }
+  scan = s; adj = s.adjacency; treeRoot = null; selectedKey = null; selectedTypes = new Set(); navHistory = []; navForward = []; listSel = null;
   searchIndex = null;
   $('welcome').hidden = true; // first-run card → gone once a project is loaded
   $('filterbar').hidden = false;
@@ -130,6 +174,7 @@ function setScan(s, name) {
   }));
   closureByUuid = new Map(nodeIndex.map((n) => [n.uuid, n]));
   const sum = summary(s); byTypeCache = sum.byType;
+  restoreFilter(); // 還原上次的清單過濾（型別只保留專案實際有的）
   $('projectName').textContent = name;
   renderStats();
   setStatus('');
@@ -170,10 +215,20 @@ function toggleType(t) {
   else if (selectedTypes.size === 0) selectedTypes = new Set([t]);
   else if (selectedTypes.has(t)) selectedTypes.delete(t);
   else selectedTypes.add(t);
+  saveFilter();
   renderTypeFilters();
   renderTable();
   if (tab === 'topo') { selectedKey = treeRoot; renderTopo(); } // re-centre; old selection may be pruned
   else if (tab === 'reports') renderReports();
+}
+function saveFilter() {
+  try { localStorage.setItem(FILTER_KEY, JSON.stringify({ q: $('search').value, types: [...selectedTypes] })); } catch { /* ignore */ }
+}
+function restoreFilter() {
+  let f; try { f = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null'); } catch { f = null; }
+  $('search').value = f && typeof f.q === 'string' ? f.q : '';
+  const types = f && Array.isArray(f.types) ? f.types.filter((t) => byTypeCache[t]) : []; // 丟掉專案沒有的型別
+  selectedTypes = new Set(types);
 }
 
 // ---- 清單: sortable asset table ------------------------------------------
@@ -207,6 +262,11 @@ function renderTable() {
   for (const th of $('nodeList').querySelectorAll('th[data-col]')) {
     th.onclick = () => { const k = th.dataset.col; if (k === sortKey) sortDir *= -1; else { sortKey = k; sortDir = 1; } renderTable(); };
   }
+  for (const r of $('nodeList').querySelectorAll('tbody tr[data-uuid]')) { // 單擊選中、雙擊設為中心
+    r.onclick = () => { clearTimeout(listClickTimer); const u = r.dataset.uuid; listClickTimer = setTimeout(() => setListSel(u, false), 200); };
+    r.ondblclick = () => { clearTimeout(listClickTimer); focus(r.dataset.uuid); };
+  }
+  if (listSel) { const r = $('nodeList').querySelector(`tr[data-uuid="${listSel}"]`); if (r) r.classList.add('lsel'); else listSel = null; } // 保留游標
 }
 
 // ---- shared: a node's neighbours (topology shows the TRUE structure; the
@@ -226,11 +286,39 @@ function sortByTypeName(a, b) {
 }
 
 // ---- pick a root (from table/report/palette) -----------------------------
+// ---- topology navigation history (Delete / Backspace = back) -------------
+// Records each centre+selection before it changes; goBack pops to the previous.
+function pushNav() {
+  if (!treeRoot) return;
+  const top = navHistory[navHistory.length - 1];
+  if (top && top.treeRoot === treeRoot && top.selectedKey === selectedKey) return; // skip no-op
+  navHistory.push({ treeRoot, selectedKey });
+  if (navHistory.length > 200) navHistory.shift();
+  navForward = []; // a new navigation invalidates the forward stack
+}
+function applyNav(s) {
+  treeRoot = s.treeRoot; selectedKey = s.selectedKey;
+  renderTable(); renderTopo();
+  const a = scan.assets.get(selectedUuid());
+  if (a) setStatus(a.path);
+}
+function goBack() {    // − 上一動
+  if (tab !== 'topo' || !navHistory.length) return;
+  navForward.push({ treeRoot, selectedKey });
+  applyNav(navHistory.pop());
+}
+function goForward() { // + 下一動
+  if (tab !== 'topo' || !navForward.length) return;
+  navHistory.push({ treeRoot, selectedKey });
+  applyNav(navForward.pop());
+}
 function focus(uuid) {
+  pushNav();            // remember the current centre/selection before re-centring
   treeRoot = uuid; selectedKey = uuid;
   renderTable();        // highlight the chosen row in 清單
   setTab('topo');       // switch to the tree and render (centres the root)
-  saveSel();
+  const a = scan.assets.get(uuid); // 提示中心節點的完整路徑
+  if (a) setStatus(a.path);
 }
 
 // ---- 拓撲: bidirectional column-aligned tree -----------------------------
@@ -274,14 +362,54 @@ function buildSide(rootUuid, dir, side, maxDepth) {
   }
   return cells;
 }
+// Among same-name siblings, the shortest path part that tells them apart — drop
+// the common leading + trailing segments, keep the differing middle. e.g.
+// ".../en_us/plist/x.plist" vs ".../zh_hk/plist/x.plist" -> "en_us" / "zh_hk".
+function distinguishingDirs(paths) {
+  const segs = paths.map((p) => p.split('/'));
+  const minLen = Math.min(...segs.map((s) => s.length));
+  let pre = 0;
+  while (pre < minLen - 1 && segs.every((s) => s[pre] === segs[0][pre])) pre++;
+  let suf = 0;
+  while (suf < minLen - 1 - pre && segs.every((s) => s[s.length - 1 - suf] === segs[0][segs[0].length - 1 - suf])) suf++;
+  return segs.map((s) => s.slice(pre, s.length - suf).join('/'));
+}
+// Tag each cell with `.dir` (a directory hint) when its basename collides with a
+// sibling under the same tree-parent — so the 拓撲 can disambiguate same-name files.
+function tagSiblingDirs(cells) {
+  const byParent = new Map();
+  for (const c of cells) {
+    c.dir = null;
+    const pk = c.key.slice(0, c.key.lastIndexOf('>'));
+    if (!byParent.has(pk)) byParent.set(pk, []);
+    byParent.get(pk).push(c);
+  }
+  for (const sibs of byParent.values()) {
+    const byBase = new Map();
+    for (const c of sibs) {
+      const a = scan.assets.get(c.uuid);
+      const b = a ? base(a.path) : c.uuid;
+      if (!byBase.has(b)) byBase.set(b, []);
+      byBase.get(b).push(c);
+    }
+    for (const group of byBase.values()) {
+      if (group.length < 2) continue;
+      const dirs = distinguishingDirs(group.map((c) => { const a = scan.assets.get(c.uuid); return a ? a.path : c.uuid; }));
+      group.forEach((c, i) => { c.dir = dirs[i]; });
+    }
+  }
+}
 function cellHtml(c, col) {
   const a = scan.assets.get(c.uuid);
   const sym = c.cycle ? '↻' : c.hasKids ? (c.side === 'L' ? '◂' : '▸') : '';
+  const dh = c.dir ? `<span class="cdh" style="opacity:.5;margin-left:.35em;font-size:.82em">${esc(c.dir)}</span>` : '';
   return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${c.key === selectedKey ? ' sel' : ''}"` +
     ` data-key="${esc(c.key)}" data-uuid="${c.uuid}" data-side="${c.side}"` +
     ` title="${esc(a ? a.path : c.uuid)}" style="grid-column:${col};grid-row:${c.row + 1}">` +
     `<span class="tw">${sym}</span><span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span>` +
-    `<span class="cnm">${esc(a ? base(a.path) : c.uuid.slice(0, 10) + '…')}</span></div>`;
+    `<span class="cnm">${esc(a ? base(a.path) : c.uuid.slice(0, 10) + '…')}${dh}</span>` +
+    (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
+    `</div>`;
 }
 // signed offset of a selected key (層0=0, 依賴=+depth, 被依賴=-depth)
 function offsetOfKey(key) {
@@ -302,6 +430,7 @@ function renderTopo() {
   const right = buildSide(treeRoot, 'out', 'R', selectedTypes.size ? DEEP : hi);
   const left = buildSide(treeRoot, 'in', 'L', selectedTypes.size ? DEEP : 2 - viewOffset);
   lastCells = [...left, ...right];
+  tagSiblingDirs(lastCells); // disambiguate same-name siblings (append distinguishing dir)
   const inWin = (off) => off >= lo && off <= hi;
   const gcol = (off) => off - lo + 1; // 1..5
   const cnt = (cells, d) => cells.filter((c) => c.depth === d).length;
@@ -324,7 +453,9 @@ function renderTopo() {
     const a = scan.assets.get(treeRoot);
     body += `<div class="cell root${selectedKey === treeRoot ? ' sel' : ''}" data-key="${esc(treeRoot)}" data-uuid="${treeRoot}"` +
       ` title="${esc(a ? a.path : treeRoot)}" style="grid-column:${gcol(0)};grid-row:1">` +
-      `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : treeRoot)}</span></div>`;
+      `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : treeRoot)}</span>` +
+      (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
+      `</div>`;
   }
   for (const c of left) { const off = -c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
   for (const c of right) { const off = c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
@@ -335,38 +466,28 @@ function renderTopo() {
     el.onclick = () => { clearTimeout(cellClickTimer); cellClickTimer = setTimeout(() => selectTopoKey(key), 200); };
     el.ondblclick = () => { clearTimeout(cellClickTimer); focus(uuid); };
   }
+  for (const cb of $('topo').querySelectorAll('.cell-copy')) { // hover 顯示，複製完整路徑
+    cb.onclick = (ev) => {
+      ev.stopPropagation();
+      copyToClipboard(cb.dataset.copy, () => {
+        cb.innerHTML = CHECK_ICON; cb.classList.add('ok');
+        setTimeout(() => { cb.innerHTML = COPY_ICON; cb.classList.remove('ok'); }, 1200);
+        setStatus(t('copy.named', { name: cb.dataset.copy }));
+      });
+    };
+  }
   const selEl = $('topo').querySelector('.cell.sel') || $('topo').querySelector('.cell.root');
   if (selEl) selEl.scrollIntoView({ block: 'center', inline: 'nearest' }); // 上下置中
   showUsage(); // auto-show the "used where" info for the selected ↔ parent edge
 }
-function selectTopoKey(key) { selectedKey = key; renderTopo(); saveSel(); }
+function selectTopoKey(key) {
+  pushNav();           // remember the current selection before moving
+  selectedKey = key; renderTopo();
+  const a = scan.assets.get(selectedUuid()); // 提示選中節點的完整路徑
+  if (a) setStatus(a.path);
+}
 
-// ---- persistence + keyboard ----------------------------------------------
-function saveSel() {
-  if (!treeRoot) return;
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ key: selectedKey || treeRoot })); } catch { /* ignore */ }
-}
-function restoreSel() {
-  let saved; try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch { saved = null; }
-  if (!saved || !scan) return;
-  const raw = String(saved.key || '');
-  let side = null, body = raw;
-  if (raw.startsWith('R:') || raw.startsWith('L:')) { side = raw[0]; body = raw.slice(2); }
-  const uuids = body.split('>').filter(Boolean);
-  if (!uuids.length || !scan.assets.has(uuids[0])) return;
-  if (side) {
-    const dir = side === 'L' ? 'in' : 'out';
-    for (let i = 0; i < uuids.length - 1; i++) { if (!scan.assets.has(uuids[i + 1]) || !neighborsOf(uuids[i], dir).has(uuids[i + 1])) return; }
-  }
-  treeRoot = uuids[0];
-  selectedKey = side ? `${side}:${uuids.join('>')}` : treeRoot;
-  renderTable();
-  setTab('topo');
-}
-function firstChildKey(uuid, side) {
-  const fc = [...neighborsOf(uuid, side === 'R' ? 'out' : 'in').keys()].sort(sortByTypeName)[0];
-  return fc;
-}
+// ---- selection + clipboard helpers ---------------------------------------
 function selectedUuid() {
   if (!treeRoot) return null;
   if (!selectedKey || selectedKey === treeRoot) return treeRoot;
@@ -476,21 +597,43 @@ function positionUsage(pop) {
   pop.style.left = `${left}px`;
   return;
 }
+function cycleTab(delta) {
+  const tabs = ['list', 'topo', 'reports'];
+  const i = tabs.indexOf(tab);
+  setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
+}
 function onKey(e) {
   if (!$('palette').hidden) return; // palette has its own handler
   if (!$('help').hidden) { if (e.key === 'Escape') { e.preventDefault(); $('help').hidden = true; } return; } // help open → only Esc
   const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
-  if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
-  if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey && !e.altKey) { if (typing) return; e.preventDefault(); restoreSel(); return; }
-  if ((e.key === 'c' || e.key === 'C') && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+  const mod = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
+  if ((e.key === 'p' || e.key === 'P') && mod) { e.preventDefault(); openPalette(); return; }        // Ctrl/⌘+P = "/"
+  if ((e.key === 'r' || e.key === 'R') && mod) { e.preventDefault(); $('pickBtn').click(); return; }  // Ctrl/⌘+R 選擇目錄
+  if ((e.key === 'c' || e.key === 'C') && mod) {                                                      // Ctrl/⌘+C 複製名稱
     if (typing) return;                                            // copying inside an input
     if (window.getSelection && window.getSelection().toString()) return; // a text selection exists → let the browser copy it
     const u = selectedUuid();
     if (u && scan && scan.assets.has(u)) { e.preventDefault(); copyName(u); }
     return;
   }
-  if (e.key === 'Escape' && !$('usagePopup').hidden) { e.preventDefault(); closeUsage(); return; }
-  if (typing || tab !== 'topo' || !treeRoot) return;
+  if (e.key === 'Escape') {                                        // Esc：先關彈窗，再清空類型篩選
+    if (!$('usagePopup').hidden) { e.preventDefault(); closeUsage(); return; }
+    if (!typing && selectedTypes.size) { e.preventDefault(); toggleType('__all'); return; } // 打字中不清篩選
+    return;
+  }
+  if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
+  if (typing) return;
+  if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; } // Tab 切分頁
+  if (tab === 'list') {                                   // 清單：↑↓ 切換項目、Enter 設為中心
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveListSel(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); moveListSel(-1); return; }
+    if (e.key === 'Enter' && listSel) { e.preventDefault(); focus(listSel); return; }
+    return;
+  }
+  if (tab !== 'topo' || !treeRoot) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); setTab('list'); return; }  // 回清單
+  if (e.key === '-' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goBack(); return; }                        // − 上一動（不攔 Cmd/Ctrl±縮放）
+  if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goForward(); return; }  // + 下一動
   if (e.key === 'Enter') { const u = selectedUuid(); if (u) { e.preventDefault(); focus(u); } return; }
   const dir = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
   if (!dir) return;

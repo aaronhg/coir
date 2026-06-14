@@ -1,3 +1,4 @@
+// @ts-check
 // Reports derived from a scan result.
 
 import { buildAdjacency, dependencyClosure } from './graph.js';
@@ -5,8 +6,10 @@ import { mainUuid } from './uuid.js';
 
 // Scenes are loaded by name at runtime, so they are roots, never "unused".
 // Scripts with no editor reference are flagged separately (they may be entry
-// points, autoloaded, or referenced only dynamically).
+// points, autoloaded, or referenced only dynamically). Plugins may add more
+// root types via `scan.rootTypes` (see isRootType).
 const ROOT_TYPES = new Set(['scene']);
+const isRootType = (scan, type) => ROOT_TYPES.has(type) || !!(scan.rootTypes && scan.rootTypes.has(type));
 
 // Unused = source asset OUTSIDE the resources bundle with zero referrers.
 // Per project policy, everything under resources/ is treated as runtime-loaded
@@ -15,7 +18,7 @@ export function unusedReport(scan) {
   const items = [];
   for (const a of scan.assets.values()) {
     if (a.inResources) continue;
-    if (ROOT_TYPES.has(a.type)) continue;
+    if (isRootType(scan, a.type)) continue;
     if (a.in > 0) continue;
     if (!a.hasSource) continue;
     items.push({ uuid: a.uuid, path: a.path, type: a.type, size: a.size });
