@@ -8,6 +8,7 @@
 //   node src/cli.js <projectDir> uses    <asset> [--depth N] [--type T] [--where] [--json] [--limit N]   (= deps --in)
 //   node src/cli.js <projectDir> closure <asset> [--type T] [--list] [--json]
 //   node src/cli.js <projectDir> find    <query> [--type T] [--json] [--limit N]
+//   node src/cli.js <projectDir> info    <asset> [--json]
 //
 // <asset> resolves by full path, basename, uuid, or uuid@sub; an ambiguous
 // basename prints the candidates and exits 2.
@@ -39,6 +40,7 @@ const USAGE = `Usage:
   node src/cli.js <projectDir> uses    <asset> [--depth N] [--type T] [--where] [--json] [--limit N]
   node src/cli.js <projectDir> closure <asset> [--type T] [--list] [--json]
   node src/cli.js <projectDir> find    <query> [--type T] [--json] [--limit N]
+  node src/cli.js <projectDir> info    <asset> [--json]
 
 <asset>: full path / basename / uuid / uuid@sub
 --type : keep only the given asset types (comma-separated); on the deps/uses tree it
@@ -317,6 +319,37 @@ function cmdFind(scan, query, flags) {
   console.log(lines.join('\n'));
 }
 
+// ---- info: dump one asset's record (the headless `project_get_asset_info`) ---
+// type/uuid/ext/importer/size, the in/out degrees, its sub-assets, and the raw
+// meta userData (the "properties"). Resolution is the shared resolveTarget, so
+// path / basename / uuid / uuid@sub and the ambiguity exit-2 come for free.
+function cmdInfo(scan, uuid, flags) {
+  const a = scan.assets.get(uuid);
+  if (flags.json) {
+    console.log(JSON.stringify({
+      path: a.path, type: a.type, uuid: a.uuid, ext: a.ext, importer: a.importer,
+      size: a.size, inResources: a.inResources, in: a.in, out: a.out,
+      subAssets: a.subAssets.map((s) => ({ subId: s.subId, uuid: s.uuid, kind: s.kind, name: s.name })),
+      userData: a.userData ?? null,
+    }));
+    return;
+  }
+  const lines = [`${a.path} (${a.type})`];
+  const row = (k, v) => lines.push(`  ${k.padEnd(10)} ${v}`);
+  row('uuid', a.uuid);
+  row('ext', a.ext || '—');
+  row('importer', a.importer);
+  row('size', a.size ? kb(a.size) : '—');
+  row('resources', a.inResources ? 'yes' : 'no');
+  row('degree', `used-by ${a.in}  depends-on ${a.out}`);
+  if (a.subAssets.length) {
+    lines.push(`  subAssets ${a.subAssets.length}:`);
+    for (const s of a.subAssets) lines.push(`    ${s.kind.padEnd(14)} ${(s.name || '').padEnd(14)} ${s.uuid || ''}`);
+  }
+  if (a.userData && Object.keys(a.userData).length) row('userData', JSON.stringify(a.userData));
+  console.log(lines.join('\n'));
+}
+
 async function main() {
   const { projectDir, command, target, flags } = parseArgs(process.argv.slice(2));
   if (!projectDir || !command) { console.error(USAGE); process.exit(1); }
@@ -350,7 +383,7 @@ async function main() {
 
   if (command === 'find') { cmdFind(scan, target, flags); return; }
 
-  if (!['deps', 'uses', 'closure'].includes(command)) {
+  if (!['deps', 'uses', 'closure', 'info'].includes(command)) {
     console.error(`${M.unknownCmd(command)}\n\n${USAGE}`); process.exit(1);
   }
   if (!target) { console.error(`${M.needTarget(command)}\n\n${USAGE}`); process.exit(1); }
@@ -364,6 +397,7 @@ async function main() {
     process.exit(2);
   }
 
+  if (command === 'info') { cmdInfo(scan, r.uuid, flags); return; }
   if (command === 'closure') { cmdClosure(scan, r.uuid, flags); return; }
   const f = { ...flags };
   if (command === 'uses') f.dir = 'in';

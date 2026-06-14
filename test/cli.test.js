@@ -200,6 +200,32 @@ test('resolves a target by uuid and by uuid@sub', () => {
   assert.equal(json(cli('deps', `${U.coin}@f9941`, '--json')).node, 'coin.png');
 });
 
+// ---- info: dump one asset's record (sub-assets, degrees, userData) ----------
+test('info --json: record with type, degrees and sub-assets', () => {
+  const o = json(cli('info', 'coin.png', '--json'));
+  assert.equal(o.path, 'coin.png');
+  assert.equal(o.type, 'image');
+  assert.equal(o.uuid, U.coin);
+  assert.equal(o.subAssets.length, 2);
+  assert.ok(o.subAssets.some((s) => s.kind === 'sprite-frame' && s.uuid === `${U.coin}@f9941`));
+  assert.equal(o.in, 1);  // used by the atlas->texture edge from ui.plist
+  assert.equal(typeof o.out, 'number');
+});
+
+test('info: text form shows uuid, degree line and sub-assets', () => {
+  const out = cli('info', 'coin.png').stdout;
+  assert.match(out, /coin\.png \(image\)/);
+  assert.ok(out.includes(U.coin));
+  assert.match(out, /used-by 1 +depends-on/);
+  assert.match(out, /sprite-frame/);
+});
+
+test('info: resources flag, and resolves by uuid@sub to the owning asset', () => {
+  assert.equal(json(cli('info', 'resources/dyn.png', '--json')).inResources, true);
+  assert.equal(json(cli('info', 'unused.png', '--json')).inResources, false);
+  assert.equal(json(cli('info', `${U.coin}@6c48a`, '--json')).path, 'coin.png'); // sub → owner
+});
+
 // ---- --type filter: prune to branches reaching the chosen type(s) ----------
 test('deps --type: keeps the path to a matching type, prunes dead branches', () => {
   // Game.scene → Shop.prefab → ui.plist → coin.png(image); the ShopCtrl.ts
