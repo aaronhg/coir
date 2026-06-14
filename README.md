@@ -204,13 +204,16 @@ coir info    <資產>                                  # 印單一資產的 reco
 **就地編輯既有 prefab/scene**（會**寫檔**——先 `--dry-run` 預覽、`--backup` 留快照；不會憑空產生檔案）：
 
 ```bash
+coir edit <檔> tree [--with <Type>] [--under <sel>] [--depth N]   # 列節點階層 + 現成 selector（唯讀；盲改的解法）
 coir edit <檔> get <sel>                      # 讀某值／節點／元件（-o json 可餵回 set --json）
 coir edit <檔> set <sel> <值旗標>             # 改屬性（--str/--int/--color/--vec3/--uuid/--json '<物件>' …）
 coir edit <檔> swap-uuid <舊資產> <新資產>    # 重指引用（可 --all 全專案）
 coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|add-component|rm-component …
 ```
 
-selector 同上（`nodePath:Type.prop`，`[i]` 消歧、`#N` 絕對索引）；`swap-uuid` 是最小 diff 文字補丁,其餘 parse-rewrite；**真刪會做索引壓縮**（不留軟刪垃圾）、新增走 **template-by-example**（複製同檔骨架→跨版本正確）；scene 裡的巢狀 prefab 實例會被偵測擋下。完整設計見 **[docs/EDITING.md](docs/EDITING.md)**。
+`tree` 是結構探索:不必 parse JSON 就拿到任何 prefab 的全部可貼 selector(`tree`→`get`→`set` 三段式)。selector 同上（`nodePath:Type.prop`，`[i]` 消歧、`#N` 絕對索引）；`swap-uuid` 是最小 diff 文字補丁,其餘 parse-rewrite；**真刪會做索引壓縮**（不留軟刪垃圾）、新增走 **template-by-example**（複製同檔骨架→跨版本正確）；scene 裡的巢狀 prefab 實例會被偵測擋下；寫入是 atomic + **mtime guard**（檔案自讀取後被改過就中止，`--force` 覆寫）。完整設計見 **[docs/EDITING.md](docs/EDITING.md)**。
+
+**MCP server**（給 AI agent / 沒有 shell 的 host）：`coir mcp` 啟一個**手刻、零依賴**的 JSON-RPC/stdio MCP server,把上面的查詢 + 編輯包成型別化工具（讀工具如 `tree`/`get`、寫工具 `edit_*`,逐一可核准；host 裡顯示為 `coir__<工具>`），跟 CLI **同一套邏輯**。帶 `fs.watch` 失效快取 + 工具序列化 + mtime 寫入護欄。host 設定與安全細節見 **[docs/MCP.md](docs/MCP.md)**。
 
 外掛在 CLI 也生效：`<coir 根>/coir.plugins.mjs`（全域）與 `<專案>/coir.plugins.mjs`（該專案）會自動載入，或用 `--plugin <檔>` 指定（見「外掛」）。
 

@@ -119,4 +119,4 @@ edit 功能(見 [EDITING.md](EDITING.md))就地改既有檔時,刻意避開 §4/
 
 ## 參考
 
-- coir 內部:`src/core/scan.js`(掃描管線)、`src/core/meta.js`(importer→type)、`src/core/uuid.js`(壓縮)、`src/core/selector.js`(`__type__` ↔ 類名)、`src/node/editPrefab.js`(寫入引擎)、`CLAUDE.md`(架構總覽)。
+- coir 內部:`src/core/scan.js`(掃描管線)、`src/core/meta.js`(importer→type)、`src/core/uuid.js`(壓縮)、`src/core/selector.js`(`__type__` ↔ 類名)、`src/edit/editPrefab.js`(寫入引擎)、`CLAUDE.md`(架構總覽)。

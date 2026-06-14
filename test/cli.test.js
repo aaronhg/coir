@@ -44,6 +44,7 @@ const U = {
   allLonely: '60606060-6060-6060-6060-606060606060',
   aInst: '70707070-7070-7070-7070-707070707070',
   spriteConfig: 'a1a1a1a1-b2b2-c3c3-d4d4-e5e5e5e5e5e5',
+  treeDup: '12121212-1212-1212-1212-121212121212',
 };
 const SCRIPT_TYPE = compressUuid(U.script); // compressed __type__ stored in the prefab
 const CFG_TYPE = compressUuid(U.spriteConfig); // a custom serializable's compressed __type__
@@ -274,6 +275,21 @@ before(async () => {
     { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, _cfg: { __type__: CFG_TYPE, frameName: 'old', keys: ['a'] } },
   ]);
   await write('CfgEdit.prefab.meta', { importer: 'prefab', uuid: 'b1b1b1b1-1111-2222-3333-444444444444' });
+
+  // structure-discovery fixture for `tree`: two same-name sibling nodes ("Slot")
+  // and a node carrying two same-type components (cc.Sprite) — so the emitted
+  // path/selector must disambiguate with [i]. Nothing else mutates it.
+  await write('TreeDup.prefab', [
+    { __type__: 'cc.Prefab', _name: 'TreeDup', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }, { __id__: 5 }], _components: [{ __id__: 3 }, { __id__: 7 }], _active: true },
+    { __type__: 'cc.Node', _name: 'Slot', _parent: { __id__: 1 }, _children: [], _components: [{ __id__: 4 }], _active: true },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true },
+    { __type__: 'cc.Label', node: { __id__: 2 }, _string: 'first' },
+    { __type__: 'cc.Node', _name: 'Slot', _parent: { __id__: 1 }, _children: [], _components: [{ __id__: 6 }], _active: true },
+    { __type__: 'cc.Label', node: { __id__: 5 }, _string: 'second' },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true },
+  ]);
+  await write('TreeDup.prefab.meta', { importer: 'prefab', uuid: U.treeDup });
 });
 
 after(async () => { if (projectDir) await fs.rm(projectDir, { recursive: true, force: true }); });
@@ -874,6 +890,73 @@ test('edit get: missing property → (no such property); node selector → whole
   const o = json(cli('edit', 'EditNode.prefab', 'get', 'Root', '-o', 'json'));
   assert.equal(o.__type__, 'cc.Node');
   assert.equal(o._name, 'Root');
+});
+
+// ---- tree: structure discovery (node hierarchy + component selectors) ------
+test('edit tree -o json: nodes carry a full record + each component a ready selector', () => {
+  const d = json(cli('edit', 'TreeDup.prefab', 'tree', '-o', 'json')); // dedicated, unmutated
+  assert.equal(d.file, 'TreeDup.prefab');
+  assert.equal(d.nodeCount, 3);
+  assert.deepEqual(d.nodes.find((n) => n.path === 'Root'), {
+    index: 1, path: 'Root', name: 'Root', depth: 0, active: true, instance: false,
+    components: [{ index: 3, type: 'cc.Sprite', selector: 'Root:cc.Sprite[0]' },
+      { index: 7, type: 'cc.Sprite', selector: 'Root:cc.Sprite[1]' }],
+  });
+  const slot = d.nodes.find((n) => n.path === 'Root/Slot[0]');
+  assert.deepEqual(slot.components, [{ index: 4, type: 'cc.Label', selector: 'Root/Slot[0]:cc.Label' }]);
+  // a literal-bracket node NAME is preserved verbatim (not mistaken for an [i] suffix)
+  assert.ok(json(cli('edit', 'EditNode.prefab', 'tree', '-o', 'json')).nodes.some((n) => n.path === 'Root/Weird[0]'));
+});
+
+test('edit tree: text form is an indented hierarchy with #index + component tokens', () => {
+  const out = cli('edit', 'TreeDup.prefab', 'tree').stdout;
+  assert.match(out, /TreeDup\.prefab — 3 nodes/);
+  assert.match(out, /^ {2}Root\b.*#1.*cc\.Sprite\[0\] cc\.Sprite\[1\]/m);
+  assert.match(out, /^ {4}Slot\[0\].*#2.*cc\.Label/m); // child indented one level deeper
+});
+
+test('edit tree: disambiguates same-name siblings and same-type components with [i]', () => {
+  const d = json(cli('edit', 'TreeDup.prefab', 'tree', '-o', 'json'));
+  const slots = d.nodes.filter((n) => n.name === 'Slot').map((n) => n.path).sort();
+  assert.deepEqual(slots, ['Root/Slot[0]', 'Root/Slot[1]']);
+  const root = d.nodes.find((n) => n.path === 'Root');
+  assert.deepEqual(root.components.map((c) => c.selector), ['Root:cc.Sprite[0]', 'Root:cc.Sprite[1]']);
+  // and those disambiguated selectors actually resolve back (round-trip)
+  assert.equal(json(cli('edit', 'TreeDup.prefab', 'get', 'Root/Slot[1]:cc.Label._string', '-o', 'json')), 'second');
+  assert.equal(json(cli('edit', 'TreeDup.prefab', 'get', 'Root:cc.Sprite[1]', '-o', 'json')).node.__id__, 1);
+});
+
+test('edit tree --with <Type>: keeps only nodes carrying that component, flat full paths', () => {
+  const d = json(cli('edit', 'TreeDup.prefab', 'tree', '--with', 'cc.Label', '-o', 'json'));
+  assert.deepEqual(d.nodes.map((n) => n.path).sort(), ['Root/Slot[0]', 'Root/Slot[1]']);
+  assert.ok(d.nodes.every((n) => n.components.some((c) => c.type === 'cc.Label')));
+  const out = cli('edit', 'TreeDup.prefab', 'tree', '--with', 'cc.Label').stdout;
+  assert.match(out, /with cc\.Label/);
+  assert.match(out, /Root\/Slot\[0\]/); // flat: full path shown
+});
+
+test('edit tree --under <sel>: scopes to a subtree (that node becomes depth 0)', () => {
+  const d = json(cli('edit', 'AInst.prefab', 'tree', '--under', 'Root/Holder', '-o', 'json'));
+  assert.equal(d.nodes[0].path, 'Root/Holder');
+  assert.equal(d.nodes[0].depth, 0);
+  assert.ok(!d.nodes.some((n) => n.path === 'Root')); // the parent is excluded
+  // --under a non-node is refused
+  assert.equal(cli('edit', 'TreeDup.prefab', 'tree', '--under', 'Root:cc.Sprite').status, 2);
+});
+
+test('edit tree --depth N: limits levels (root = 0)', () => {
+  const full = json(cli('edit', 'AInst.prefab', 'tree', '-o', 'json'));
+  assert.equal(full.nodeCount, 3); // Root → Holder → BInst (default: whole tree)
+  const d1 = json(cli('edit', 'AInst.prefab', 'tree', '--depth', '1', '-o', 'json'));
+  assert.deepEqual(d1.nodes.map((n) => n.path), ['Root', 'Root/Holder']); // BInst (depth 2) dropped
+});
+
+test('edit tree: flags a nested prefab-instance root (edit it in its source prefab)', () => {
+  const d = json(cli('edit', 'AInst.prefab', 'tree', '-o', 'json'));
+  const binst = d.nodes.find((n) => n.name === 'BInst');
+  assert.equal(binst.instance, true);
+  assert.equal(d.nodes.find((n) => n.name === 'Root').instance, false);
+  assert.match(cli('edit', 'AInst.prefab', 'tree').stdout, /BInst.*\[prefab instance\]/);
 });
 
 // ---- entry-point ergonomics: --help / --version / -C ----------------------

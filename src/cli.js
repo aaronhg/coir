@@ -2,7 +2,7 @@
 // Headless dependency query over the DOM-free core: ask what an asset depends
 // on, who depends on it, its bundle closure, find one by name, or dump its
 // record. In-place editing of existing prefab/scene files lives in editCli.js;
-// shared resolution/location helpers live in cliShared.js. Data goes to stdout
+// shared resolution/location helpers live in shared.js. Data goes to stdout
 // (pipe/parse-friendly); `-o json` emits a structured form.
 //
 // Run on the current dir, or point elsewhere with `-C <projectDir>` (git-style).
@@ -31,7 +31,8 @@ import { knownTypes } from './core/meta.js';
 import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
-import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, locJson, edgeSort } from './cliShared.js';
+import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './shared.js';
+import { depsData, infoData } from './query.js';
 import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -63,10 +64,11 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir find    <query> [--type T] [-o json] [--limit N]
   coir info    <asset> [-o json]
 
-Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup):
+Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup, --force overrides the concurrent-change guard):
   coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
   coir edit --all swap-uuid <oldAsset> <newAsset>     (project-wide repoint)
-    op:  get       <sel>                          read a value/node/component (-o json round-trips into set --json)
+    op:  tree      [--with <Type>] [--under <sel>] [--depth N]   list the node tree + each node's components (read-only; -o json gives ready selectors)
+         get       <sel>                          read a value/node/component (-o json round-trips into set --json)
          set       <sel> <value-flag>             set a property (sel = nodePath:Type.prop)
          set-uuid  <sel> <asset>                  point a property at an asset
          swap-uuid <oldAsset> <newAsset>          repoint every ref onto another asset (whole file)
@@ -78,6 +80,9 @@ Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --back
          add-component <nodeSel> <ccType>            rm-component <sel:Type>
     value-flags: --str --int --num --enum --bool --color #RRGGBBAA --vec2/3/4 --size --quat --uuid <asset> --null
                  --json '<json>'  (set a whole object/array; a class-name __type__ → compressed token)
+
+MCP (for AI agents / no-shell hosts — typed tools over the SAME query+edit logic, hand-rolled, zero deps):
+  coir mcp                           start a JSON-RPC/stdio MCP server on this project (see docs/MCP.md)
 
 <asset>: full path / basename / uuid / uuid@sub.   <sel>: nodePath then :Type then .prop, e.g.
          "Canvas/Title:cc.Label._string"; [i] disambiguates same-name nodes / same-type components /
@@ -102,7 +107,7 @@ Exit codes:  0 ok (incl. no-op)    1 usage/value error    2 not found / ambiguou
 -C <dir> : the Cocos project dir (git-style; default is the current directory).   -h/--help    -v/--version`;
 
 // Query-side user-facing text (CLI is fixed English). Resolution errors live in
-// cliShared.resolveAsset; edit messages live in editCli.
+// shared.resolveAsset; edit messages live in editCli.
 const M = {
   scanFail: (m) => `scan failed: ${m}`,
   scanHint: '  (no assets/ here — run inside your Cocos project, or pass -C <projectDir>)',
@@ -119,7 +124,7 @@ const M = {
 };
 
 function parseArgs(argv) {
-  const flags = { dir: null, depth: 1, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null };
+  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
   const pos = []; // positionals, in order, from anywhere in argv
   for (let i = 0; i < argv.length; i++) {
@@ -133,6 +138,7 @@ function parseArgs(argv) {
     else if (a === '--where' || a === '-w') flags.where = true;
     else if (a === '--dry-run' || a === '-n') flags.dryRun = true;
     else if (a === '--backup') flags.backup = true;
+    else if (a === '--force') flags.force = true; // edit: bypass the concurrent-change (mtime) guard
     else if (a === '--all') flags.all = true;
     else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
     else if (a.startsWith('--output=')) flags.json = a.slice(9) === 'json';
@@ -143,6 +149,10 @@ function parseArgs(argv) {
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.slice(8), 10) || Infinity;
     else if (a === '--index') { const v = parseInt(argv[++i], 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a.startsWith('--index=')) { const v = parseInt(a.slice(8), 10); flags.index = Number.isNaN(v) ? null : v; }
+    else if (a === '--with') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.with = argv[++i]; } // edit tree: keep nodes with this component
+    else if (a.startsWith('--with=')) flags.with = a.slice(7);
+    else if (a === '--under') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.under = argv[++i]; } // edit tree: scope to a subtree
+    else if (a.startsWith('--under=')) flags.under = a.slice(8);
     else if (a === '--type') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) addTypes(argv[++i]); }
     else if (a.startsWith('--type=')) addTypes(a.slice(7));
     else if (a === '--plugin') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.plugins.push(argv[++i]); }
@@ -176,6 +186,7 @@ function buildEdgeTree(scan, maps, rootUuid, dir, flags) {
   // to the SURVIVORS, so a match that sorts past --limit is never dropped before
   // the type filter sees it. Unfiltered, --limit caps breadth here as before.
   const breadth = flags.types.size ? Infinity : flags.limit;
+  const maxDepth = flags.depth == null ? 1 : flags.depth; // deps/uses default to 1 hop (edit tree uses its own)
   return (function recur(uuid, depth) {
     const edges = ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
       .slice().sort(edgeSort(scan, dir)).slice(0, breadth);
@@ -184,7 +195,7 @@ function buildEdgeTree(scan, maps, rootUuid, dir, flags) {
       const other = dir === 'out' ? e.to : e.from;
       const revisit = seen.has(other);
       let children = [];
-      if (depth < flags.depth && !revisit) { seen.add(other); children = recur(other, depth + 1); }
+      if (depth < maxDepth && !revisit) { seen.add(other); children = recur(other, depth + 1); }
       nodes.push({ e, other, depth, revisit, children });
     }
     return nodes;
@@ -247,7 +258,7 @@ function cmdDeps(scan, maps, uuid, flags) {
   const showOut = flags.dir !== 'in';
   const showIn = flags.dir !== 'out';
   const filt = flags.types.size;
-  if (flags.json) { console.log(JSON.stringify(depsJson(scan, maps, uuid, showOut, showIn, flags))); return; }
+  if (flags.json) { console.log(JSON.stringify(depsData(scan, maps, uuid, { showOut, showIn, types: flags.types, limit: flags.limit }))); return; }
 
   const lines = [`${a.path} (${a.type})${filt ? `   [type: ${[...flags.types].join(',')}]` : ''}`];
   if (showOut) {
@@ -271,33 +282,6 @@ function cmdDeps(scan, maps, uuid, flags) {
     renderTreeText(scan, tree, 'in', flags, lines);
   }
   console.log(lines.join('\n'));
-}
-
-// JSON is always direct (1-hop) regardless of --depth; locations come verbatim.
-// --type filters the direct neighbours by type (no intermediate-path concept at 1 hop).
-function depsJson(scan, maps, uuid, showOut, showIn, flags) {
-  const a = scan.assets.get(uuid);
-  const o = { node: a.path, type: a.type, uuid };
-  const typeOk = (oa) => !flags.types.size || (oa && flags.types.has(oa.type));
-  const side = (dir) => ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
-    .slice().sort(edgeSort(scan, dir))
-    .filter((e) => typeOk(scan.assets.get(dir === 'out' ? e.to : e.from)))
-    .slice(0, flags.limit)
-    .map((e) => {
-      const oa = scan.assets.get(dir === 'out' ? e.to : e.from);
-      return { path: oa.path, type: oa.type, via: e.kind, weight: e.weight,
-        locations: e.locations.map((l) => locJson(scan, l)) };
-    });
-  if (showOut) {
-    o.dependsOn = side('out');
-    const orph = flags.types.size ? [] : orphansOf(scan, uuid);
-    if (orph.length) o.orphanRefs = orph.map((x) => {
-      const known = scan.missing && scan.missing.get(mainUuid(x.ref));
-      return { ref: x.ref, path: known || null, missingSource: !!known, location: x.loc ? locJson(scan, x.loc) : null };
-    });
-  }
-  if (showIn) o.usedBy = side('in');
-  return o;
 }
 
 function cmdClosure(scan, uuid, flags) {
@@ -346,15 +330,7 @@ function cmdFind(scan, query, flags) {
 // path / basename / uuid / uuid@sub and the ambiguity exit-2 come for free.
 function cmdInfo(scan, uuid, flags) {
   const a = scan.assets.get(uuid);
-  if (flags.json) {
-    console.log(JSON.stringify({
-      path: a.path, type: a.type, uuid: a.uuid, ext: a.ext, importer: a.importer,
-      size: a.size, inResources: a.inResources, in: a.in, out: a.out,
-      subAssets: a.subAssets.map((s) => ({ subId: s.subId, uuid: s.uuid, kind: s.kind, name: s.name })),
-      userData: a.userData ?? null,
-    }));
-    return;
-  }
+  if (flags.json) { console.log(JSON.stringify(infoData(a))); return; }
   const lines = [`${a.path} (${a.type})`];
   const row = (k, v) => lines.push(`  ${k.padEnd(10)} ${v}`);
   row('uuid', a.uuid);
@@ -386,6 +362,10 @@ async function main() {
     ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)), // this project only
     ...await loadPluginFiles(flags.plugins),                    // --plugin <file>
   ]);
+
+  // `coir mcp` is a long-lived MCP server (it manages its own scan + fs.watch),
+  // not a one-shot query — hand off before the single scan below.
+  if (command === 'mcp') { const { startMcpServer } = await import('./mcp/server.js'); await startMcpServer(projectDir, { plugins }); return; }
 
   let scan;
   try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets')), { plugins }); }

@@ -12,8 +12,10 @@ import fs from 'node:fs';
  * Read a scene/prefab and verify it is a 3.x file (a JSON array of tagged
  * objects). Returns the raw text (for text-patching) and the parsed array (for
  * checks). Throws on bad JSON or a non-array (e.g. a 2.x `.fire`, a stray file).
+ * `mtime` (the source's mtimeMs at read) lets a writer detect a concurrent
+ * change (e.g. Cocos Creator saving the same file) before clobbering it.
  * @param {string} absPath
- * @returns {{ raw: string, arr: any[] }}
+ * @returns {{ raw: string, arr: any[], mtime: number }}
  */
 export function loadDoc(absPath) {
   const raw = fs.readFileSync(absPath, 'utf8');
@@ -21,7 +23,7 @@ export function loadDoc(absPath) {
   try { arr = JSON.parse(raw); }
   catch (e) { throw new Error(`not valid JSON (${e instanceof Error ? e.message : e})`); }
   if (!Array.isArray(arr)) throw new Error('not a 3.x scene/prefab (expected a JSON array of objects)');
-  return { raw, arr };
+  return { raw, arr, mtime: fs.statSync(absPath).mtimeMs };
 }
 
 /**
@@ -48,12 +50,20 @@ export function planSwapUuid(raw, oldUuid, newUuid) {
 
 /**
  * Write atomically (temp file → rename) so a crash never leaves a half-written
- * prefab. With `backup`, the original is copied to `<file>.bak` first.
+ * prefab. With `backup`, the original is copied to `<file>.bak` first. With
+ * `expectMtime`, the on-disk mtime is re-checked just before the rename — if it
+ * differs from what was read, the file changed underneath us (e.g. Cocos Creator
+ * saved it) and the write is REFUSED rather than clobbering that change.
  * @param {string} absPath
  * @param {string} text
- * @param {{ backup?: boolean }} [opts]
+ * @param {{ backup?: boolean, expectMtime?: number|null }} [opts]
  */
-export function writeAtomic(absPath, text, { backup = false } = {}) {
+export function writeAtomic(absPath, text, { backup = false, expectMtime = null } = {}) {
+  if (expectMtime != null) {
+    let cur = null;
+    try { cur = fs.statSync(absPath).mtimeMs; } catch { /* gone → treat as changed */ }
+    if (cur !== expectMtime) throw new Error('file changed on disk since it was read — re-read and retry (or force)');
+  }
   if (backup) fs.copyFileSync(absPath, `${absPath}.bak`);
   const tmp = `${absPath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, text);
@@ -181,6 +191,63 @@ export function getDeep(obj, propPath) {
     cur = cur[k];
   }
   return { value: cur };
+}
+
+/**
+ * Enumerate the node hierarchy for STRUCTURE DISCOVERY (the `tree` command) —
+ * the read complement to the selector grammar. Every node carries its
+ * DISAMBIGUATED selector path (a same-name sibling gets the `[i]` it needs) and
+ * its components, each with a ready `nodePath:Type` selector (a same-type pair
+ * gets `[i]` too); a component whose type can't be named falls back to `#index`.
+ * So every `path`/`selector` here pastes straight back into another `edit` op.
+ * Nodes come in depth-first child order with a relative `depth` (root = 0, for
+ * indentation), an `active` flag, and an `instance` flag marking a nested-prefab
+ * -instance root (edit those in their source prefab, never here).
+ * @param {any[]} arr
+ * @param {(rawType:any)=>string} compName  __type__ → canonical class name ('' if unnameable)
+ * @param {{depth?:number, under?:number|null}} [opts]  depth = levels below the root to include; under = subtree root index
+ * @returns {Array<{index:number, path:string, name:string, depth:number, active:boolean, instance:boolean, components:Array<{index:number, type:string, selector:string}>}>}
+ */
+export function listNodes(arr, compName, { depth = Infinity, under = null } = {}) {
+  const byPath = buildNodeIndex(arr);
+  const pathSel = (idx) => {
+    const p = nodePathOf(arr, idx);
+    const g = byPath.get(p);
+    return g && g.length > 1 ? `${p}[${g.indexOf(idx)}]` : p; // same-name sibling → trailing [i]
+  };
+  const isInst = (idx) => {
+    const node = arr[idx];
+    const pi = node && isRef(node._prefab) ? arr[node._prefab.__id__] : null;
+    return !!(pi && pi.__type__ === 'cc.PrefabInfo' && pi.instance != null);
+  };
+  const compsOf = (idx, sel) => {
+    const refs = ((arr[idx] && arr[idx]._components) || []).filter(isRef).map((r) => r.__id__);
+    /** @type {Record<string, number>} */ const total = {};
+    for (const ci of refs) { const n = compName(arr[ci] && arr[ci].__type__); if (n) total[n] = (total[n] || 0) + 1; }
+    /** @type {Record<string, number>} */ const seen = {};
+    return refs.map((ci) => {
+      const n = compName(arr[ci] && arr[ci].__type__);
+      if (!n) return { index: ci, type: String((arr[ci] && arr[ci].__type__) ?? '?'), selector: `#${ci}` };
+      const k = (seen[n] = (seen[n] === undefined ? 0 : seen[n] + 1));
+      const part = total[n] > 1 ? `${n}[${k}]` : n; // same-type sibling → [i]
+      return { index: ci, type: n, selector: `${sel}:${part}` };
+    });
+  };
+  const out = [];
+  const seen = new Set();
+  const visit = (idx, d) => {
+    const node = arr[idx];
+    if (!node || !isNodeType(node.__type__) || seen.has(idx)) return; // guard a corrupt _children cycle / shared child
+    seen.add(idx);
+    const sel = pathSel(idx);
+    out.push({ index: idx, path: sel, name: node._name ?? '', depth: d,
+      active: node._active !== false, instance: isInst(idx), components: compsOf(idx, sel) });
+    if (d >= depth) return; // depth limit, root = 0
+    for (const ch of node._children || []) if (isRef(ch)) visit(ch.__id__, d + 1);
+  };
+  if (under != null) visit(under, 0);
+  else arr.forEach((o, i) => { if (o && isNodeType(o.__type__) && !isRef(o._parent)) visit(i, 0); });
+  return out;
 }
 
 /**

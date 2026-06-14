@@ -1,6 +1,6 @@
 # Headless CLI 編輯 prefab / scene
 
-> coir 的讀取核心是唯讀的;這頁是它的**就地編輯功能**:用 CLI 改既有的 Cocos prefab/scene 檔——**不憑空產生**,只編輯現有的。實作於 `src/editCli.js`(指令層)+ `src/node/editPrefab.js`(寫入引擎)。格式契約見 [SERIALIZATION.md](SERIALIZATION.md)。
+> coir 的讀取核心是唯讀的;這頁是它的**就地編輯功能**:用 CLI 改既有的 Cocos prefab/scene 檔——**不憑空產生**,只編輯現有的。實作於 `src/editCli.js`(指令層)+ `src/edit/editPrefab.js`(寫入引擎)。格式契約見 [SERIALIZATION.md](SERIALIZATION.md)。
 
 適用 **Cocos Creator 3.5.2 / 3.8.x**,同一條程式路徑(原因見 §2)。
 
@@ -81,6 +81,13 @@
 |---|---|
 | `swap-uuid <oldAsset> <newAsset>` | 全檔重指引用 A→B(含 `A@sub`→`B@sub`;`old===new` 為 no-op) |
 
+### 探索 — `tree`(唯讀,結構發現)
+| 指令 | 作用 |
+|---|---|
+| `tree [--with <Type>] [--under <sel>] [--depth N]` | 列出節點階層 + 每節點的元件,**每條 path / selector 都已消歧、可直接貼回其他 op**(同名兄弟自動補 `[i]`、同型多元件補 `[i]`、自訂腳本顯示類名)。`-o json` 給 agent(每個元件附現成 `nodePath:Type` selector);`--with` 只留掛某元件的節點、`--under` 限定子樹、`--depth` 限層數(預設整棵)。標出 `(off)` 停用節點、`[prefab instance]` 巢狀實例 |
+
+> `tree` 是「盲改」的解法:agent 不必 parse JSON 就能拿到任何 prefab 的全部可編輯 selector(`tree` 探索 → `get` 細讀 → `set`/結構 op 改,三段式)。`--with` 也讓「跨檔依型別改」變成乾淨 pipeline(`find .prefab` → 逐檔 `tree --with cc.Label -o json` → `set`)。
+
 ### Tier 1 — 屬性值層(parse-rewrite)
 | 指令 | 作用 |
 |---|---|
@@ -152,7 +159,7 @@ keep = arr 過濾掉 set;remapIds:每個 {__id__:N} → oldToNew[N]
 
 ## 8. 架構與模組
 
-守住既有切分:`src/core/**` 唯讀,寫入活在 Node 層;CLI 拆四檔避免 cli.js 巨獸化。
+守住既有切分:`src/core/**` 唯讀,寫入活在 Node 層。**讀寫邏輯抽成共用 seam**,CLI(文字呈現)與 **MCP server**(JSON 工具)同源 —— 邏輯一份,只差呈現。
 
 ```
 src/core/selector.js   ← 共用定址(DOM-free,browser + CLI 都用)
@@ -160,31 +167,47 @@ src/core/selector.js   ← 共用定址(DOM-free,browser + CLI 都用)
   locSelector(scan, loc)     // edge.location → 可貼的 nodePath:Comp.prop
   typeToken(scan, name)      // 類名 → 壓縮 token(--json 用;反向)
 
-src/node/editPrefab.js ← 純改檔引擎(@ts-check,無 process/CLI)
-  loadDoc / serialize / writeAtomic
+src/edit/editPrefab.js ← 純改檔「引擎」(@ts-check,無 process/CLI):byte-level mutate
+  loadDoc(→{raw,arr,mtime}) / serialize / writeAtomic(mtime guard)
   planSwapUuid               // Tier0 文字補丁
-  resolveSelector / buildNodeIndex / setDeep
+  listNodes                  // tree:結構發現(消歧 path + 現成元件 selector)
+  resolveSelector / buildNodeIndex / setDeep / getDeep
   eulerToQuat / setParent
   addNode / addComponent     // template-by-example(cloneOf)
   removeNode / removeComponent → {newArr, removed, cleared}
   removeEntries / ownedClosure   // 索引壓縮
   nestedInstanceRoot / subtreeHasInstance   // 實例護欄
 
-src/cliShared.js       ← query 與 edit 共用:resolveTarget/resolveAsset、
-                         edgeMaps/orphansOf、locText/locJson、base/kb/edgeSort
-src/editCli.js         ← edit 指令層:cmdEdit + 各 op + 值旗標解析 + 護欄 + EM 訊息
-src/cli.js             ← query 指令 + parseArgs + dispatch + USAGE
+src/edit/ops.js        ← 純「寫 seam」(@ts-check,無 print/exit;CLI 與 MCP 同源)
+  runEdit(scan,dir,op,params) → {json, writes} | {error,code,candidates}  // resolve→load→mutate
+  runSwapAll                 // --all 全專案
+  getData / treeData         // 讀某檔的 selector / 結構
+  commitWrites(writes,{backup,force})   // 落地 + mtime guard
+  resolveRawTypes            // 類名 __type__ → token(set/--json 共用)
+src/query.js       ← 純「讀 seam」:depsData / infoData / findData / closureData
+
+src/shared.js       ← resolveTarget/resolveAsset、edgeMaps/orphansOf、locText/locJson、base/kb/edgeSort
+src/editCli.js         ← edit 的 CLI 層:arg/值旗標解析 + 文字呈現 + commit;mutate 全委派 ops.js
+src/cli.js             ← query 指令 + parseArgs + dispatch + USAGE + 攔 `coir mcp`
+src/mcp/server.js      ← 手刻 JSON-RPC/stdio + queue + fs.watch 失效 + scan 快取(見 docs/MCP.md)
+src/mcp/tools.js       ← 型別化工具表 → ops/query
 ```
 
 CLI 入口:
 ```
-coir edit <file> <op> <selector|args…> [值旗標] [--dry-run] [--backup] [-o json]
+coir edit <file> <op> <selector|args…> [值旗標] [--dry-run] [--backup] [--force] [-o json]
 coir edit --all swap-uuid <oldAsset> <newAsset> [--dry-run] [--backup] [-o json]
 ```
+（`--force` 跳過寫入前的 mtime guard;同一套 op 也由 `coir mcp` 的 MCP 工具暴露 —— 見 [docs/MCP.md](MCP.md)。）
 
 ## 9. 範例
 
 ```bash
+# 探索:列出結構,拿到可貼的 selector(再餵給 get/set)
+coir edit Shop.prefab tree                                  # 縮排階層 + #index + 元件
+coir edit Shop.prefab tree --with cc.Label -o json          # 只列 Label 節點,附現成 selector
+coir edit Shop.prefab tree --under "Canvas/Panel" --depth 2 # 限子樹 + 層數
+
 # Tier0:把某資產的引用換成另一個(單檔 / 全專案)
 coir edit Shop.prefab swap-uuid old/coin.png new/coin.png --dry-run
 coir edit --all swap-uuid old/coin.png new/coin.png --backup
@@ -206,7 +229,7 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 
 ## 10. 測試
 
-`test/cli.test.js`(node:test,subprocess 對自建 temp fixture):涵蓋每個 op、selector 各形式(`[i]`/`#N`/陣列/白名單)、值旗標各型別、`--json` 自訂型別、真刪+索引壓縮(`refIntegrity` 等同 `validate_scene`)、`ownedClosure`(ClickEvent 一併移除)、實例護欄、`--all`、以及一輪 code-review 抓到的邊界(非法 hex、型別不符、`--uuid` 缺值、`rm-component` 防呆、空名 rename、`swap old===new` no-op…)。
+`test/cli.test.js`(node:test,subprocess 對自建 temp fixture,87 個案例):涵蓋每個 op、selector 各形式(`[i]`/`#N`/陣列/白名單)、值旗標各型別、`--json` 自訂型別、`tree` 結構發現(消歧 path/selector 的 round-trip、`--with`/`--under`/`--depth`、實例標記)、真刪+索引壓縮(`refIntegrity` 等同 `validate_scene`)、`ownedClosure`(ClickEvent 一併移除)、實例護欄、`--all`、以及一輪 code-review 抓到的邊界(非法 hex、型別不符、`--uuid` 缺值、`rm-component` 防呆、空名 rename、`swap old===new` no-op…)。`test/mcp.test.js` 另外真的 spawn `coir mcp` 講 JSON-RPC 驗證 MCP 工具(read、`set` dry-run vs 實寫、結構編輯、錯誤回 `isError`)。
 
 跨版本(3.5.2 vs 3.8.x)目前靠 template-by-example **設計上**版本無關;尚未加專屬的雙版本 fixture(列入待辦)。
 
@@ -218,6 +241,9 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 | Tier 1/2 | `set`/`set-uuid`/`rename`/`set-active`/`set-layer`/transform/`set-rot`/`set-parent` | ✅ |
 | Tier 3 | `add/rm-node`、`add/rm-component` + 索引壓縮 + template-by-example | ✅ |
 | 專案級 | `--all swap-uuid` + 巢狀實例護欄 | ✅ |
+| 探索 | `tree`(結構發現 + 現成 selector;`--with`/`--under`/`--depth`)| ✅ |
+| 共用 seam | 抽 `src/edit/ops.js`(`runEdit`…)+ `src/query.js`,CLI 與 MCP 同源;atomic+mtime 寫入護欄 | ✅ |
+| MCP server | `coir mcp`:手刻零依賴 JSON-RPC/stdio,型別化工具(讀無前綴 / 寫 `edit_*`;host 裡 `coir__<工具>`)(見 [docs/MCP.md](MCP.md))| ✅ |
 | 強化 | `--json` 自訂型別、`[i]` 統一、顯示↔selector 統一、code-review 修復 | ✅ |
 
 ## 12. 待議 / 未來
@@ -227,12 +253,12 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 - 跨版本雙 fixture 測試(3.5.2 / 3.8.x 風格各一)。
 - 瀏覽器端編輯(File System Access 可寫)—— Node 層 API 設計成可被 browser provider 復用。
 - prefab 實例 `propertyOverrides` 覆寫編輯(刻意排除)。
-- `set --all` 的「依型別跨檔比對」addressing;`--all` 是否納入 `.mtl`/`.anim`(目前定案:不納)。
+- `set --all` 的「依型別跨檔比對」addressing —— `tree --with` 已補上「發現」這半(`find` → `tree --with -o json` → `set` 就能跑),剩一站式 `set --all :cc.Label._x` 還沒做;`--all` 是否納入 `.mtl`/`.anim`(目前定案:不納)。
 
-### MCP server 的角色與時機
+### MCP server(已實作 → [docs/MCP.md](MCP.md))
 
-MCP server **不是另一套實作**,而是 `cmdDeps`/`cmdEdit` 之上的**薄型別化轉接層**(邏輯一份),跟 CLI 同層的另一個出口。
+MCP server **不是另一套實作**,而是共用 seam(`src/edit/ops.js` + `src/query.js`)之上的**薄型別化轉接層**(邏輯一份),跟 CLI 同層的另一個出口(`coir mcp`,手刻零依賴 JSON-RPC/stdio)。
 
-- **目前不做**:coir 的 CLI 本來就 agent-friendly(stdout/`-o json`/exit code);有 shell 的 agent 直接呼叫即可。
-- **划算的時機**:① 寫操作要**逐工具權限邊界**(走 MCP 則每個 `edit.rm_node` 是具名、可單獨核准的呼叫;`--dry-run` 暴露成唯讀的 `edit.preview`);② 觸及沒有 shell 的 GUI host。
-- **生態定位**:包成 MCP 後會是少見的「headless、不開編輯器、既能深度讀分析又能就地編輯既有 prefab」的 Cocos MCP——現有的 Cocos MCP 工具多半要嘛只讀、要嘛要開編輯器、要嘛偏「從零生成」。
+- **價值**:① 寫操作的**逐工具權限邊界**(每個 `edit_rm_node` 是具名、可單獨核准的呼叫;`dryRun` 參數做唯讀預覽);② 觸及沒有 shell 的 GUI host;③ 型別化 schema。
+- **生態定位**:少見的「headless、不開編輯器、既能深度讀分析又能就地編輯既有 prefab」的 Cocos MCP——現有的 Cocos MCP 工具多半要嘛只讀、要嘛要開編輯器、要嘛偏「從零生成」。
+- **併發安全**:`fs.watch` 失效快取、編輯 load fresh、mtime 寫入護欄、工具序列化(細節見 docs/MCP.md)。
