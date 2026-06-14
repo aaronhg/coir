@@ -15,17 +15,19 @@ window.coir = {
   plugins() { return [...PLUGINS, ...runtimePlugins]; },
 };
 
-// Browser analogue of the CLI's coir-root global config: load coir.plugins.mjs
-// served next to the page (dev server serves it from the repo root). We fetch()
-// first — a 404 resolves to res.ok=false and is handled quietly, whereas import()
-// of a missing URL logs a console error the try/catch can't suppress. The config
-// is gitignored so a hosted build simply doesn't have it. Cached (shared promise).
+// Browser analogue of the CLI's coir-root global config (coir.plugins.mjs served
+// next to the page). It's gitignored, so the dev server is the ONLY place it's
+// ever served — a hosted build never has it. Browsers log a 404 for any request
+// to a missing URL (fetch included, not just import), so we skip the request
+// entirely off-localhost; on localhost we fetch + blob-import. Cached (shared).
+const IS_DEV_HOST = ['localhost', '127.0.0.1', '[::1]', ''].includes(location.hostname);
 let globalPluginsP = null;
 function loadGlobalPlugins() {
   if (!globalPluginsP) globalPluginsP = (async () => {
+    if (!IS_DEV_HOST) return []; // hosted build: no global config, don't request it
     const url = new URL('coir.plugins.mjs', document.baseURI).href;
     let res;
-    try { res = await fetch(url); } catch { console.info('coir: global coir.plugins.mjs not reachable'); return []; }
+    try { res = await fetch(url); } catch { return []; }
     if (!res.ok) { console.info(`coir: no global coir.plugins.mjs (${res.status})`); return []; }
     const blob = URL.createObjectURL(new Blob([await res.text()], { type: 'text/javascript' }));
     try {
