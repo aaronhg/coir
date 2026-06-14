@@ -15,20 +15,27 @@ window.coir = {
   plugins() { return [...PLUGINS, ...runtimePlugins]; },
 };
 
-// Browser analogue of the CLI's coir-root global config: fetch coir.plugins.mjs
-// served next to the page (the dev server serves it from the repo root). Absent
-// on a hosted build (404) → none. webpackIgnore keeps it a NATIVE runtime import,
-// not a bundled module. Cached so the in-flight fetch is shared.
+// Browser analogue of the CLI's coir-root global config: load coir.plugins.mjs
+// served next to the page (dev server serves it from the repo root). We fetch()
+// first — a 404 resolves to res.ok=false and is handled quietly, whereas import()
+// of a missing URL logs a console error the try/catch can't suppress. The config
+// is gitignored so a hosted build simply doesn't have it. Cached (shared promise).
 let globalPluginsP = null;
 function loadGlobalPlugins() {
   if (!globalPluginsP) globalPluginsP = (async () => {
+    const url = new URL('coir.plugins.mjs', document.baseURI).href;
+    let res;
+    try { res = await fetch(url); } catch { console.info('coir: global coir.plugins.mjs not reachable'); return []; }
+    if (!res.ok) { console.info(`coir: no global coir.plugins.mjs (${res.status})`); return []; }
+    const blob = URL.createObjectURL(new Blob([await res.text()], { type: 'text/javascript' }));
     try {
-      const url = new URL('coir.plugins.mjs', document.baseURI).href;
-      const mod = await import(/* webpackIgnore: true */ url);
+      const mod = await import(/* webpackIgnore: true */ blob);
       const exp = mod.default ?? mod.plugins;
-      const arr = exp == null ? [] : (Array.isArray(exp) ? exp : [exp]);
-      return arr.filter((p) => p && typeof p === 'object');
-    } catch { return []; } // not served (hosted), bad MIME, or parse error → none
+      const arr = (exp == null ? [] : (Array.isArray(exp) ? exp : [exp])).filter((p) => p && typeof p === 'object');
+      console.info(`coir: global coir.plugins.mjs loaded (${arr.length} plugin${arr.length === 1 ? '' : 's'})`);
+      return arr;
+    } catch (e) { console.error('coir: global coir.plugins.mjs failed to parse —', e); return []; }
+    finally { URL.revokeObjectURL(blob); }
   })();
   return globalPluginsP;
 }
