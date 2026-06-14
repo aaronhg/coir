@@ -5,7 +5,7 @@
 const MESSAGES = {
   'zh-Hant': {
     // shell / static (index.html)
-    'app.title': 'Coir · Cocos 資源依賴拓撲',
+    'app.title': 'Coir — Cocos Creator 資源使用與依賴拓撲分析',
     'btn.pick': '選擇 Cocos 專案目錄',
     'proj.none': '未載入',
     'tab.list': '清單',
@@ -90,7 +90,7 @@ const MESSAGES = {
     'size.type': '類型', 'size.count': '數量', 'size.total': '總大小', 'size.sum': '總計', 'size.largest': '最大檔案',
   },
   en: {
-    'app.title': 'Coir · Cocos asset dependency topology',
+    'app.title': 'Coir — Cocos Creator asset usage & dependency topology',
     'btn.pick': 'Choose Cocos project folder',
     'proj.none': 'No project',
     'tab.list': 'List',
