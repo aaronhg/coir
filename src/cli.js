@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // Headless dependency query over the DOM-free core: ask what an asset depends
-// on, who depends on it, its bundle closure, or find one by name. Data goes to
-// stdout (pipe/parse-friendly); --json emits a structured form. Progress, if
-// any, would go to stderr — kept silent here since a full scan is ~tens of ms.
+// on, who depends on it, its bundle closure, find one by name, or dump its
+// record. In-place editing of existing prefab/scene files lives in editCli.js;
+// shared resolution/location helpers live in cliShared.js. Data goes to stdout
+// (pipe/parse-friendly); `-o json` emits a structured form.
 //
-//   node src/cli.js <projectDir> deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [--json] [--limit N]
-//   node src/cli.js <projectDir> uses    <asset> [--depth N] [--type T] [--where] [--json] [--limit N]   (= deps --in)
-//   node src/cli.js <projectDir> closure <asset> [--type T] [--list] [--json]
-//   node src/cli.js <projectDir> find    <query> [--type T] [--json] [--limit N]
-//   node src/cli.js <projectDir> info    <asset> [--json]
+// Run on the current dir, or point elsewhere with `-C <projectDir>` (git-style).
+//   coir deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [-o json] [--limit N]
+//   coir uses    <asset> [--depth N] [--type T] [--where] [-o json] [--limit N]   (= deps --in)
+//   coir closure <asset> [--type T] [--list] [-o json]
+//   coir find    <query> [--type T] [-o json] [--limit N]
+//   coir info    <asset> [-o json]
+//   coir edit    <file> <op> …   [--dry-run] [--backup] [-o json]   (see editCli.js)
 //
 // <asset> resolves by full path, basename, uuid, or uuid@sub; an ambiguous
 // basename prints the candidates and exits 2.
@@ -16,51 +19,97 @@
 // --type T[,T2,…] keeps only the chosen asset types. On the deps/uses TREE it
 // prunes to branches that REACH one of those types — the matching nodes plus
 // the intermediate hops leading to them stay, dead branches are dropped (the
-// root is always kept). On closure/find/--json it just filters the flat list.
+// root is always kept). On closure/find/`-o json` it just filters the flat list.
 
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { scanProject } from './core/scan.js';
 import { closureReport } from './core/analyze.js';
-import { looksCompressed, decompressUuid, mainUuid } from './core/uuid.js';
+import { mainUuid } from './core/uuid.js';
 import { knownTypes } from './core/meta.js';
 import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
+import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, locJson, edgeSort } from './cliShared.js';
+import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
+const VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return '?'; } })();
 
 const KNOWN_TYPES = knownTypes(PLUGINS);
 const VIA_W = 12;
-const base = (p) => p.slice(p.lastIndexOf('/') + 1);
-const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
 
-const USAGE = `Usage:
-  node src/cli.js <projectDir> deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [--json] [--limit N]
-  node src/cli.js <projectDir> uses    <asset> [--depth N] [--type T] [--where] [--json] [--limit N]
-  node src/cli.js <projectDir> closure <asset> [--type T] [--list] [--json]
-  node src/cli.js <projectDir> find    <query> [--type T] [--json] [--limit N]
-  node src/cli.js <projectDir> info    <asset> [--json]
+// Typed value flags for `edit set` (explicit, never inferred). parseArgs grabs
+// the following non-`--` tokens into flags.value; editCli resolves them.
+const VALUE_FLAGS = {
+  '--str': 'str', '--int': 'int', '--num': 'num', '--enum': 'enum', '--bool': 'bool',
+  '--uuid': 'uuid', '--color': 'color', '--vec2': 'vec2', '--vec3': 'vec3',
+  '--vec4': 'vec4', '--size': 'size', '--quat': 'quat', '--json': 'json',
+};
+// How many tokens each value flag consumes — so a flag stops at its arity and
+// doesn't swallow trailing positionals (color #hex is 1, rgba is up to 4).
+const VALUE_ARITY = { str: 1, int: 1, num: 1, enum: 1, bool: 1, uuid: 1, json: 1, color: 4, vec2: 2, vec3: 3, vec4: 4, size: 2, quat: 4 };
 
-<asset>: full path / basename / uuid / uuid@sub
---type : keep only the given asset types (comma-separated); on the deps/uses tree it
-         keeps the intermediate path leading to those types.
-         types = asset types (not the edge kinds shown in the listing); known: ${KNOWN_TYPES.join(' ')}
-         (a project may add extension-derived types like 'text'; a wrong --type prints the full list)
---plugin <file> : load an extra plugin module (repeatable). Auto-loaded too:
-         <coirRoot>/coir.plugins.mjs (global) and <projectDir>/coir.plugins.mjs
-         (per project) — keep your plugins out of the coir repo (both gitignored).`;
+const USAGE = `coir ${VERSION} — headless asset-dependency query + in-place prefab/scene editor for Cocos Creator 3.x.
 
-// All other user-facing CLI text, centralized (CLI is fixed English).
+Usage:  coir <command> [args] [flags]      (runs on the current dir; point elsewhere with -C <projectDir>)
+        also runnable as:  node src/cli.js …   /   npm run cli -- …
+
+Query (read-only; prints to stdout, pipe-friendly):
+  coir deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [-o json] [--limit N]
+  coir uses    <asset> [--depth N] [--type T] [--where] [-o json] [--limit N]   (= deps --in)
+  coir closure <asset> [--type T] [--list] [-o json]
+  coir find    <query> [--type T] [-o json] [--limit N]
+  coir info    <asset> [-o json]
+
+Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup):
+  coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
+  coir edit --all swap-uuid <oldAsset> <newAsset>     (project-wide repoint)
+    op:  get       <sel>                          read a value/node/component (-o json round-trips into set --json)
+         set       <sel> <value-flag>             set a property (sel = nodePath:Type.prop)
+         set-uuid  <sel> <asset>                  point a property at an asset
+         swap-uuid <oldAsset> <newAsset>          repoint every ref onto another asset (whole file)
+         rename    <nodeSel> <newName>
+         set-active/set-layer <nodeSel> --bool|--int <v>
+         set-pos/set-scale/set-rot <nodeSel> --vec3 x y z          (set-rot = euler degrees)
+         set-parent <nodeSel> <newParentSel> [--index i]
+         add-node   <parentSel> <name> [--index i]   rm-node <nodeSel>        (real delete + compaction)
+         add-component <nodeSel> <ccType>            rm-component <sel:Type>
+    value-flags: --str --int --num --enum --bool --color #RRGGBBAA --vec2/3/4 --size --quat --uuid <asset> --null
+                 --json '<json>'  (set a whole object/array; a class-name __type__ → compressed token)
+
+<asset>: full path / basename / uuid / uuid@sub.   <sel>: nodePath then :Type then .prop, e.g.
+         "Canvas/Title:cc.Label._string"; [i] disambiguates same-name nodes / same-type components /
+         array elements; #N is the raw array index.
+Output:  text (default), or -o json for machine-readable (every query + edit confirmation).
+
+Examples:  (run inside your Cocos project, or add -C <projectDir>)
+  coir find Coin                                              # locate an asset by name
+  coir uses art/coin.png --where                             # who references it + exactly where
+  coir deps scene/Main.scene --type prefab                   # which prefabs the scene pulls in
+  coir edit Shop.prefab swap-uuid old.png new.png --dry-run  # preview a repoint (no write)
+  coir edit Shop.prefab get "Title:cc.Label._string" -o json # read a value
+  coir edit Shop.prefab set "Title:cc.Label._string" --str "Start" --backup
+  coir deps art/coin.png -C ../OtherGame                     # run against a project elsewhere
+
+Exit codes:  0 ok (incl. no-op)    1 usage/value error    2 not found / ambiguous / refused guard
+
+--type   : keep only the given asset types (comma-separated); on the deps/uses tree it keeps the
+           intermediate path leading to those types. known: ${KNOWN_TYPES.join(' ')}
+--plugin <file> : load an extra plugin module (repeatable). Auto-loaded: <coirRoot>/coir.plugins.mjs
+           (global) and <projectDir>/coir.plugins.mjs (per project; both gitignored).
+-C <dir> : the Cocos project dir (git-style; default is the current directory).   -h/--help    -v/--version`;
+
+// Query-side user-facing text (CLI is fixed English). Resolution errors live in
+// cliShared.resolveAsset; edit messages live in editCli.
 const M = {
   scanFail: (m) => `scan failed: ${m}`,
+  scanHint: '  (no assets/ here — run inside your Cocos project, or pass -C <projectDir>)',
   unknownTypes: (ts) => `⚠ unknown type(s) (won't match anything): ${ts}`,
   availTypes: (ts) => `  available types: ${ts}`,
   unknownCmd: (c) => `unknown command "${c}"`,
   needTarget: (c) => `command "${c}" needs a target`,
-  notFound: (q) => `✗ not found: "${q}"`,
-  ambiguous: (q, n) => `✗ "${q}" matches ${n} assets — use the full path:`,
-  more: (n) => `    … ${n} more`,
   metaDerived: '(meta-derived — no nodePath)',
   matched: ' (matched)',
   missingSrc: '(missing source)',
@@ -70,81 +119,53 @@ const M = {
 };
 
 function parseArgs(argv) {
-  const [projectDir, command, ...rest] = argv;
-  const flags = { dir: null, depth: 1, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [] };
+  const flags = { dir: null, depth: 1, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
-  const pos = [];
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i];
-    if (a === '--in') flags.dir = 'in';
+  const pos = []; // positionals, in order, from anywhere in argv
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') flags.help = true;
+    else if (a === '-v' || a === '--version') flags.version = true;
+    else if (a === '-C' || a === '--project') { if (argv[i + 1] !== undefined) flags.project = argv[++i]; } // project dir (git-style; alternative to the leading positional)
+    else if (a.startsWith('--project=')) flags.project = a.slice(10);
+    else if (a === '--in') flags.dir = 'in';
     else if (a === '--out') flags.dir = 'out';
     else if (a === '--where' || a === '-w') flags.where = true;
-    else if (a === '--json') flags.json = true;
+    else if (a === '--dry-run' || a === '-n') flags.dryRun = true;
+    else if (a === '--backup') flags.backup = true;
+    else if (a === '--all') flags.all = true;
+    else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
+    else if (a.startsWith('--output=')) flags.json = a.slice(9) === 'json';
     else if (a === '--list') flags.list = true;
-    else if (a === '--depth') flags.depth = parseInt(rest[++i], 10) || 1;
+    else if (a === '--depth') flags.depth = parseInt(argv[++i], 10) || 1;
     else if (a.startsWith('--depth=')) flags.depth = parseInt(a.slice(8), 10) || 1;
-    else if (a === '--limit') flags.limit = parseInt(rest[++i], 10) || Infinity;
+    else if (a === '--limit') flags.limit = parseInt(argv[++i], 10) || Infinity;
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.slice(8), 10) || Infinity;
-    else if (a === '--type') { if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('-')) addTypes(rest[++i]); }
+    else if (a === '--index') { const v = parseInt(argv[++i], 10); flags.index = Number.isNaN(v) ? null : v; }
+    else if (a.startsWith('--index=')) { const v = parseInt(a.slice(8), 10); flags.index = Number.isNaN(v) ? null : v; }
+    else if (a === '--type') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) addTypes(argv[++i]); }
     else if (a.startsWith('--type=')) addTypes(a.slice(7));
-    else if (a === '--plugin') { if (rest[i + 1] !== undefined && !rest[i + 1].startsWith('-')) flags.plugins.push(rest[++i]); }
+    else if (a === '--plugin') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.plugins.push(argv[++i]); }
     else if (a.startsWith('--plugin=')) flags.plugins.push(a.slice(9));
+    else if (a === '--null') flags.value = { type: 'null', args: [] };
+    else if (VALUE_FLAGS[a]) { // typed value for `edit set …`; grab up to arity non-flag tokens (so --vec3 0 0 1 works incl. negatives, but extra positionals aren't swallowed)
+      const type = VALUE_FLAGS[a];
+      let max = VALUE_ARITY[type] || 1;
+      const args = [];
+      while (args.length < max && argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) {
+        args.push(argv[++i]);
+        if (type === 'color' && args.length === 1 && args[0].startsWith('#')) max = 1; // #hex is a single token
+      }
+      flags.value = { type, args };
+    }
     else if (!a.startsWith('-')) pos.push(a);
   }
-  return { projectDir, command, target: pos[0], flags };
+  // Project dir from `-C <dir>` (default: the current directory, git-style). The
+  // first positional is the command — no leading <projectDir> positional.
+  const projectDir = flags.project != null ? flags.project : '.';
+  const command = pos.shift();
+  return { projectDir, command, target: pos[0], pos, flags };
 }
-
-// ---- target resolution: path / basename / uuid / uuid@sub ----------------
-function resolveTarget(scan, query) {
-  const main = query.includes('@') ? query.slice(0, query.indexOf('@')) : query;
-  if (scan.assets.has(main)) return { uuid: main };
-  const exact = scan.byPath.get(query);
-  if (exact) return { uuid: exact.uuid };
-  const matches = [...scan.assets.values()].filter(
-    (a) => a.path === query || a.path.endsWith(`/${query}`) || base(a.path) === query);
-  if (matches.length === 1) return { uuid: matches[0].uuid };
-  if (matches.length > 1) return { candidates: matches.map((a) => a.path).sort() };
-  return { notFound: true };
-}
-
-// scan.edges carry `locations`; graph.js adjacency drops them, so index here.
-function edgeMaps(scan) {
-  const out = new Map(); const inc = new Map();
-  for (const e of scan.edges) {
-    (out.get(e.from) || out.set(e.from, []).get(e.from)).push(e);
-    (inc.get(e.to) || inc.set(e.to, []).get(e.to)).push(e);
-  }
-  return { out, inc };
-}
-const orphansOf = (scan, uuid) => scan.orphanRefs.filter((o) => o.from === uuid);
-
-// A location's `component` is a serialized __type__: cc.Sprite for builtins,
-// a compressed uuid for custom scripts — resolve the latter to its script path.
-function compLabel(scan, comp) {
-  if (!comp) return '';
-  if (looksCompressed(comp)) { const a = scan.assets.get(decompressUuid(comp)); return a ? base(a.path) : comp; }
-  return comp;
-}
-function locText(scan, loc) {
-  const comp = compLabel(scan, loc.component);
-  const prop = loc.property || '';
-  const cp = comp && prop ? `${comp}.${prop}` : (comp || prop || '?');
-  return `${loc.nodePath || '—'}  ${cp}${loc.subName ? `  "${loc.subName}"` : ''}`;
-}
-function locJson(scan, loc) {
-  const o = { nodePath: loc.nodePath ?? null, component: loc.component ?? null,
-    property: loc.property ?? null, subName: loc.subName ?? null };
-  if (loc.component && looksCompressed(loc.component)) {
-    const a = scan.assets.get(decompressUuid(loc.component));
-    if (a) o.componentScript = a.path;
-  }
-  return o;
-}
-const edgeSort = (scan, dir) => (x, y) => {
-  const ax = scan.assets.get(dir === 'out' ? x.to : x.from);
-  const ay = scan.assets.get(dir === 'out' ? y.to : y.from);
-  return ax.type.localeCompare(ay.type) || base(ax.path).localeCompare(base(ay.path));
-};
 
 // ---- dependency tree: build → (optionally) prune by type → render ---------
 // Build the side tree with the SAME global-seen / depth / limit rules as before
@@ -321,7 +342,7 @@ function cmdFind(scan, query, flags) {
 
 // ---- info: dump one asset's record (the headless `project_get_asset_info`) ---
 // type/uuid/ext/importer/size, the in/out degrees, its sub-assets, and the raw
-// meta userData (the "properties"). Resolution is the shared resolveTarget, so
+// meta userData (the "properties"). Resolution is the shared resolveAsset, so
 // path / basename / uuid / uuid@sub and the ambiguity exit-2 come for free.
 function cmdInfo(scan, uuid, flags) {
   const a = scan.assets.get(uuid);
@@ -351,7 +372,9 @@ function cmdInfo(scan, uuid, flags) {
 }
 
 async function main() {
-  const { projectDir, command, target, flags } = parseArgs(process.argv.slice(2));
+  const { projectDir, command, target, pos, flags } = parseArgs(process.argv.slice(2));
+  if (flags.help) { console.log(USAGE); process.exit(0); }
+  if (flags.version) { console.log(`coir ${VERSION}`); process.exit(0); }
   if (!projectDir || !command) { console.error(USAGE); process.exit(1); }
 
   // Built-ins + coir-root global config + project-local config + --plugin files.
@@ -366,7 +389,11 @@ async function main() {
 
   let scan;
   try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets')), { plugins }); }
-  catch (e) { console.error(M.scanFail(e.message)); process.exit(1); }
+  catch (e) {
+    console.error(M.scanFail(e.message));
+    if (flags.project == null && /ENOENT/.test(e.message)) console.error(M.scanHint); // default cwd had no assets/ → likely meant -C
+    process.exit(1);
+  }
 
   // --type matches an asset's TYPE, not the edge KIND printed on each row. Warn on
   // values that no asset carries (typos, or edge kinds like `texture`/`sprite-frame`
@@ -382,26 +409,20 @@ async function main() {
   }
 
   if (command === 'find') { cmdFind(scan, target, flags); return; }
+  if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
 
   if (!['deps', 'uses', 'closure', 'info'].includes(command)) {
     console.error(`${M.unknownCmd(command)}\n\n${USAGE}`); process.exit(1);
   }
   if (!target) { console.error(`${M.needTarget(command)}\n\n${USAGE}`); process.exit(1); }
 
-  const r = resolveTarget(scan, target);
-  if (r.notFound) { console.error(M.notFound(target)); process.exit(2); }
-  if (r.candidates) {
-    console.error(M.ambiguous(target, r.candidates.length));
-    for (const p of r.candidates.slice(0, 20)) console.error(`    ${p}`);
-    if (r.candidates.length > 20) console.error(M.more(r.candidates.length - 20));
-    process.exit(2);
-  }
+  const uuid = resolveAsset(scan, target); // prints candidates / not-found and exits 2 on miss
 
-  if (command === 'info') { cmdInfo(scan, r.uuid, flags); return; }
-  if (command === 'closure') { cmdClosure(scan, r.uuid, flags); return; }
+  if (command === 'info') { cmdInfo(scan, uuid, flags); return; }
+  if (command === 'closure') { cmdClosure(scan, uuid, flags); return; }
   const f = { ...flags };
   if (command === 'uses') f.dir = 'in';
-  cmdDeps(scan, edgeMaps(scan), r.uuid, f);
+  cmdDeps(scan, edgeMaps(scan), uuid, f);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -176,7 +176,7 @@ component 偵測最終用三個訊號：直接 `extends Component`、被 `__type
 |---|---|
 | 隊友(有 repo) | `npm link` → 全域 `coir`;`npm unlink -g coir` 移除 |
 | 無 repo | `npm i -g <git-url>` |
-| 免安裝 | `npx <git-url> <projectDir> deps <asset>` |
+| 免安裝 | `npx <git-url> deps <asset> -C <projectDir>`（或在專案內省略 `-C`） |
 | 公開發佈 | `npm publish` → `npm i -g` / `npx` |
 | 只想 clone | `node src/cli.js …` 或 `./src/cli.js …` |
 
@@ -253,8 +253,8 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
 - **三分頁 + 全域型別篩選 bar**：清單（可排序資產表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭工具**：`test/node-run.js`（整份報告回歸）＋ `src/cli.js`（`deps`/`uses`/`closure`/`find`，`--where` 展開位置、`--type` 型別剪枝、`--json` 結構化；`bin` 註冊 `coir`，零執行期相依）。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，18 個案例）。
-- **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版 `npm run cli -- <專案> deps <資產>`（或 `coir …`）。
+- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info`（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄；設計見 `docs/EDITING.md`）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**80 個案例**）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資產>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
 
-> 詳細功能與資料模型見 `README.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。
+> 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。
 

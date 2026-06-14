@@ -10,6 +10,7 @@ import {
 } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { decompressUuid } from '../core/uuid.js';
+import { componentName } from '../core/selector.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
 
@@ -511,13 +512,9 @@ function fallbackCopy(s, done) {
 }
 
 // ---- usage popup: where/how an asset is used ("被依賴" sites) -------------
-function compName(raw) {
-  if (!raw) return '';
-  if (raw.startsWith('cc.')) return raw.slice(3);
-  if (raw.startsWith('sp.')) return raw.slice(3);
-  if (raw.length === 22 || raw.length === 23) { const a = scan.assets.get(decompressUuid(raw)); if (a) return base(a.path); }
-  return raw;
-}
+// Canonical component name (cc.Sprite / ResSprite) — same as the CLI --where and
+// the edit selector, so a usage line reads back as a paste-able selector.
+const compName = (raw) => componentName(scan, raw);
 const COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const CHECK_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 let usageText = ''; // plain-text of the current usage popup, for its copy button
@@ -546,22 +543,23 @@ function showUsage() {
   const seen = new Set(); const rows = []; const plain = [];
   for (const l of locs) {
     const npRaw = l.nodePath || t('usage.root');
-    const np = esc(npRaw);
-    let tail, tailRaw;
+    const comp = compName(l.component);
+    let headRaw, tail = '', tailRaw = '';
     if (l.property && l.property.startsWith('click')) { // cc.Button ClickEvent — show a badge
       const method = l.property.replace(/^click → /, '').replace(/\(\)$/, '');
+      headRaw = l.nodePath && comp ? `${npRaw}:${comp}` : npRaw;
       tail = `<span class="up-click">▶ ${esc(method)}</span>`; tailRaw = `▶ ${method}`;
     } else {
-      // when there's no property the ref IS the component itself (its name == the
-      // selected asset, redundant) — just show the node path.
-      const compProp = l.property ? (l.component ? `${compName(l.component)}.${l.property}` : l.property) : '';
-      const parts = [compProp, l.subName ? `🖼 ${l.subName}` : ''].filter(Boolean);
-      tail = parts.map(esc).join('  ·  '); tailRaw = parts.join('  ·  ');
+      // nodePath:Comp.prop — a paste-able edit selector; the frame stays as a tail.
+      headRaw = l.nodePath && comp ? `${npRaw}:${comp}${l.property ? `.${l.property}` : ''}`
+        : (comp && l.property ? `${npRaw}  ${comp}.${l.property}` : npRaw);
+      if (l.subName) { tail = esc(`🖼 ${l.subName}`); tailRaw = `🖼 ${l.subName}`; }
     }
-    const key = `${np}|${tail}`;
+    const head = esc(headRaw);
+    const key = `${headRaw}|${tailRaw}`;
     if (seen.has(key)) continue; seen.add(key);
-    rows.push(`<div class="up-site">${np}${tail ? `  ·  ${tail}` : ''}</div>`);
-    plain.push(`${npRaw}${tailRaw ? `  ·  ${tailRaw}` : ''}`);
+    rows.push(`<div class="up-site">${head}${tail ? `  ·  ${tail}` : ''}</div>`);
+    plain.push(`${headRaw}${tailRaw ? `  ·  ${tailRaw}` : ''}`);
   }
   usageText = plain.join('\n'); // just the usage sites, no header line
   const headHtml = t('usage.header', { file: `<b>${esc(base(fromA.path))}</b>`, n: rows.length });

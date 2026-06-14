@@ -20,14 +20,25 @@ npm run scan -- <projectDir> [center]   # full headless report (alias for node t
 node test/node-run.js <projectDir> [centerUuidOrPath]
 
 # Headless dependency query (src/cli.js) — single-asset, parse-friendly:
-npm run cli -- <projectDir> deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [--json] [--limit N]
-npm run cli -- <projectDir> uses    <asset>   # = deps --in (who references this asset)
-npm run cli -- <projectDir> closure <asset> [--type T] [--list] [--json]   # bundle closure
-npm run cli -- <projectDir> find    <query> [--type T]   # resolve name → candidates
-npm run cli -- <projectDir> info    <asset> [--json]   # dump one asset's record (type/uuid/ext/importer/size/degrees/sub-assets/userData)
+npm run cli -- -C <projectDir> deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [-o json] [--limit N]
+npm run cli -- -C <projectDir> uses    <asset>   # = deps --in (who references this asset)
+npm run cli -- -C <projectDir> closure <asset> [--type T] [--list] [-o json]   # bundle closure
+npm run cli -- -C <projectDir> find    <query> [--type T]   # resolve name → candidates
+npm run cli -- -C <projectDir> info    <asset> [-o json]   # dump one asset's record (type/uuid/ext/importer/size/degrees/sub-assets/userData)
+
+# Headless in-place EDIT of an existing prefab/scene (src/editCli.js + src/node/editPrefab.js) — see docs/EDITING.md:
+npm run cli -- -C <projectDir> edit <file> get <sel> [-o json]                # read the value/node/component (-o json round-trips into set --json)
+npm run cli -- -C <projectDir> edit <file> swap-uuid <oldAsset> <newAsset>   # repoint a reference (text patch)
+npm run cli -- -C <projectDir> edit <file> set <sel:Type.prop> <value-flag>  # sel = nodePath:Comp.prop ; --str/--int/--color/--vec3/--uuid/--json '<obj>'/…
+npm run cli -- -C <projectDir> edit <file> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|add-component|rm-component …
+npm run cli -- -C <projectDir> edit --all swap-uuid <oldAsset> <newAsset>    # project-wide repoint (prefab/scene only)
+# entry-point flags: -h/--help, -v/--version, and -C <projectDir> (git-style, an alternative to the leading positional
+# so you can write a verb first: `coir find Coin -C ./proj`). The bin is `coir` (package.json); USAGE prints examples + exit codes.
 ```
 
-`src/cli.js` answers "what does X depend on / who depends on X" for one asset (`info` instead dumps that asset's own record — type/uuid/ext/importer/size, in/out degrees, sub-assets, and the raw meta `userData`; the headless analogue of an editor "get asset info"). `<asset>` resolves by full path, basename, uuid, or `uuid@sub`; an ambiguous basename prints candidates and exits 2. Data goes to **stdout** (`--json` for structured), so it is safe to pipe/parse. `--where` expands each edge to its usage sites (`edge.locations`: nodePath · component.property · frame); custom-script components (a compressed `__type__`) are decompressed back to the script path. Meta-derived edges (atlas→texture, font→texture, the Spine triple) and `extends` edges have no `locations`. `--type T[,T2]` (mirrors the browser's global type-filter bar) keeps only the chosen asset types: on the `deps`/`uses` **tree** it prunes to branches that *reach* one of those types — matching nodes **plus the intermediate hops leading to them** stay, dead branches drop, the queried root is always kept (build via `buildEdgeTree` → `pruneByType` → `renderTreeText`, leaving unfiltered output byte-identical); on `closure`/`find`/`--json` it just filters the flat list.
+`src/cli.js` answers "what does X depend on / who depends on X" for one asset (`info` instead dumps that asset's own record — type/uuid/ext/importer/size, in/out degrees, sub-assets, and the raw meta `userData`; the headless analogue of an editor "get asset info"). `<asset>` resolves by full path, basename, uuid, or `uuid@sub`; an ambiguous basename prints candidates and exits 2. Data goes to **stdout** (`-o json` for structured output; text is the default), so it is safe to pipe/parse. `--where` prints each usage site as a **paste-able selector** (`edge.locations` → `nodePath:Comp.prop`, the same grammar `edit` takes — see `src/core/selector.js`, shared with the browser usage popup); custom-script components are shown by class name (a compressed `__type__` decompressed). Meta-derived edges have no nodePath, so they show a non-selector form. Meta-derived edges (atlas→texture, font→texture, the Spine triple) and `extends` edges have no `locations`. `--type T[,T2]` (mirrors the browser's global type-filter bar) keeps only the chosen asset types: on the `deps`/`uses` **tree** it prunes to branches that *reach* one of those types — matching nodes **plus the intermediate hops leading to them** stay, dead branches drop, the queried root is always kept (build via `buildEdgeTree` → `pruneByType` → `renderTreeText`, leaving unfiltered output byte-identical); on `closure`/`find`/`-o json` it just filters the flat list.
+
+`coir edit` is a separate, headless **in-place editor** for existing prefab/scene files (`src/editCli.js` = CLI layer, `src/node/editPrefab.js` = DOM-free write engine; `src/cliShared.js` holds the resolution/location helpers shared with the query side). It never generates a file from scratch. Targets use the same selector grammar the query side displays — `nodePath:Comp.prop`, `[i]` for same-name/same-type/array disambiguation, `#N` absolute index — built from `src/core/selector.js` (the one canonical `componentName`/`locSelector`, also used by `--where` and the browser usage popup). `swap-uuid` (incl. `--all`, project-wide) is a minimal-diff text patch; everything else is parse → mutate the JSON array → re-serialize, with **real-delete + global `__id__` compaction** (no soft-delete cruft) and **template-by-example** for adds (clone a same-file skeleton → version-correct without branches). Nested prefab instances are detected and refused (edit them in their source prefab). Full design in **[docs/EDITING.md](docs/EDITING.md)**; the underlying format contract (what coir depends on / ignores) in **[docs/SERIALIZATION.md](docs/SERIALIZATION.md)**.
 
 The app **must** be served over a secure context (`http://localhost` or https) — the File System Access API is unavailable on `file://` and outside Chromium.
 

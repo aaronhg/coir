@@ -15,6 +15,7 @@
 ![被分析的 Cocos Creator 專案（編輯器畫面）](docs/cocos-project.png)
 
 > 📖 開發歷程、技術決策與踩過的坑見 [DEVELOPMENT.md](DEVELOPMENT.md)。
+> 🧬 Cocos scene/prefab 序列化契約(coir 依賴/無視哪些欄位)見 [docs/SERIALIZATION.md](docs/SERIALIZATION.md);headless CLI 編輯既有 prefab/scene 的設計見 [docs/EDITING.md](docs/EDITING.md)。
 
 ## 執行需求
 
@@ -186,16 +187,30 @@ node test/node-run.js <專案目錄> [中心uuid或路徑]
 ```
 輸出資產/邊統計、邊種類分佈、未使用、孤兒參照、圖集利用率、體積與依賴閉包。
 
-**單一資產的依賴查詢 CLI**（`src/cli.js`，輸出到 stdout、可 pipe/解析；註冊為 `coir`）：
+**CLI**（`src/cli.js`，輸出到 stdout、可 pipe/解析；`bin` 註冊為 `coir`）：在 Cocos 專案目錄內直接跑，或用 `-C <專案目錄>` 指向別處（git 風格，預設當前目錄）。`coir --help` 印含範例與 exit code 的說明。
+
+**依賴查詢（唯讀）：**
 
 ```bash
-npm run cli -- <專案目錄> deps    <資產> [--in|--out] [--depth N] [--type T[,T2]] [--where] [--json] [--limit N]
-npm run cli -- <專案目錄> uses    <資產>            # = deps --in（誰參照它）
-npm run cli -- <專案目錄> closure <資產> [--type T] [--list] [--json]   # 打包閉包
-npm run cli -- <專案目錄> find    <查詢> [--type T]                     # 依名稱找候選
+coir deps    <資產> [--in|--out] [--depth N] [--type T[,T2]] [--where] [-o json] [--limit N]
+coir uses    <資產>            # = deps --in（誰參照它）
+coir closure <資產> [--type T] [--list] [-o json]   # 打包閉包
+coir find    <查詢> [--type T]                       # 依名稱找候選
+coir info    <資產>                                  # 印單一資產的 record（型別/uuid/度數/子資產/userData）
 ```
 
-`<資產>` 可用完整路徑／basename／uuid／`uuid@sub` 指定（撞名印候選並 `exit 2`）。`--where` 展開每條邊的使用位置（節點路徑 · 元件.屬性 · frame）。`--type` 只保留指定型別：在 `deps`/`uses` **樹**上會**保留通往該型別的中間路徑**（同瀏覽器拓撲的篩選），在 `closure`/`find`/`--json` 上則是過濾平面清單。
+`<資產>` 可用完整路徑／basename／uuid／`uuid@sub`（撞名印候選並 `exit 2`）。`--where` 把每條邊的使用位置印成**可直接貼回 `edit` 的 selector**（`nodePath:Comp.prop`，與瀏覽器「用在哪」彈窗共用一套）。`--type` 只保留指定型別：`deps`/`uses` 樹保留通往該型別的中間路徑，`closure`/`find` 過濾平面清單。輸出預設 text，`-o json` 給機器讀。
+
+**就地編輯既有 prefab/scene**（會**寫檔**——先 `--dry-run` 預覽、`--backup` 留快照；不會憑空產生檔案）：
+
+```bash
+coir edit <檔> get <sel>                      # 讀某值／節點／元件（-o json 可餵回 set --json）
+coir edit <檔> set <sel> <值旗標>             # 改屬性（--str/--int/--color/--vec3/--uuid/--json '<物件>' …）
+coir edit <檔> swap-uuid <舊資產> <新資產>    # 重指引用（可 --all 全專案）
+coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|add-component|rm-component …
+```
+
+selector 同上（`nodePath:Type.prop`，`[i]` 消歧、`#N` 絕對索引）；`swap-uuid` 是最小 diff 文字補丁,其餘 parse-rewrite；**真刪會做索引壓縮**（不留軟刪垃圾）、新增走 **template-by-example**（複製同檔骨架→跨版本正確）；scene 裡的巢狀 prefab 實例會被偵測擋下。完整設計見 **[docs/EDITING.md](docs/EDITING.md)**。
 
 外掛在 CLI 也生效：`<coir 根>/coir.plugins.mjs`（全域）與 `<專案>/coir.plugins.mjs`（該專案）會自動載入，或用 `--plugin <檔>` 指定（見「外掛」）。
 
