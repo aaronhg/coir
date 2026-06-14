@@ -197,6 +197,8 @@ coir uses    <資產>            # = deps --in（誰參照它）
 coir closure <資產> [--type T] [--list] [-o json]   # 打包閉包
 coir find    <查詢> [--type T]                       # 依名稱找候選
 coir info    <資產>                                  # 印單一資產的 record（型別/uuid/度數/子資產/userData）
+coir analyze [section] [-o json]                     # 專案級稽核（= node-run.js 報告的 CLI 版）
+#   section = stats（總覽/邊種類/健康）| unused（未使用）| orphans [--dropped] | atlas（圖集利用率）| size [--type T][--list]；無 section = 全部
 ```
 
 `<資產>` 可用完整路徑／basename／uuid／`uuid@sub`（撞名印候選並 `exit 2`）。`--where` 把每條邊的使用位置印成**可直接貼回 `edit` 的 selector**（`nodePath:Comp.prop`，與瀏覽器「用在哪」彈窗共用一套）。`--type` 只保留指定型別：`deps`/`uses` 樹保留通往該型別的中間路徑，`closure`/`find` 過濾平面清單。輸出預設 text，`-o json` 給機器讀。

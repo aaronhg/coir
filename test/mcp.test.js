@@ -121,6 +121,20 @@ test('mcp: structural edits route through the seam (rename, then the new selecto
   assert.ok(sub.nodes[0].components.some((c) => c.type === 'cc.Widget')); // component was added
 });
 
+test('mcp: analyze tool returns audit sections (stats default + a named section)', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'analyze', {}),                       // default section = stats
+    call(2, 'analyze', { section: 'size' }),
+    call(3, 'analyze', { section: 'all' }),
+  ]);
+  const stats = dataOf(r[1]);
+  assert.equal(stats.metaErrors, 0);
+  assert.ok(stats.assets >= 2 && stats.edgeKinds);
+  assert.ok(dataOf(r[2]).byType.prefab); // size section
+  assert.deepEqual(Object.keys(dataOf(r[3])).sort(), ['atlas', 'orphans', 'size', 'stats', 'unused']);
+});
+
 test('mcp: a bad selector comes back as an isError tool result, not a crash', async () => {
   const dir = await mk();
   const r = await rpc(dir, [

@@ -166,10 +166,13 @@ export function resolveSelector(arr, sel, compName) {
   }
   if (!typeName) return { error: `node "${nodeSel}" has no component matching "${compSel}"`, candidates: [...new Set(named.map((c) => c.name))] };
 
-  const mt = /^\[(\d+)\]/.exec(rest);
-  const typeIdx = mt ? Number(mt[1]) : 0;
-  if (mt) rest = rest.slice(mt[0].length);
   const sameType = named.filter((c) => c.name === typeName).map((c) => c.ci);
+  const mt = /^\[(\d+)\]/.exec(rest);
+  if (mt) rest = rest.slice(mt[0].length);
+  // Ambiguity is refused, not silently resolved — same rule as same-name nodes
+  // above: 2+ components of one type on a node require an explicit [i].
+  else if (sameType.length > 1) return { error: `"${nodeSel}" has ${sameType.length} ${typeName} components — add [i]` };
+  const typeIdx = mt ? Number(mt[1]) : 0;
   if (typeIdx >= sameType.length) return { error: `${typeName}[${typeIdx}] out of range (${sameType.length})` };
   const compIndex = sameType[typeIdx];
 

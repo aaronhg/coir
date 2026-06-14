@@ -133,12 +133,15 @@ export function closureReport(scan, rootUuid) {
 export function summary(scan) {
   const byType = {};
   for (const a of scan.assets.values()) byType[a.type] = (byType[a.type] || 0) + 1;
+  const edgeKinds = {};
+  for (const e of scan.edges) edgeKinds[e.kind] = (edgeKinds[e.kind] || 0) + 1;
   return {
     assets: scan.assets.size,
     edges: scan.edges.length,
     orphanRefs: scan.orphanRefs.length,
     metaErrors: scan.metaErrors.length,
     byType,
+    edgeKinds,
   };
 }
 

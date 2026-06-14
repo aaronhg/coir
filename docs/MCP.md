@@ -26,7 +26,7 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 ```
 （已 `npm link`/全域安裝可直接 `coir`;在專案目錄內可省略 `-C`。手刻零依賴,不需 `@modelcontextprotocol/sdk`。）
 
-## 工具面(read 8 + write 12)
+## 工具面(read 9 + write 12)
 
 工具名不帶 server 前綴(server 名 `coir` 已 namespace —— host 裡顯示為 `coir__<工具>`,如 `coir__tree`)。讀工具直接是 `find`/`deps`/…(host 可全放行),寫工具一律 `edit_*`(逐一把關)。
 
@@ -38,6 +38,7 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 | `deps(asset, direction?, type?, limit?)` | 依賴(誰依賴它 / 它依賴誰)+ 使用位置 selector |
 | `closure(asset, type?, list?)` | 打包閉包(blast radius) |
 | `info(asset)` | 單一資產 record |
+| `analyze(section?, type?, dropped?, list?)` | 專案級稽核:`stats`/`unused`/`orphans`/`atlas`/`size`/`all`(預設 stats)|
 | **`tree(file, with?, under?, depth?)`** | 結構發現:節點階層 + 每個元件的現成 `nodePath:Type` selector |
 | `get(file, selector)` | 讀某 selector 的值/節點/元件(可餵回 `edit_set`) |
 | `status` / `rescan` | 伺服器狀態 / 強制重掃 |

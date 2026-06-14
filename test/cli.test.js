@@ -45,6 +45,8 @@ const U = {
   aInst: '70707070-7070-7070-7070-707070707070',
   spriteConfig: 'a1a1a1a1-b2b2-c3c3-d4d4-e5e5e5e5e5e5',
   treeDup: '12121212-1212-1212-1212-121212121212',
+  xv35: '35353535-3535-3535-3535-353535353535',
+  xv38: '38383838-3838-3838-3838-383838383838',
 };
 const SCRIPT_TYPE = compressUuid(U.script); // compressed __type__ stored in the prefab
 const CFG_TYPE = compressUuid(U.spriteConfig); // a custom serializable's compressed __type__
@@ -290,6 +292,25 @@ before(async () => {
     { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true },
   ]);
   await write('TreeDup.prefab.meta', { importer: 'prefab', uuid: U.treeDup });
+
+  // CROSS-VERSION fixtures, modelled on real NewProject_352 (3.5.2) and
+  // NewProject_386 (3.8.6) prefabs: a 3.5.2 cc.Node carries `_level` (no
+  // `_mobility`/`__editorExtras__`); a 3.8.x cc.Node carries `_mobility` +
+  // `__editorExtras__` (no `_level`). add-node clones the same-file skeleton, so
+  // the SAME code must reproduce each version's field set — no version branches.
+  const vec3 = (x, y, z) => ({ __type__: 'cc.Vec3', x, y, z });
+  await write('XV35.prefab', [
+    { __type__: 'cc.Prefab', _name: 'XV35', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _objFlags: 0, _parent: null, _children: [], _active: true, _level: 0, _components: [], _prefab: { __id__: 2 }, _lpos: vec3(0, 0, 0), _lrot: { __type__: 'cc.Quat', x: 0, y: 0, z: 0, w: 1 }, _lscale: vec3(1, 1, 1), _layer: 33554432, _euler: vec3(0, 0, 0), _id: 'xv35rootxxxxxxxxxxxxxx' },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'xv35fxxxxxxxxxxxxxxxxx', instance: null },
+  ]);
+  await write('XV35.prefab.meta', { importer: 'prefab', uuid: U.xv35 });
+  await write('XV38.prefab', [
+    { __type__: 'cc.Prefab', _name: 'XV38', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _objFlags: 0, __editorExtras__: {}, _parent: null, _children: [], _active: true, _components: [], _prefab: { __id__: 2 }, _lpos: vec3(0, 0, 0), _lrot: { __type__: 'cc.Quat', x: 0, y: 0, z: 0, w: 1 }, _lscale: vec3(1, 1, 1), _mobility: 0, _layer: 33554432, _euler: vec3(0, 0, 0), _id: 'xv38rootxxxxxxxxxxxxxx' },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'xv38fxxxxxxxxxxxxxxxxx', instance: null },
+  ]);
+  await write('XV38.prefab.meta', { importer: 'prefab', uuid: U.xv38 });
 });
 
 after(async () => { if (projectDir) await fs.rm(projectDir, { recursive: true, force: true }); });
@@ -747,6 +768,14 @@ test('edit set: errors on an unknown component (exit 2)', () => {
   assert.match(r.stderr, /no component matching/);
 });
 
+test('edit: an ambiguous same-type component without [i] is refused, not silently [0]', () => {
+  // TreeDup's Root has two cc.Sprite — like same-name nodes, this must error (not pick #0)
+  const r = cli('edit', 'TreeDup.prefab', 'get', 'Root:cc.Sprite');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /2 cc\.Sprite components — add \[i\]/);
+  assert.equal(cli('edit', 'TreeDup.prefab', 'get', 'Root:cc.Sprite[1]', '-o', 'json').status, 0); // explicit [i] still resolves
+});
+
 // rename last: it changes the path Title resolves under
 test('edit rename: changes _name; the node resolves under the new path', () => {
   assert.equal(cli('edit', 'EditNode.prefab', 'rename', 'Root/Title', 'Heading').status, 0);
@@ -957,6 +986,80 @@ test('edit tree: flags a nested prefab-instance root (edit it in its source pref
   assert.equal(binst.instance, true);
   assert.equal(d.nodes.find((n) => n.name === 'Root').instance, false);
   assert.match(cli('edit', 'AInst.prefab', 'tree').stdout, /BInst.*\[prefab instance\]/);
+});
+
+// ---- analyze: project-wide audit sections ----------------------------------
+test('analyze stats: counts + edge-kinds + health (text + json)', () => {
+  assert.match(cli('analyze', 'stats').stdout, /stats: \d+ assets.*metaErrors=0\s+✓ healthy/s);
+  const d = json(cli('analyze', 'stats', '-o', 'json'));
+  assert.ok(d.assets > 0);
+  assert.equal(d.metaErrors, 0);
+  assert.ok(d.byType.image >= 1);
+  assert.ok(d.edgeKinds && typeof d.edgeKinds === 'object'); // edge-kind histogram is part of stats
+});
+
+test('analyze unused: lists 0-referrer non-resources assets (incl. unused.png); --type filters', () => {
+  const d = json(cli('analyze', 'unused', '-o', 'json'));
+  assert.ok(d.total >= 1);
+  assert.ok(d.items.some((i) => /unused\.png/.test(i.path)));
+  assert.ok(d.byType && typeof d.totalSize === 'number');
+  const imgs = json(cli('analyze', 'unused', '--type', 'image', '-o', 'json'));
+  assert.ok(imgs.items.length && imgs.items.every((i) => i.type === 'image'));
+});
+
+test('analyze orphans: dangling refs; --dropped adds the source-less-meta audit', () => {
+  const d = json(cli('analyze', 'orphans', '-o', 'json'));
+  assert.ok(d.total >= 1); // the prefab points at U.missing / U.ghost
+  assert.equal(d.dropped, undefined); // not present without the flag
+  const dd = json(cli('analyze', 'orphans', '--dropped', '-o', 'json'));
+  assert.ok(dd.dropped && Array.isArray(dd.dropped.items));
+});
+
+test('analyze atlas: per-atlas frame utilization (the .plist)', () => {
+  const a = json(cli('analyze', 'atlas', '-o', 'json')).items.find((i) => /ui\.plist/.test(i.path));
+  assert.ok(a, 'ui.plist not in atlas report');
+  assert.equal(a.total, 1); // one sprite-frame
+  assert.equal(a.used, 1);  // referenced as @f1234
+});
+
+test('analyze size: per-type totals; --list adds the largest files', () => {
+  const d = json(cli('analyze', 'size', '-o', 'json'));
+  assert.ok(d.byType.image && d.totalSize >= 0);
+  assert.equal(d.items, undefined); // no item list without --list
+  assert.ok(Array.isArray(json(cli('analyze', 'size', '--list', '-o', 'json')).items));
+});
+
+test('analyze (no section) = full report of every section; a bogus section exits 1', () => {
+  const d = json(cli('analyze', '-o', 'json'));
+  assert.deepEqual(Object.keys(d).sort(), ['atlas', 'orphans', 'size', 'stats', 'unused']);
+  const r = cli('analyze', 'bogus');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /unknown analyze section/);
+});
+
+// ---- cross-version (3.5.2 vs 3.8.x): template-by-example, one code path ------
+test('add-node clones the same-file skeleton → 3.5.2 fields on a 3.5.2 prefab', () => {
+  assert.equal(cli('edit', 'XV35.prefab', 'add-node', 'Root', 'New35').status, 0);
+  const n = nodeNamed(parseAsset('XV35.prefab'), 'New35');
+  assert.ok('_level' in n, '3.5.2 node must carry _level');
+  assert.ok(!('_mobility' in n) && !('__editorExtras__' in n), '3.8.x-only fields must be absent');
+  assert.ok(n._prefab && n._prefab.__id__ != null, 'a PrefabInfo is attached');
+  assert.deepEqual(n._lpos, { __type__: 'cc.Vec3', x: 0, y: 0, z: 0 }); // identity fields reset
+});
+
+test('add-node clones the same-file skeleton → 3.8.x fields on a 3.8.x prefab', () => {
+  assert.equal(cli('edit', 'XV38.prefab', 'add-node', 'Root', 'New38').status, 0);
+  const n = nodeNamed(parseAsset('XV38.prefab'), 'New38');
+  assert.ok('_mobility' in n && '__editorExtras__' in n, '3.8.x node must carry _mobility + __editorExtras__');
+  assert.ok(!('_level' in n), '3.5.2-only field must be absent');
+  assert.ok(n._prefab && n._prefab.__id__ != null, 'a PrefabInfo is attached');
+});
+
+test('both versions stay ref-valid after add-node + add-component (refIntegrity)', () => {
+  for (const f of ['XV35.prefab', 'XV38.prefab']) {
+    cli('edit', f, 'add-component', 'Root', 'cc.UITransform');
+    assert.deepEqual(refIntegrity(parseAsset(f)), []); // every {__id__} in-range → has a __type__
+  }
 });
 
 // ---- entry-point ergonomics: --help / --version / -C ----------------------

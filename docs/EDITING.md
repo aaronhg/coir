@@ -46,7 +46,7 @@
 - **型別 `.` 與屬性 `.` 用白名單消歧**:`cc.Label` 自帶命名空間點,會跟屬性點相撞。解析時拿 scan 已知「該節點實際掛了哪些元件 `__type__`」當白名單,對 `:` 之後做**最長比對**(`cc.Label` 命中即型別,剩下 `_string` 即屬性)。自訂腳本以解壓 `__type__` 後的類名進白名單。
 - **完整路徑優先**:先試 nodePath 字面完全匹配(節點若真叫 `Slot[0]` 能選到),再退回剝尾端 `[i]`。
 - 解析不唯一 → **exit 2** 列候選。
-- ⚠️ 已知不一致:節點 `[i]` 省略且歧義會**報錯**,元件 `[i]` 省略目前**取第 0 個**(待統一,見 §12)。
+- **歧義一律報錯(不靜默猜)**:`[i]` 省略且有多個匹配時——同名節點 *或* 同型多元件——都 **exit 2** 要求補 `[i]`(節點與元件一致)。單一匹配則直接命中,無需 `[i]`。
 
 ## 4. 值編碼(顯式旗標)
 
@@ -229,9 +229,9 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 
 ## 10. 測試
 
-`test/cli.test.js`(node:test,subprocess 對自建 temp fixture,87 個案例):涵蓋每個 op、selector 各形式(`[i]`/`#N`/陣列/白名單)、值旗標各型別、`--json` 自訂型別、`tree` 結構發現(消歧 path/selector 的 round-trip、`--with`/`--under`/`--depth`、實例標記)、真刪+索引壓縮(`refIntegrity` 等同 `validate_scene`)、`ownedClosure`(ClickEvent 一併移除)、實例護欄、`--all`、以及一輪 code-review 抓到的邊界(非法 hex、型別不符、`--uuid` 缺值、`rm-component` 防呆、空名 rename、`swap old===new` no-op…)。`test/mcp.test.js` 另外真的 spawn `coir mcp` 講 JSON-RPC 驗證 MCP 工具(read、`set` dry-run vs 實寫、結構編輯、錯誤回 `isError`)。
+`test/cli.test.js`(node:test,subprocess 對自建 temp fixture,97 個案例):涵蓋每個 op、selector 各形式(`[i]`/`#N`/陣列/白名單、同型多元件無 `[i]` 報錯)、值旗標各型別、`--json` 自訂型別、`tree` 結構發現(消歧 path/selector 的 round-trip、`--with`/`--under`/`--depth`、實例標記)、`analyze` 各 section、**跨版本雙 fixture**(3.5.2/3.8.6 風格各一,鎖 template-by-example)、真刪+索引壓縮(`refIntegrity` 等同 `validate_scene`)、`ownedClosure`(ClickEvent 一併移除)、實例護欄、`--all`、以及一輪 code-review 抓到的邊界(非法 hex、型別不符、`--uuid` 缺值、`rm-component` 防呆、空名 rename、`swap old===new` no-op…)。`test/mcp.test.js` 另外真的 spawn `coir mcp` 講 JSON-RPC 驗證 MCP 工具(read、`set` dry-run vs 實寫、結構編輯、錯誤回 `isError`)。
 
-跨版本(3.5.2 vs 3.8.x)目前靠 template-by-example **設計上**版本無關;尚未加專屬的雙版本 fixture(列入待辦)。
+**跨版本鎖定**:有專屬的雙版本 fixture(`XV35.prefab` 帶 `_level`、`XV38.prefab` 帶 `_mobility`+`__editorExtras__`,照真實 3.5.2 / 3.8.6 專案的格式建)—— 測 `add-node` 用**同一條程式路徑**在兩版各自產生版本正確的欄位集(template-by-example,零版本分支),且兩版加完都 `refIntegrity` 通過。
 
 ## 11. 已做 / 分期
 
@@ -248,9 +248,7 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 
 ## 12. 待議 / 未來
 
-- **元件 `[i]` 預設統一**:節點 `[i]` 省略且歧義會報錯,元件卻靜默取第 0 個;建議統一成「歧義就報錯」。
 - **陣列結構編輯**(append/insert/remove/reorder 元素)—— Tier 1 `set` 只改既有值;這屬 Tier 3 類,需 `add-array-item`/`rm-array-item`。
-- 跨版本雙 fixture 測試(3.5.2 / 3.8.x 風格各一)。
 - 瀏覽器端編輯(File System Access 可寫)—— Node 層 API 設計成可被 browser provider 復用。
 - prefab 實例 `propertyOverrides` 覆寫編輯(刻意排除)。
 - `set --all` 的「依型別跨檔比對」addressing —— `tree --with` 已補上「發現」這半(`find` → `tree --with -o json` → `set` 就能跑),剩一站式 `set --all :cc.Label._x` 還沒做;`--all` 是否納入 `.mtl`/`.anim`(目前定案:不納)。

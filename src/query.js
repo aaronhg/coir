@@ -4,7 +4,7 @@
 // commands and the MCP server both call these, so the query data model is one
 // place. (The CLI's text rendering stays in cli.js; this is the json substance.)
 import { mainUuid } from './core/uuid.js';
-import { closureReport } from './core/analyze.js';
+import { closureReport, summary, unusedReport, orphanRefReport, droppedMetaReport, atlasUtilizationReport, sizeReport } from './core/analyze.js';
 import { base, edgeSort, orphansOf, locJson } from './shared.js';
 
 /**
@@ -89,3 +89,60 @@ export function closureData(scan, uuid, { types = new Set(), list = false } = {}
   if (list) o.items = items;
   return o;
 }
+
+// ---- project-wide audit (`analyze <section>`) ------------------------------
+// The structured form of each node-run.js report section, over the shared
+// analyze.js builders. cli.js renders these as text; the MCP `analyze` tool
+// returns them verbatim. One logic, two front-ends.
+export const ANALYZE_SECTIONS = ['stats', 'unused', 'orphans', 'atlas', 'size'];
+
+const sizeByType = (items) => { const m = {}; for (const i of items) { const t = (m[i.type] ||= { count: 0, size: 0 }); t.count++; t.size += i.size || 0; } return m; };
+
+/**
+ * One audit section. `limit` caps the item list (the `total` reports the full
+ * count); `types` filters unused/size; `dropped` adds the source-less-meta audit
+ * to orphans; `list` adds the largest-files list to size.
+ * @param {any} scan @param {string} section
+ * @param {{types?:Set<string>, limit?:number, dropped?:boolean, list?:boolean}} [opts]
+ */
+export function analyzeData(scan, section, { types = new Set(), limit = Infinity, dropped = false, list = false } = {}) {
+  switch (section) {
+    case 'stats': return summary(scan); // assets/edges/orphanRefs/metaErrors/byType/edgeKinds
+    case 'unused': {
+      const r = unusedReport(scan);
+      const items = types.size ? r.items.filter((i) => types.has(i.type)) : r.items;
+      const totalSize = types.size ? items.reduce((s, i) => s + (i.size || 0), 0) : r.totalSize;
+      const byType = types.size ? countByType(items) : r.byType;
+      return { items: items.slice(0, limit), total: items.length, totalSize, byType };
+    }
+    case 'orphans': {
+      const r = orphanRefReport(scan);
+      const o = { items: r.items.slice(0, limit), total: r.total, missingSourceCount: r.missingSourceCount };
+      if (dropped) o.dropped = droppedMetaReport(scan);
+      return o;
+    }
+    case 'atlas': {
+      const r = atlasUtilizationReport(scan);
+      return { items: r.items.slice(0, limit), total: r.items.length };
+    }
+    case 'size': {
+      const r = sizeReport(scan);
+      const items = types.size ? r.items.filter((i) => types.has(i.type)) : r.items;
+      const byType = types.size ? sizeByType(items) : r.byType;
+      const totalSize = types.size ? items.reduce((s, i) => s + (i.size || 0), 0) : r.totalSize;
+      const o = { byType, totalSize, total: items.length };
+      if (list) o.items = items.slice(0, limit);
+      return o;
+    }
+    default: return null; // unknown section
+  }
+}
+
+/** All sections at once (the no-section `analyze` / full report). */
+export function analyzeAll(scan, opts) {
+  const o = {};
+  for (const s of ANALYZE_SECTIONS) o[s] = analyzeData(scan, s, opts);
+  return o;
+}
+
+function countByType(items) { const m = {}; for (const i of items) m[i.type] = (m[i.type] || 0) + 1; return m; }

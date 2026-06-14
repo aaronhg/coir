@@ -1,12 +1,12 @@
 // The MCP tool surface for coir — a thin TYPED layer over the same shared query
 // (query) + edit (edit/ops) logic the CLI runs, so behaviour is identical.
-// Read tools are named * (a host may auto-allow them); write tools are
+// Read tools are unprefixed (a host may auto-allow them); write tools are
 // edit_* (gate each one individually — that per-tool boundary is the point
 // of the MCP exit). Each tool's `run(ctx, args)` returns { data } on success or
 // { error, candidates? } on failure; ctx = the live server state (scan/projectDir
 // /markDirty/forceRescan). Writes commit here (respecting dryRun/backup/force).
 import { edgeMaps, resolveTarget } from '../shared.js';
-import { depsData, infoData, findData, closureData } from '../query.js';
+import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../query.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
@@ -81,6 +81,23 @@ export const TOOLS = [
     run: (ctx, a) => {
       const u = resolveUuid(ctx.scan, a.asset); if (u.error) return u;
       return { data: infoData(ctx.scan.assets.get(u.uuid)) };
+    },
+  },
+  {
+    name: 'analyze',
+    description: 'Project-wide audit. section: stats (counts/edge-kinds/metaErrors health), unused (0-referrer non-resources assets), orphans (dangling refs; +dropped for source-less metas), atlas (per-atlas frame utilization), size (per-type totals), or all. Default stats.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: {
+        section: { type: 'string', enum: [...ANALYZE_SECTIONS, 'all'], description: 'Which report (default stats).' },
+        type: { type: 'string', description: 'Filter unused/size to one asset type.' },
+        limit: { type: 'number', description: 'Cap list items (default 30).' },
+        dropped: { type: 'boolean', description: 'orphans: also list dropped source-less metas.' },
+        list: { type: 'boolean', description: 'size: include the largest files.' },
+      } },
+    run: (ctx, a) => {
+      const section = a.section || 'stats';
+      const opts = { types: setOf(a.type), limit: a.limit ?? 30, dropped: !!a.dropped, list: !!a.list };
+      return { data: section === 'all' ? analyzeAll(ctx.scan, opts) : analyzeData(ctx.scan, section, opts) };
     },
   },
   {

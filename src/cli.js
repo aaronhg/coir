@@ -32,7 +32,7 @@ import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './shared.js';
-import { depsData, infoData } from './query.js';
+import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './query.js';
 import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -63,6 +63,9 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir closure <asset> [--type T] [--list] [-o json]
   coir find    <query> [--type T] [-o json] [--limit N]
   coir info    <asset> [-o json]
+  coir analyze [section] [-o json]   project-wide audit; section = stats|unused|orphans|atlas|size (none = all)
+                                     stats=counts/edge-kinds/health  unused=0-referrer assets  orphans [--dropped]
+                                     atlas=frame utilization  size [--type T] [--list]=per-type/largest totals
 
 Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup, --force overrides the concurrent-change guard):
   coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
@@ -121,10 +124,12 @@ const M = {
   listHint: '  (add --list to print each asset)',
   noMatch: (q) => `(no match for "${q}")`,
   findMore: (n) => `  … ${n} more (raise --limit)`,
+  unknownSection: (s, list) => `unknown analyze section "${s}" — use one of: ${list.join(' ')}  (or none for the full report)`,
+  moreItems: (n) => `   … ${n} more (--limit / -o json)`,
 };
 
 function parseArgs(argv) {
-  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false };
+  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
   const pos = []; // positionals, in order, from anywhere in argv
   for (let i = 0; i < argv.length; i++) {
@@ -143,6 +148,7 @@ function parseArgs(argv) {
     else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
     else if (a.startsWith('--output=')) flags.json = a.slice(9) === 'json';
     else if (a === '--list') flags.list = true;
+    else if (a === '--dropped') flags.dropped = true; // analyze orphans: also list dropped source-less metas
     else if (a === '--depth') flags.depth = parseInt(argv[++i], 10) || 1;
     else if (a.startsWith('--depth=')) flags.depth = parseInt(a.slice(8), 10) || 1;
     else if (a === '--limit') flags.limit = parseInt(argv[++i], 10) || Infinity;
@@ -347,6 +353,66 @@ function cmdInfo(scan, uuid, flags) {
   console.log(lines.join('\n'));
 }
 
+// ---- analyze: project-wide audit (the node-run.js report, as CLI sections) ---
+// `coir analyze [section]` — section ∈ stats/unused/orphans/atlas/size, or none
+// for the full report. Pure data comes from query.analyzeData (shared with the
+// MCP `analyze` tool); the text rendering below is CLI-only.
+const histo = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join('  ');
+function renderStats(d, lines) {
+  lines.push(`stats: ${d.assets} assets, ${d.edges} edges, orphanRefs=${d.orphanRefs}, metaErrors=${d.metaErrors}${d.metaErrors === 0 ? '   ✓ healthy' : '   ⚠'}`);
+  lines.push(`  by type:    ${histo(d.byType)}`);
+  lines.push(`  edge kinds: ${histo(d.edgeKinds)}`);
+}
+function renderUnused(d, lines) {
+  lines.push(`unused: ${d.total} assets, ${kb(d.totalSize)}  (non-resources, 0 referrers)`);
+  if (d.total) lines.push(`  ${histo(d.byType)}`);
+  for (const i of d.items) lines.push(`   ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}`);
+  if (d.total > d.items.length) lines.push(M.moreItems(d.total - d.items.length));
+}
+function renderOrphans(d, lines) {
+  lines.push(`orphans: ${d.total} dangling refs (${d.missingSourceCount} missing-source)`);
+  for (const i of d.items) lines.push(`   ${i.path ? `${i.path}  ${M.missingSrc}` : i.ref}  ← ${i.count} ref(s), e.g. ${i.referrers[0]}`);
+  if (d.total > d.items.length) lines.push(M.moreItems(d.total - d.items.length));
+  if (d.dropped) {
+    lines.push(`  dropped metas: ${d.dropped.total} (${d.dropped.referencedCount} still referenced)`);
+    for (const m of d.dropped.items) lines.push(`   ${m.referenced ? 'referenced' : 'orphan   '}  ${m.path}`);
+  }
+}
+function renderAtlas(d, lines) {
+  lines.push(`atlas: ${d.total} atlases/multi-frame`);
+  for (const i of d.items) {
+    const tag = !i.referenced ? '[unreferenced]' : i.wholeReferenced ? '[whole/dynamic]' : '';
+    lines.push(`   ${`${i.used}/${i.total}`.padStart(8)} used (${(i.ratio * 100).toFixed(0)}%) ${tag.padEnd(15)} ${i.path}`);
+  }
+  if (d.total > d.items.length) lines.push(M.moreItems(d.total - d.items.length));
+}
+function renderSize(d, lines) {
+  lines.push(`size: ${d.total} files, ${kb(d.totalSize)}`);
+  for (const [t, v] of Object.entries(d.byType).sort((a, b) => b[1].size - a[1].size)) lines.push(`   ${t.padEnd(8)} ${String(v.count).padStart(4)} files  ${kb(v.size).padStart(11)}`);
+  if (d.items) for (const i of d.items) lines.push(`     ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}`);
+  else lines.push(M.listHint);
+}
+const RENDER = { stats: renderStats, unused: renderUnused, orphans: renderOrphans, atlas: renderAtlas, size: renderSize };
+
+function cmdAnalyze(scan, section, flags) {
+  if (section && !ANALYZE_SECTIONS.includes(section)) { console.error(M.unknownSection(section, ANALYZE_SECTIONS)); process.exit(1); }
+  const limit = flags.limit === Infinity ? 30 : flags.limit;
+  const opts = { types: flags.types, limit, dropped: flags.dropped, list: flags.list };
+  if (!section) { // full report (all sections)
+    const all = analyzeAll(scan, opts);
+    if (flags.json) { console.log(JSON.stringify(all)); return; }
+    const lines = [];
+    for (const s of ANALYZE_SECTIONS) { RENDER[s](all[s], lines); lines.push(''); }
+    console.log(lines.join('\n').trimEnd());
+    return;
+  }
+  const d = analyzeData(scan, section, opts);
+  if (flags.json) { console.log(JSON.stringify(d)); return; }
+  const lines = [];
+  RENDER[section](d, lines);
+  console.log(lines.join('\n'));
+}
+
 async function main() {
   const { projectDir, command, target, pos, flags } = parseArgs(process.argv.slice(2));
   if (flags.help) { console.log(USAGE); process.exit(0); }
@@ -389,6 +455,7 @@ async function main() {
   }
 
   if (command === 'find') { cmdFind(scan, target, flags); return; }
+  if (command === 'analyze') { cmdAnalyze(scan, target, flags); return; } // project-wide; target = the section (or none)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
 
   if (!['deps', 'uses', 'closure', 'info'].includes(command)) {

@@ -25,6 +25,7 @@ npm run cli -- -C <projectDir> uses    <asset>   # = deps --in (who references t
 npm run cli -- -C <projectDir> closure <asset> [--type T] [--list] [-o json]   # bundle closure
 npm run cli -- -C <projectDir> find    <query> [--type T]   # resolve name → candidates
 npm run cli -- -C <projectDir> info    <asset> [-o json]   # dump one asset's record (type/uuid/ext/importer/size/degrees/sub-assets/userData)
+npm run cli -- -C <projectDir> analyze [section] [-o json]   # project-wide audit (= node-run.js report, as CLI sections): stats|unused|orphans [--dropped]|atlas|size [--type T][--list] (no section = all)
 
 # Headless in-place EDIT of an existing prefab/scene (src/editCli.js + src/edit/editPrefab.js) — see docs/EDITING.md:
 npm run cli -- -C <projectDir> edit <file> tree [--with <Type>] [--under <sel>] [--depth N]   # read-only: node tree + each node's components, every path/selector ready to paste (-o json for agents)
@@ -40,6 +41,8 @@ npm run cli -- -C <projectDir> mcp        # JSON-RPC/stdio MCP server (hand-roll
 # entry-point flags: -h/--help, -v/--version, and -C <projectDir> (git-style, an alternative to the leading positional
 # so you can write a verb first: `coir find Coin -C ./proj`). The bin is `coir` (package.json); USAGE prints examples + exit codes.
 ```
+
+`coir analyze [section]` is the project-wide audit — the headless `node-run.js` report exposed as CLI sections (`stats` counts/edge-kinds/metaErrors health · `unused` zero-referrer non-`resources/` assets · `orphans` dangling refs, `--dropped` adds the source-less-meta audit · `atlas` per-atlas frame utilization · `size` per-type totals, `--list` the largest files; no section = all). It reuses the pure `src/core/analyze.js` builders via `query.analyzeData`/`analyzeAll` (shared with the MCP `analyze` tool), so the CLI text and the MCP json come from one place.
 
 `src/cli.js` answers "what does X depend on / who depends on X" for one asset (`info` instead dumps that asset's own record — type/uuid/ext/importer/size, in/out degrees, sub-assets, and the raw meta `userData`; the headless analogue of an editor "get asset info"). `<asset>` resolves by full path, basename, uuid, or `uuid@sub`; an ambiguous basename prints candidates and exits 2. Data goes to **stdout** (`-o json` for structured output; text is the default), so it is safe to pipe/parse. `--where` prints each usage site as a **paste-able selector** (`edge.locations` → `nodePath:Comp.prop`, the same grammar `edit` takes — see `src/core/selector.js`, shared with the browser usage popup); custom-script components are shown by class name (a compressed `__type__` decompressed). Meta-derived edges have no nodePath, so they show a non-selector form. Meta-derived edges (atlas→texture, font→texture, the Spine triple) and `extends` edges have no `locations`. `--type T[,T2]` (mirrors the browser's global type-filter bar) keeps only the chosen asset types: on the `deps`/`uses` **tree** it prunes to branches that *reach* one of those types — matching nodes **plus the intermediate hops leading to them** stay, dead branches drop, the queried root is always kept (build via `buildEdgeTree` → `pruneByType` → `renderTreeText`, leaving unfiltered output byte-identical); on `closure`/`find`/`-o json` it just filters the flat list.
 
