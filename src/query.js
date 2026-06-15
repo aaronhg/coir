@@ -14,15 +14,16 @@ import { base, edgeSort, orphansOf, locJson } from './shared.js';
  * @param {any} scan
  * @param {{out:Map<string,any[]>, inc:Map<string,any[]>}} maps  edgeMaps(scan)
  * @param {string} uuid
- * @param {{showOut?:boolean, showIn?:boolean, types?:Set<string>, limit?:number}} [opts]
+ * @param {{showOut?:boolean, showIn?:boolean, types?:Set<string>, kinds?:Set<string>, limit?:number}} [opts]
  */
-export function depsData(scan, maps, uuid, { showOut = true, showIn = true, types = new Set(), limit = Infinity } = {}) {
+export function depsData(scan, maps, uuid, { showOut = true, showIn = true, types = new Set(), kinds = new Set(), limit = Infinity } = {}) {
   const a = scan.assets.get(uuid);
   const o = { node: a.path, type: a.type, uuid };
   const typeOk = (oa) => !types.size || (oa && types.has(oa.type));
+  const kindOk = (e) => !kinds.size || kinds.has(e.kind);
   const side = (dir) => ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
     .slice().sort(edgeSort(scan, dir))
-    .filter((e) => typeOk(scan.assets.get(dir === 'out' ? e.to : e.from)))
+    .filter((e) => kindOk(e) && typeOk(scan.assets.get(dir === 'out' ? e.to : e.from)))
     .slice(0, limit)
     .map((e) => {
       const oa = scan.assets.get(dir === 'out' ? e.to : e.from);
@@ -31,7 +32,7 @@ export function depsData(scan, maps, uuid, { showOut = true, showIn = true, type
     });
   if (showOut) {
     o.dependsOn = side('out');
-    const orph = types.size ? [] : orphansOf(scan, uuid);
+    const orph = (types.size || kinds.size) ? [] : orphansOf(scan, uuid);
     if (orph.length) o.orphanRefs = orph.map((x) => {
       const known = scan.missing && scan.missing.get(mainUuid(x.ref));
       return { ref: x.ref, path: known || null, missingSource: !!known, location: x.loc ? locJson(scan, x.loc) : null };

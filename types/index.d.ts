@@ -36,6 +36,7 @@ export interface Asset {
   inResources: boolean;
   in: number; // in-degree
   out: number; // out-degree
+  virtual?: boolean; // a plugin-added non-asset node (no file); excluded from health reports
 }
 
 /** Where/how one edge is used inside a prefab/scene (from edge.locations). */
@@ -53,6 +54,7 @@ export interface Edge {
   kind: string; // asset type / sub kind / 'script' / 'texture' / 'extends' / plugin-defined
   weight: number;
   locations: EdgeLocation[];
+  label?: string; // optional plugin-supplied description (display/search); falls back to kind + endpoints
 }
 
 export interface SubOwner { owner: string; kind: string; name: string; }
@@ -92,9 +94,18 @@ export interface PluginContext {
   missing: Map<string, string>;
   missingByPath: Map<string, string>;
   missingReferenced: Set<string>;
-  addEdge(from: string, to: string, kind: string, loc?: EdgeLocation | null): void;
+  addEdge(from: string, to: string, kind: string, loc?: EdgeLocation | null, label?: string): void;
   resolveUuid(from: string, ref: string, loc?: EdgeLocation | null): void;
   noteSub(owner: string, sub: string | null): void;
+  /**
+   * Add a VIRTUAL node — a non-asset topology node a plugin discovers (an event,
+   * a notification, a route — anything with no `.meta`/file). It joins the graph
+   * (edges + degrees) but is `virtual:true`/`hasSource:false`, so the asset-health
+   * reports skip it. Idempotent by key; returns the stable key to wire edges to.
+   */
+  addNode(node: { path: string; type: string; ext?: string; importer?: string; size?: number; subAssets?: SubAsset[]; userData?: any; uuid?: string }): string;
+  /** Every asset-relative path the FileProvider lists (incl. `.meta`) — the formal entry to read any source via `readText`. */
+  files: string[];
   readText(path: string): Promise<string>;
   mapLimit<T, R>(
     items: T[],

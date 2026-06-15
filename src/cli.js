@@ -58,8 +58,8 @@ Usage:  coir <command> [args] [flags]      (runs on the current dir; point elsew
         also runnable as:  node src/cli.js …   /   npm run cli -- …
 
 Query (read-only; prints to stdout, pipe-friendly):
-  coir deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--where] [-o json] [--limit N]
-  coir uses    <asset> [--depth N] [--type T] [--where] [-o json] [--limit N]   (= deps --in)
+  coir deps    <asset> [--in|--out] [--depth N] [--type T[,T2]] [--kind K[,K2]] [--where] [-o json] [--limit N]
+  coir uses    <asset> [--depth N] [--type T] [--kind K] [--where] [-o json] [--limit N]   (= deps --in)
   coir closure <asset> [--type T] [--list] [-o json]
   coir find    <query> [--type T] [-o json] [--limit N]
   coir info    <asset> [-o json]
@@ -129,8 +129,9 @@ const M = {
 };
 
 function parseArgs(argv) {
-  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false };
+  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), kinds: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
+  const addKinds = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.kinds.add(v); } };
   const pos = []; // positionals, in order, from anywhere in argv
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -161,6 +162,8 @@ function parseArgs(argv) {
     else if (a.startsWith('--under=')) flags.under = a.slice(8);
     else if (a === '--type') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) addTypes(argv[++i]); }
     else if (a.startsWith('--type=')) addTypes(a.slice(7));
+    else if (a === '--kind') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) addKinds(argv[++i]); } // deps/uses: keep only these edge KINDS
+    else if (a.startsWith('--kind=')) addKinds(a.slice(7));
     else if (a === '--plugin') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.plugins.push(argv[++i]); }
     else if (a.startsWith('--plugin=')) flags.plugins.push(a.slice(9));
     else if (a === '--null') flags.value = { type: 'null', args: [] };
@@ -183,6 +186,9 @@ function parseArgs(argv) {
   return { projectDir, command, target: pos[0], pos, flags };
 }
 
+// An edge passes the --kind filter when no kinds are set, or its kind is chosen.
+const matchesKind = (flags, e) => !flags.kinds.size || flags.kinds.has(e.kind);
+
 // ---- dependency tree: build → (optionally) prune by type → render ---------
 // Build the side tree with the SAME global-seen / depth / limit rules as before
 // (a revisited node is shown with ↻ and not re-expanded). Returns a node tree.
@@ -195,7 +201,7 @@ function buildEdgeTree(scan, maps, rootUuid, dir, flags) {
   const maxDepth = flags.depth == null ? 1 : flags.depth; // deps/uses default to 1 hop (edit tree uses its own)
   return (function recur(uuid, depth) {
     const edges = ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
-      .slice().sort(edgeSort(scan, dir)).slice(0, breadth);
+      .filter((e) => matchesKind(flags, e)).slice().sort(edgeSort(scan, dir)).slice(0, breadth);
     const nodes = [];
     for (const e of edges) {
       const other = dir === 'out' ? e.to : e.from;
@@ -264,13 +270,14 @@ function cmdDeps(scan, maps, uuid, flags) {
   const showOut = flags.dir !== 'in';
   const showIn = flags.dir !== 'out';
   const filt = flags.types.size;
-  if (flags.json) { console.log(JSON.stringify(depsData(scan, maps, uuid, { showOut, showIn, types: flags.types, limit: flags.limit }))); return; }
+  if (flags.json) { console.log(JSON.stringify(depsData(scan, maps, uuid, { showOut, showIn, types: flags.types, kinds: flags.kinds, limit: flags.limit }))); return; }
 
-  const lines = [`${a.path} (${a.type})${filt ? `   [type: ${[...flags.types].join(',')}]` : ''}`];
+  const filtTag = `${filt ? `   [type: ${[...flags.types].join(',')}]` : ''}${flags.kinds.size ? `   [kind: ${[...flags.kinds].join(',')}]` : ''}`;
+  const lines = [`${a.path} (${a.type})${filtTag}`];
   if (showOut) {
     const tree = sideTree(scan, maps, uuid, 'out', flags);
-    const orph = filt ? [] : orphansOf(scan, uuid); // orphans are untyped → dropped when filtering
-    const n = filt ? countMatches(scan, tree, flags.types) : (maps.out.get(uuid) || []).length + orph.length;
+    const orph = (filt || flags.kinds.size) ? [] : orphansOf(scan, uuid); // orphans are untyped/kind-less → dropped when filtering
+    const n = filt ? countMatches(scan, tree, flags.types) : (maps.out.get(uuid) || []).filter((e) => matchesKind(flags, e)).length + orph.length;
     lines.push(n ? `  depends-on ${n}${filt ? M.matched : ''}:` : `  depends-on 0${filt ? M.matched : ''}`);
     renderTreeText(scan, tree, 'out', flags, lines);
     for (const o of orph.slice(0, flags.limit)) {
@@ -281,7 +288,7 @@ function cmdDeps(scan, maps, uuid, flags) {
   }
   if (showIn) {
     const tree = sideTree(scan, maps, uuid, 'in', flags);
-    const n = filt ? countMatches(scan, tree, flags.types) : (maps.inc.get(uuid) || []).length;
+    const n = filt ? countMatches(scan, tree, flags.types) : (maps.inc.get(uuid) || []).filter((e) => matchesKind(flags, e)).length;
     let head = n ? `  used-by ${n}${filt ? M.matched : ''}:` : `  used-by 0${filt ? M.matched : ''}`;
     if (!n && !filt && !a.inResources && a.type !== 'scene') head += '   ⚠ unreferenced';
     lines.push(head);

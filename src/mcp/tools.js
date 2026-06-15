@@ -56,12 +56,13 @@ export const TOOLS = [
         asset: { type: 'string', description: 'Asset by full path / basename / uuid / uuid@sub.' },
         direction: { type: 'string', enum: ['both', 'out', 'in'], description: 'out = what it depends on; in = who depends on it (uses); both (default).' },
         type: { type: 'string', description: 'Keep only neighbours of this asset type.' },
+        kind: { type: 'string', description: 'Keep only edges of this kind (e.g. texture, script, extends, audio-call).' },
         limit: { type: 'number', description: 'Cap neighbours per side.' },
       } },
     run: (ctx, a) => {
       const u = resolveUuid(ctx.scan, a.asset); if (u.error) return u;
       const dir = a.direction || 'both';
-      return { data: depsData(ctx.scan, edgeMaps(ctx.scan), u.uuid, { showOut: dir !== 'in', showIn: dir !== 'out', types: setOf(a.type), limit: a.limit ?? Infinity }) };
+      return { data: depsData(ctx.scan, edgeMaps(ctx.scan), u.uuid, { showOut: dir !== 'in', showIn: dir !== 'out', types: setOf(a.type), kinds: setOf(a.kind), limit: a.limit ?? Infinity }) };
     },
   },
   {

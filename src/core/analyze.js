@@ -17,6 +17,7 @@ const isRootType = (scan, type) => ROOT_TYPES.has(type) || !!(scan.rootTypes && 
 export function unusedReport(scan) {
   const items = [];
   for (const a of scan.assets.values()) {
+    if (a.virtual) continue; // a plugin's non-asset node is never an "unused file"
     if (a.inResources) continue;
     if (isRootType(scan, a.type)) continue;
     if (a.in > 0) continue;

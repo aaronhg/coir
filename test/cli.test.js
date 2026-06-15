@@ -988,6 +988,22 @@ test('edit tree: flags a nested prefab-instance root (edit it in its source pref
   assert.match(cli('edit', 'AInst.prefab', 'tree').stdout, /BInst.*\[prefab instance\]/);
 });
 
+// ---- deps --kind: filter edges by edge KIND --------------------------------
+test('deps --kind keeps only the chosen edge kinds (drops other kinds + orphans)', () => {
+  const all = json(cli('deps', 'Shop.prefab', '--out', '-o', 'json'));
+  assert.ok(all.dependsOn.some((d) => d.via === 'sprite-frame'));
+  assert.ok(all.orphanRefs && all.orphanRefs.length, 'Shop has orphan refs normally');
+
+  const k = json(cli('deps', 'Shop.prefab', '--out', '--kind', 'sprite-frame', '-o', 'json'));
+  assert.ok(k.dependsOn.length && k.dependsOn.every((d) => d.via === 'sprite-frame'));
+  assert.equal(k.orphanRefs, undefined); // kind-less orphans are dropped under --kind
+
+  const none = json(cli('deps', 'Shop.prefab', '--out', '--kind', 'texture', '-o', 'json'));
+  assert.equal(none.dependsOn.length, 0); // Shop has no texture edge
+
+  assert.match(cli('deps', 'Shop.prefab', '--out', '--kind', 'sprite-frame').stdout, /\[kind: sprite-frame\]/);
+});
+
 // ---- analyze: project-wide audit sections ----------------------------------
 test('analyze stats: counts + edge-kinds + health (text + json)', () => {
   assert.match(cli('analyze', 'stats').stdout, /stats: \d+ assets.*metaErrors=0\s+✓ healthy/s);
