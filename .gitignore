@@ -1,5 +1,5 @@
 node_modules/
-dist/*.map
+dist/
 .DS_Store
 
 # Cross-project / global plugin config, auto-loaded from the coir root (never shipped)

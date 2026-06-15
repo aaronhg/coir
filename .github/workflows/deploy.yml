@@ -33,8 +33,10 @@ jobs:
       - run: npm run build
       - name: Stage the published site
         run: |
-          mkdir _site
-          cp -r index.html dist docs robots.txt sitemap.xml .nojekyll _site/
+          mkdir -p _site/img
+          cp index.html robots.txt sitemap.xml .nojekyll _site/
+          cp -r dist _site/
+          cp img/coir-topology.png _site/img/   # the og:image only — cocos-project.png is README-only, not part of the site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

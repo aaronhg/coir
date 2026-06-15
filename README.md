@@ -8,11 +8,11 @@
 
 載入一個 **Cocos Creator 3.8.x** 專案，於瀏覽器端建立資產的**使用情形**與**依賴拓撲圖**，涵蓋圖檔、圖集（TexturePacker plist / Spine）、點陣字（fnt）、prefab、scene、與 Cocos component 腳本。
 
-![Coir 拓撲檢視：把一個 Cocos Creator 專案的資產依賴攤成雙向依賴樹，含型別篩選與「用在哪」彈窗](docs/coir-topology.png)
+![Coir 拓撲檢視：把一個 Cocos Creator 專案的資產依賴攤成雙向依賴樹，含型別篩選與「用在哪」彈窗](img/coir-topology.png)
 
 純前端（HTML + JS，無後端、無建置步驟），透過 Chrome 的 **File System Access API** 直接讀取本機專案目錄。分析對象就是一般的 Cocos Creator 專案：
 
-![被分析的 Cocos Creator 專案（編輯器畫面）](docs/cocos-project.png)
+![被分析的 Cocos Creator 專案（編輯器畫面）](img/cocos-project.png)
 
 > 📖 開發歷程、技術決策與踩過的坑見 [DEVELOPMENT.md](DEVELOPMENT.md)。
 > 🧬 Cocos scene/prefab 序列化契約(coir 依賴/無視哪些欄位)見 [docs/SERIALIZATION.md](docs/SERIALIZATION.md);headless CLI 編輯既有 prefab/scene 的設計見 [docs/EDITING.md](docs/EDITING.md)。
