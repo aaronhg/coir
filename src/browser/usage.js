@@ -52,7 +52,7 @@ export function showUsage() {
 }
 export function closeUsage() { $('usagePopup').hidden = true; }
 
-function positionUsage(pop) {
+export function positionUsage(pop) {
   const sel = $('topo').querySelector('.cell.sel');
   if (!sel) { pop.hidden = true; return; }
   const r = sel.getBoundingClientRect();

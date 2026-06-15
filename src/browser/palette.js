@@ -10,6 +10,16 @@ export function openPalette() {
   if (!S.scan) return;
   closeUsage();
   $('palette').hidden = false;
+  const list = $('paletteList');
+  // Bound once per open (cells come and go as you scroll → delegation, not per-row).
+  list.onscroll = () => { if (palettePaintScheduled) return; palettePaintScheduled = true; requestAnimationFrame(() => { palettePaintScheduled = false; paintPaletteList(); }); };
+  list.onclick = (e) => {
+    const it = e.target.closest('.pitem');
+    if (!it) return;
+    const item = S.paletteItems[+it.dataset.i];
+    if (!item) return;
+    if (item.kind === 'edgekind') drillKind(item.edgeKind); else pickPalette(item.target);
+  };
   const inp = $('paletteInput'); inp.value = ''; renderPalette(''); inp.focus();
 }
 export function closePalette() { $('palette').hidden = true; }
@@ -114,8 +124,77 @@ function hlText(str, pos) {
 // kind), the rest searches within the survivors.
 const PALETTE_SCOPES = { '@': 'frame', '#': 'type', '>': 'usage', '~': 'edge' };
 const TWO_PART = new Set(['type', 'edge']);
+// ---- result rendering (virtualized) --------------------------------------
+const PROW = 32;             // .pitem fixed height — MUST match the CSS; exact row math for virtualization
+let palettePaintScheduled = false;
+let paletteHlQ = '';         // the query to highlight in the current result set (set by renderPalette, read at paint time)
+
+const TAGS = { frame: 'palette.tagFrame', usage: 'palette.tagUsage', edge: 'palette.tagEdge' };
+const tagHtml = (e) => TAGS[e.kind] ? `<span class="ptag">${esc(t(TAGS[e.kind]))}</span>` : '';
+// Highlight matched chars (VSCode-style) using the search part.
+function hlOf(e) {
+  const hlQ = paletteHlQ;
+  if (!hlQ) return { L: esc(e.label), Sub: esc(e.sub) };
+  if (e.kind === 'asset') {
+    const m = fuzzyMatch(hlQ, e.text);
+    if (!m) return { L: esc(e.label), Sub: esc(e.sub) };
+    const dirLen = e.sub === '/' ? 0 : e.sub.length;
+    return {
+      L: hlText(e.label, m.pos.filter((p) => p >= dirLen).map((p) => p - dirLen)),
+      Sub: e.sub === '/' ? '/' : hlText(e.sub, m.pos.filter((p) => p < dirLen)),
+    };
+  }
+  const m = fuzzyMatch(hlQ, e.label);
+  return { L: m ? hlText(e.label, m.pos) : esc(e.label), Sub: esc(e.sub) };
+}
+function cloHtml(e) { // ← 被依賴∑ (blast radius) · → 依賴∑ (bundle); a 0 side is omitted
+  const n = S.closureByUuid.get(e.target);
+  const cin = n ? n.cin : 0, cout = n ? n.cout : 0;
+  const parts = [];
+  if (cin) parts.push(`<i>←</i>${cin}`);
+  if (cout) parts.push(`<i>→</i>${cout}`);
+  if (!parts.length) return '<span class="pclo"></span>'; // keep the column width for alignment
+  return `<span class="pclo" title="${esc(t('palette.clo', { cin, cout }))}">${parts.join(' ')}</span>`;
+}
+// One result row — handles both the edge-kind menu rows and normal result rows.
+// `data-i` is the index into S.paletteItems (delegation reads it; off-screen rows
+// aren't in the DOM under virtualization).
+function rowHtml(e, i) {
+  const on = i === S.paletteIdx ? ' on' : '';
+  if (e.kind === 'edgekind') {
+    const m = fuzzyMatch(paletteHlQ, e.edgeKind) || { pos: [] };
+    return `<div class="pitem${on}" data-i="${i}">` +
+      `<span class="dot" style="background:#607d8b"></span>` +
+      `<span class="pnm">~${hlText(e.edgeKind, m.pos)}</span>` +
+      `<span class="ptag">${esc(t('palette.tagEdge'))}</span>` +
+      `<span class="pdir">${e.count}</span></div>`;
+  }
+  const { L, Sub } = hlOf(e);
+  return `<div class="pitem${on}" data-i="${i}">` +
+    `<span class="dot" style="background:${typeColor(e.type)}"></span>` +
+    `<span class="pnm">${L}</span>${tagHtml(e)}` +
+    `<span class="pdir" title="${esc(e.sub)}">${Sub}</span>${cloHtml(e)}</div>`;
+}
+// Paint ONLY the rows in the viewport (± buffer); top/bottom spacer divs preserve
+// the full scroll height. Runs on every scroll frame — keeps the DOM at ~a screenful.
+function paintPaletteList() {
+  const list = $('paletteList');
+  const items = S.paletteItems;
+  if (!items.length) { list.innerHTML = `<div class="empty">${esc(t('palette.empty'))}</div>`; return; }
+  const vh = Math.max(list.clientHeight, Math.round(window.innerHeight * 0.5)); // #paletteList is capped at 50vh; floor for the not-yet-laid-out first paint
+  const BUF = 6;
+  const from = Math.max(0, Math.floor(list.scrollTop / PROW) - BUF);
+  const to = Math.min(items.length - 1, Math.ceil((list.scrollTop + vh) / PROW) + BUF);
+  let body = from > 0 ? `<div class="pspacer" style="height:${from * PROW}px"></div>` : '';
+  for (let i = from; i <= to; i++) body += rowHtml(items[i], i);
+  const tail = items.length - 1 - to;
+  if (tail > 0) body += `<div class="pspacer" style="height:${tail * PROW}px"></div>`;
+  list.innerHTML = body;
+}
+
 export function renderPalette(raw) {
   if (!S.searchIndex) S.searchIndex = buildSearchIndex();
+  const list = $('paletteList');
   const rawInput = raw || '';          // keep the un-trimmed input — a trailing space commits a `~kind`
   raw = rawInput.trim();
   let scope = null, q = raw.toLowerCase();
@@ -139,22 +218,13 @@ export function renderPalette(raw) {
     }
     const kinds = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
     S.paletteItems = kinds.map(([k, n]) => ({ kind: 'edgekind', edgeKind: k, count: n }));
-    S.paletteIdx = 0;
-    $('paletteList').innerHTML = kinds.length
-      ? kinds.map(([k, n], i) => `<div class="pitem${i === 0 ? ' on' : ''}" data-edgekind="${esc(k)}">` +
-          `<span class="dot" style="background:#607d8b"></span>` +
-          `<span class="pnm">~${hlText(k, (fuzzyMatch(q, k) || { pos: [] }).pos)}</span>` +
-          `<span class="ptag">${esc(t('palette.tagEdge'))}</span>` +
-          `<span class="pdir">${n}</span></div>`).join('')
-      : `<div class="empty">${esc(t('palette.empty'))}</div>`;
-    for (const el of $('paletteList').querySelectorAll('.pitem')) el.onclick = () => drillKind(el.dataset.edgekind);
-    $('paletteList').scrollTop = 0;
+    paletteHlQ = q; S.paletteIdx = 0; list.scrollTop = 0; paintPaletteList();
     return;
   }
 
   let items;
   if (!q && !scope) {
-    items = S.searchIndex.filter((e) => e.kind === 'asset').slice(0, 100); // empty query → assets
+    items = S.searchIndex.filter((e) => e.kind === 'asset'); // empty query → all assets (virtualized — no cap)
   } else {
     const within = (e) => subQ ? Math.max(matchScore(subQ, e.label), matchScore(subQ, e.text)) : 1000; // 2-part: search the survivors
     const scored = [];
@@ -180,52 +250,19 @@ export function renderPalette(raw) {
       scored.push([sc, e]);
     }
     scored.sort((a, b) => b[0] - a[0]);
-    items = scored.slice(0, 100).map((x) => x[1]);
+    items = scored.map((x) => x[1]); // no cap — virtualization keeps every match reachable
   }
-
-  S.paletteItems = items; S.paletteIdx = 0;
-  const TAGS = { frame: 'palette.tagFrame', usage: 'palette.tagUsage', edge: 'palette.tagEdge' };
-  const tag = (e) => TAGS[e.kind] ? `<span class="ptag">${esc(t(TAGS[e.kind]))}</span>` : '';
-  // Highlight matched chars (VSCode-style) using the search part.
-  const hlOf = (e) => {
-    if (!hlQ) return { L: esc(e.label), S: esc(e.sub) };
-    if (e.kind === 'asset') {
-      const m = fuzzyMatch(hlQ, e.text);
-      if (!m) return { L: esc(e.label), S: esc(e.sub) };
-      const dirLen = e.sub === '/' ? 0 : e.sub.length;
-      return {
-        L: hlText(e.label, m.pos.filter((p) => p >= dirLen).map((p) => p - dirLen)),
-        S: e.sub === '/' ? '/' : hlText(e.sub, m.pos.filter((p) => p < dirLen)),
-      };
-    }
-    const m = fuzzyMatch(hlQ, e.label);
-    return { L: m ? hlText(e.label, m.pos) : esc(e.label), S: esc(e.sub) };
-  };
-  const clo = (e) => { // ← 被依賴∑ (blast radius) · → 依賴∑ (bundle); a 0 side is omitted
-    const n = S.closureByUuid.get(e.target);
-    const cin = n ? n.cin : 0, cout = n ? n.cout : 0;
-    const parts = [];
-    if (cin) parts.push(`<i>←</i>${cin}`);
-    if (cout) parts.push(`<i>→</i>${cout}`);
-    if (!parts.length) return '<span class="pclo"></span>'; // keep the column width for alignment
-    return `<span class="pclo" title="${esc(t('palette.clo', { cin, cout }))}">${parts.join(' ')}</span>`;
-  };
-  $('paletteList').innerHTML = items.map((e, i) => {
-    const { L, S: Ssub } = hlOf(e);
-    return `<div class="pitem${i === 0 ? ' on' : ''}" data-uuid="${e.target}">` +
-      `<span class="dot" style="background:${typeColor(e.type)}"></span>` +
-      `<span class="pnm">${L}</span>${tag(e)}` +
-      `<span class="pdir" title="${esc(e.sub)}">${Ssub}</span>${clo(e)}</div>`;
-  }).join('') || `<div class="empty">${esc(t('palette.empty'))}</div>`;
-  for (const el of $('paletteList').querySelectorAll('.pitem')) el.onclick = () => pickPalette(el.dataset.uuid);
-  $('paletteList').scrollTop = 0; // new query resets selection to item 0 → scroll it back into view
+  S.paletteItems = items; paletteHlQ = hlQ; S.paletteIdx = 0; list.scrollTop = 0; paintPaletteList();
 }
 export function movePalette(d) {
   if (!S.paletteItems.length) return;
   S.paletteIdx = (S.paletteIdx + d + S.paletteItems.length) % S.paletteItems.length;
-  const els = $('paletteList').querySelectorAll('.pitem');
-  els.forEach((e, i) => e.classList.toggle('on', i === S.paletteIdx));
-  if (els[S.paletteIdx]) els[S.paletteIdx].scrollIntoView({ block: 'nearest' });
+  // Reveal the selected row (it may not be painted), then repaint with the new `on`.
+  const list = $('paletteList');
+  const top = S.paletteIdx * PROW, bot = top + PROW;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (bot > list.scrollTop + list.clientHeight) list.scrollTop = bot - list.clientHeight;
+  paintPaletteList();
 }
 export function pickPalette(uuid) { closePalette(); if (S.scan && S.scan.assets.has(uuid)) focus(uuid); }
 // Drill from a kind row into that kind's edges (`~kind ` — the trailing space commits it).

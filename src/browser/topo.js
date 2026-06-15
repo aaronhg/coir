@@ -6,7 +6,7 @@ import { S, $, base, esc, typeColor, COPY_ICON, CHECK_ICON, setStatus } from './
 import { t } from './i18n.js';
 import { renderTable } from './list.js';
 import { setTab } from './ui.js';
-import { showUsage } from './usage.js';
+import { showUsage, positionUsage } from './usage.js';
 import { copyToClipboard } from './copy.js';
 
 // A node's neighbours (the topology shows the TRUE structure; the 清單 type
@@ -147,9 +147,32 @@ export function offsetOfKey(key) {
   const depth = key.split('>').length - 1;
   return key[0] === 'L' ? -depth : depth;
 }
+const ROW_H = 30; // .tree's grid-auto-rows — MUST match the CSS; exact row math for virtualization
+let paintScheduled = false;
+
+// Adaptive vertical padding: exactly enough that ANY row can scroll to the
+// viewport centre (viewport/2 − row/2). Short trees end up centred with no
+// excess scroll-into-void; tall trees can still centre their first/last rows.
+function setAdaptivePad(tb) {
+  tb.querySelector('.tree').style.paddingBlock = `${Math.max(0, tb.clientHeight / 2 - ROW_H / 2)}px`;
+}
+
+// The layer-0 (centre) cell — always row 0.
+function rootCellHtml(col) {
+  const a = S.scan.assets.get(S.treeRoot);
+  return `<div class="cell root${S.selectedKey === S.treeRoot ? ' sel' : ''}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
+    ` title="${esc(a ? a.path : S.treeRoot)}" style="grid-column:${col};grid-row:1">` +
+    `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : S.treeRoot)}</span>` +
+    (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
+    `</div>`;
+}
+// Build the tree for the current centre/selection/filter, cache it in S.topo,
+// render the column header + scroll shell (handlers bound ONCE via delegation),
+// centre the selected row, then paint only the visible rows. buildSide runs once
+// per centre/select; scrolling re-paints (cheap) without rebuilding.
 export function renderTopo() {
   if (!S.scan) return;
-  if (!S.treeRoot) { $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`; return; }
+  if (!S.treeRoot) { $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`; S.topo = null; return; }
   const viewOffset = offsetOfKey(S.selectedKey);
   const lo = viewOffset - 2, hi = viewOffset + 2;
   const DEEP = 24;
@@ -158,11 +181,14 @@ export function renderTopo() {
   S.lastCells = [...left, ...right];
   tagSiblingDirs(S.lastCells); // disambiguate same-name siblings (append distinguishing dir)
   const inWin = (off) => off >= lo && off <= hi;
-  const gcol = (off) => off - lo + 1; // 1..5
-  const cnt = (cells, d) => cells.filter((c) => c.depth === d).length;
+  let maxRow = 0;
+  for (const c of S.lastCells) if (inWin(c.side === 'L' ? -c.depth : c.depth)) maxRow = Math.max(maxRow, c.row);
+  S.topo = { left, right, lo, hi, maxRow };
 
-  let head = '<div class="topohead">';
+  // column header — counts use the full sides (cheap, not virtualized)
+  const cnt = (cells, d) => cells.filter((c) => c.depth === d).length;
   const lyr = t('topo.layer');
+  let head = '<div class="topohead">';
   for (let gc = 1; gc <= 5; gc++) {
     const off = lo + (gc - 1);
     const label = off === 0 ? '' : off > 0 ? `<i>→</i>${lyr}${off}` : `<i>←</i>${lyr}${-off}`;
@@ -170,38 +196,75 @@ export function renderTopo() {
     head += `<div class="th${off === 0 ? ' center' : ''}">${label}${count !== '' ? `<span class="thc">${count}</span>` : ''}</div>`;
   }
   head += '</div>';
+  $('topo').innerHTML = `${head}<div class="treebody"><div class="tree"></div></div>`;
 
-  let body = '<div class="treebody"><div class="tree">';
-  if (inWin(0)) {
-    const a = S.scan.assets.get(S.treeRoot);
-    body += `<div class="cell root${S.selectedKey === S.treeRoot ? ' sel' : ''}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
-      ` title="${esc(a ? a.path : S.treeRoot)}" style="grid-column:${gcol(0)};grid-row:1">` +
-      `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : S.treeRoot)}</span>` +
-      (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
-      `</div>`;
-  }
-  for (const c of left) { const off = -c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
-  for (const c of right) { const off = c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
-  body += '</div></div>';
-  $('topo').innerHTML = head + body;
-  for (const el of $('topo').querySelectorAll('.cell')) {
-    const key = el.dataset.key, uuid = el.dataset.uuid;
-    el.onclick = () => { clearTimeout(S.cellClickTimer); S.cellClickTimer = setTimeout(() => selectTopoKey(key), 200); };
-    el.ondblclick = () => { clearTimeout(S.cellClickTimer); focus(uuid); };
-  }
-  for (const cb of $('topo').querySelectorAll('.cell-copy')) { // hover 顯示，複製完整路徑
-    cb.onclick = (ev) => {
-      ev.stopPropagation();
+  const tb = $('topo').querySelector('.treebody');
+  // Event delegation (bound once per build, NOT per painted cell — cells come and
+  // go as you scroll): single-click selects (200ms vs dblclick), double-click
+  // re-centres, the hover copy button copies the full path.
+  tb.onclick = (e) => {
+    const cb = e.target.closest('.cell-copy');
+    if (cb) {
+      e.stopPropagation();
       copyToClipboard(cb.dataset.copy, () => {
         cb.innerHTML = CHECK_ICON; cb.classList.add('ok');
         setTimeout(() => { cb.innerHTML = COPY_ICON; cb.classList.remove('ok'); }, 1200);
         setStatus(t('copy.named', { name: cb.dataset.copy }));
       });
-    };
-  }
-  const selEl = $('topo').querySelector('.cell.sel') || $('topo').querySelector('.cell.root');
-  if (selEl) selEl.scrollIntoView({ block: 'center', inline: 'nearest' }); // 上下置中
+      return;
+    }
+    const cell = e.target.closest('.cell');
+    if (cell) { clearTimeout(S.cellClickTimer); const key = cell.dataset.key; S.cellClickTimer = setTimeout(() => selectTopoKey(key), 200); }
+  };
+  tb.ondblclick = (e) => { const cell = e.target.closest('.cell'); if (cell) { clearTimeout(S.cellClickTimer); focus(cell.dataset.uuid); } };
+  tb.onscroll = () => { if (paintScheduled) return; paintScheduled = true; requestAnimationFrame(() => { paintScheduled = false; paintTopo(); }); };
+
+  setAdaptivePad(tb); // size the padding to this viewport BEFORE painting (paint/centre read it)
+  paintTopo();        // first paint (at scrollTop 0) — its spacer establishes the full scroll height…
+  centerSelected(tb); // …so this scroll-to-centre isn't clamped to an empty .tree, then…
+  paintTopo();        // …repaint for the centred position
   showUsage(); // auto-show the "used where" info for the selected ↔ parent edge
+}
+// Re-fit the padding + re-centre + repaint without rebuilding the tree — for
+// window resize, where the viewport (and thus the centring padding) changed.
+export function reflowTopo() {
+  const tb = $('topo').querySelector('.treebody');
+  if (!tb || !S.topo) return;
+  setAdaptivePad(tb);
+  centerSelected(tb);
+  paintTopo();
+}
+// Render ONLY the cells whose row is in the viewport (± buffer); a spacer one row
+// past the last cell holds the full scroll height (grid-auto-rows reserves every
+// implicit row). Runs on every scroll frame — keeps the DOM at ~a screenful of cells.
+function paintTopo() {
+  const tb = $('topo').querySelector('.treebody');
+  const tree = tb && tb.querySelector('.tree');
+  if (!tree || !S.topo) return;
+  const { left, right, lo, hi, maxRow } = S.topo;
+  const padTop = parseFloat(getComputedStyle(tree).paddingTop) || 0; // .tree's 45vh, resolved to px
+  const BUF = 12;
+  const rFrom = Math.max(0, Math.floor((tb.scrollTop - padTop) / ROW_H) - BUF);
+  const rTo = Math.ceil((tb.scrollTop + tb.clientHeight - padTop) / ROW_H) + BUF;
+  const inWin = (off) => off >= lo && off <= hi;
+  const gcol = (off) => off - lo + 1;
+  const vis = (c, off) => inWin(off) && c.row >= rFrom && c.row <= rTo;
+  let body = '';
+  if (inWin(0) && rFrom <= 0) body += rootCellHtml(gcol(0));
+  for (const c of left) { const off = -c.depth; if (vis(c, off)) body += cellHtml(c, gcol(off)); }
+  for (const c of right) { const off = c.depth; if (vis(c, off)) body += cellHtml(c, gcol(off)); }
+  body += `<div class="vspacer" style="grid-column:1;grid-row:${maxRow + 2}"></div>`; // reserve full height
+  tree.innerHTML = body;
+  if (!$('usagePopup').hidden) positionUsage($('usagePopup')); // re-pin (or hide if its cell scrolled off)
+}
+function selectedRowOf() {
+  if (!S.selectedKey || S.selectedKey === S.treeRoot) return 0; // the centre cell sits at row 0
+  const c = S.lastCells.find((x) => x.key === S.selectedKey);
+  return c ? c.row : 0;
+}
+function centerSelected(tb) {
+  const padTop = parseFloat(getComputedStyle(tb.querySelector('.tree')).paddingTop) || 0;
+  tb.scrollTop = Math.max(0, padTop + selectedRowOf() * ROW_H + ROW_H / 2 - tb.clientHeight / 2);
 }
 export function selectTopoKey(key) {
   pushNav();           // remember the current selection before moving
@@ -227,20 +290,19 @@ export function navTree(dir) {
     if (nx) selectTopoKey(nx.key);
     return;
   }
+  // left/right: step one column toward 被依賴/依賴, landing on the cell in that
+  // column NEAREST the current viewport centre. Computed from cell data (rows),
+  // not DOM rects — under virtualization off-screen cells aren't in the DOM.
   const targetOffset = offsetOfKey(S.selectedKey) + (dir === 'right' ? 1 : -1);
-  const topoEl = $('topo');
-  const cells = [...topoEl.querySelectorAll('.cell')].filter((el) => offsetOfKey(el.dataset.key) === targetOffset);
-  if (!cells.length) return; // no item that direction → don't move
-  const area = topoEl.querySelector('.treebody') || topoEl;
-  const box = area.getBoundingClientRect();
-  const centerY = box.top + box.height / 2;
-  let best = null, bestD = Infinity;
-  for (const el of cells) {
-    const r = el.getBoundingClientRect();
-    const d = Math.abs((r.top + r.height / 2) - centerY);
-    if (d < bestD) { bestD = d; best = el; }
-  }
-  if (best) selectTopoKey(best.dataset.key);
+  if (targetOffset === 0) { selectTopoKey(S.treeRoot); return; } // toward the centre → the root cell
+  const cands = S.lastCells.filter((c) => (c.side === 'L' ? -c.depth : c.depth) === targetOffset);
+  if (!cands.length) return; // no column that way → don't move
+  const tb = $('topo').querySelector('.treebody');
+  const padTop = tb ? parseFloat(getComputedStyle(tb.querySelector('.tree')).paddingTop) || 0 : 0;
+  const centerRow = tb ? (tb.scrollTop + tb.clientHeight / 2 - padTop) / ROW_H : 0;
+  let best = cands[0], bestD = Infinity;
+  for (const c of cands) { const d = Math.abs(c.row - centerRow); if (d < bestD) { bestD = d; best = c; } }
+  selectTopoKey(best.key);
 }
 export function onTopoWheel(e) {
   if (S.tab !== 'topo' || !S.treeRoot) return;

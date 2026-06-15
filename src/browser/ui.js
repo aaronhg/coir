@@ -9,7 +9,7 @@ import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
-import { renderTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid } from './topo.js';
+import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
@@ -47,6 +47,11 @@ export function initUI({ onPick }) {
     if (!$('usagePopup').hidden && !e.target.closest('#usagePopup') && !e.target.closest('.cell')) closeUsage();
   });
   $('topo').addEventListener('wheel', onTopoWheel, { passive: false });
+  let resizeRaf = 0;
+  window.addEventListener('resize', () => { // adaptive topo padding depends on viewport height → re-fit
+    if (S.tab !== 'topo' || !S.treeRoot) return;
+    cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(reflowTopo);
+  });
   return { setScan, onProgress, setStatus };
 }
 

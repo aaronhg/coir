@@ -51,6 +51,7 @@ export const S = {
   treeRoot: null,           // centre asset (層0)
   selectedKey: null,        // selected key (root uuid, or a side-prefixed key)
   lastCells: [],            // cells from the last renderTopo (keyboard nav)
+  topo: null,               // cached built tree { left, right, lo, hi, maxRow } — paintTopo virtualizes rows over it
   navHistory: [],           // topology back-stack of { treeRoot, selectedKey }  (− = 上一動)
   navForward: [],           // topology forward-stack  (+ = 下一動)
   listSel: null,            // 清單鍵盤游標的 uuid (↑↓ 切換、Enter 設為中心)

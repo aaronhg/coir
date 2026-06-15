@@ -146,7 +146,7 @@
   .th.center { justify-content:center; background:rgba(79,195,247,.12); box-shadow:inset 0 -2px 0 var(--acc); }
   .th .thc { color:var(--fg); background:var(--panel2); border-radius:8px; padding:0 6px; }
   .treebody { flex:1; overflow:auto; min-height:0; }
-  .tree { display:grid; grid-template-columns:repeat(5,1fr); grid-auto-rows:30px; align-content:start; padding-block:45vh;
+  .tree { display:grid; grid-template-columns:repeat(5,1fr); grid-auto-rows:30px; align-content:start; padding-block:0; /* padding-block set adaptively in JS (renderTopo): viewport/2 − row/2 */
           background-image:linear-gradient(to right, var(--line) 1px, transparent 1px); background-size:20% 100%; }
   .cell { display:flex; align-items:center; gap:5px; padding:0 10px; border-bottom:1px solid #1a2029; cursor:pointer; overflow:hidden; }
   .cell:hover { background:var(--panel2); }
@@ -166,7 +166,7 @@
   .palette-box { width:880px; max-width:92vw; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 12px 40px rgba(0,0,0,.5); overflow:hidden; }
   #paletteInput { width:100%; padding:12px 14px; background:var(--panel2); border:0; border-bottom:1px solid var(--line); color:var(--fg); font-size:15px; outline:none; }
   #paletteList { max-height:50vh; overflow:auto; }
-  .pitem { display:flex; align-items:center; gap:8px; padding:7px 14px; cursor:pointer; }
+  .pitem { display:flex; align-items:center; gap:8px; padding:7px 14px; cursor:pointer; height:32px; box-sizing:border-box; } /* fixed height → exact row math for virtualization */
   .pitem.on, .pitem:hover { background:var(--panel2); }
   .pitem .pnm { color:var(--fg); flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pitem .hl { color:var(--acc); font-weight:700; }
