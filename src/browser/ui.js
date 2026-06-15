@@ -11,7 +11,7 @@ import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
 import { renderTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid } from './topo.js';
 import { closeUsage } from './usage.js';
-import { openPalette, closePalette, renderPalette, movePalette, pickPalette } from './palette.js';
+import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
 import { renderReports } from './reports.js';
 import { copyName } from './copy.js';
@@ -37,7 +37,7 @@ export function initUI({ onPick }) {
   pin.onkeydown = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
-    else if (e.key === 'Enter') { e.preventDefault(); const it = S.paletteItems[S.paletteIdx]; if (it) pickPalette(it.target); }
+    else if (e.key === 'Enter') { e.preventDefault(); const it = S.paletteItems[S.paletteIdx]; if (!it) return; if (it.kind === 'edgekind') drillKind(it.edgeKind); else pickPalette(it.target); }
     else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
   };
   $('palette').onclick = (e) => { if (e.target === $('palette')) closePalette(); };

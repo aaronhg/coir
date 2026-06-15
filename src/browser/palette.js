@@ -116,7 +116,8 @@ const PALETTE_SCOPES = { '@': 'frame', '#': 'type', '>': 'usage', '~': 'edge' };
 const TWO_PART = new Set(['type', 'edge']);
 export function renderPalette(raw) {
   if (!S.searchIndex) S.searchIndex = buildSearchIndex();
-  raw = (raw || '').trim();
+  const rawInput = raw || '';          // keep the un-trimmed input — a trailing space commits a `~kind`
+  raw = rawInput.trim();
   let scope = null, q = raw.toLowerCase();
   if (raw && PALETTE_SCOPES[raw[0]]) { scope = PALETTE_SCOPES[raw[0]]; q = raw.slice(1).trim().toLowerCase(); }
   const uuidish = !scope && /^[0-9a-f-]{4,}$/i.test(q);
@@ -125,6 +126,31 @@ export function renderPalette(raw) {
   if (TWO_PART.has(scope)) { const sp = q.indexOf(' '); filterTok = sp < 0 ? q : q.slice(0, sp); subQ = sp < 0 ? '' : q.slice(sp + 1).trim(); }
   // What to highlight: the search part (subQ for two-part scopes, else the query).
   const hlQ = TWO_PART.has(scope) ? subQ : q;
+
+  // Bare `~` (or `~partial`, no space yet) → list the available EDGE KINDS with
+  // counts, so they're discoverable. Pick one (click/Enter) or add a space to
+  // drill into that kind's edges. A trailing space commits the kind → edges.
+  if (scope === 'edge' && !q.includes(' ') && !/\s$/.test(rawInput)) {
+    const counts = new Map();
+    for (const e of S.searchIndex) {
+      if ((e.kind !== 'edge' && e.kind !== 'usage') || !e.edgeKind) continue;
+      if (q && matchScore(q, e.edgeKind) < 0) continue;
+      counts.set(e.edgeKind, (counts.get(e.edgeKind) || 0) + 1);
+    }
+    const kinds = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    S.paletteItems = kinds.map(([k, n]) => ({ kind: 'edgekind', edgeKind: k, count: n }));
+    S.paletteIdx = 0;
+    $('paletteList').innerHTML = kinds.length
+      ? kinds.map(([k, n], i) => `<div class="pitem${i === 0 ? ' on' : ''}" data-edgekind="${esc(k)}">` +
+          `<span class="dot" style="background:#607d8b"></span>` +
+          `<span class="pnm">~${hlText(k, (fuzzyMatch(q, k) || { pos: [] }).pos)}</span>` +
+          `<span class="ptag">${esc(t('palette.tagEdge'))}</span>` +
+          `<span class="pdir">${n}</span></div>`).join('')
+      : `<div class="empty">${esc(t('palette.empty'))}</div>`;
+    for (const el of $('paletteList').querySelectorAll('.pitem')) el.onclick = () => drillKind(el.dataset.edgekind);
+    $('paletteList').scrollTop = 0;
+    return;
+  }
 
   let items;
   if (!q && !scope) {
@@ -202,3 +228,5 @@ export function movePalette(d) {
   if (els[S.paletteIdx]) els[S.paletteIdx].scrollIntoView({ block: 'nearest' });
 }
 export function pickPalette(uuid) { closePalette(); if (S.scan && S.scan.assets.has(uuid)) focus(uuid); }
+// Drill from a kind row into that kind's edges (`~kind ` — the trailing space commits it).
+export function drillKind(k) { const inp = $('paletteInput'); inp.value = `~${k} `; renderPalette(inp.value); inp.focus(); }
