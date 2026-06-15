@@ -14,10 +14,15 @@ export function openPalette() {
 }
 export function closePalette() { $('palette').hidden = true; }
 
-// Searchable entries from every angle. Each `target` is a real asset uuid.
+// Searchable entries from every angle. Each `target` is a real asset uuid, so
+// picking any kind focuses an asset. `edgeKind` (on edge-derived entries) is the
+// clean dimension the `~` sigil filters on; `text` carries the kind so it's
+// fuzzy-searchable too.
 //   asset : a file (label=name, text=full path, also matchable by uuid)
 //   frame : a sprite-frame inside an atlas/sheet (label=frame name) → its owner
-//   usage : where an asset is used (node path · component.property · frame · click)
+//   usage : a LOCATED edge site (node path · component.property · frame · click)
+//   edge  : a location-less edge (meta/convention/plugin — atlas→texture, extends,
+//           a plugin's audio-call/emits…); label = its plugin label or endpoints
 export function buildSearchIndex() {
   const out = [];
   for (const a of S.scan.assets.values()) {
@@ -29,17 +34,22 @@ export function buildSearchIndex() {
   }
   const seen = new Set();
   for (const e of S.scan.edges) {
-    if (!e.locations || !e.locations.length) continue;
     const toA = S.scan.assets.get(e.to); const fromA = S.scan.assets.get(e.from);
     if (!toA || !fromA) continue;
-    for (const l of e.locations) {
-      const comp = l.component ? compName(l.component) : '';
-      const np = l.nodePath || ''; const prop = l.property || '';
-      const text = [np, comp, prop, l.subName].filter(Boolean).join(' ');
-      if (!text) continue;
-      const key = `${e.to}|${np}|${comp}|${prop}`;
-      if (seen.has(key)) continue; seen.add(key);
-      out.push({ kind: 'usage', target: e.to, type: toA.type, label: np || prop || comp, sub: `${base(toA.path)} ← ${base(fromA.path)}`, text });
+    if (e.locations && e.locations.length) {              // located edge → one usage entry per site
+      for (const l of e.locations) {
+        const comp = l.component ? compName(l.component) : '';
+        const np = l.nodePath || ''; const prop = l.property || '';
+        if (!np && !prop && !comp) continue;              // no addressable location → skip (structural)
+        const key = `${e.to}|${np}|${comp}|${prop}`;
+        if (seen.has(key)) continue; seen.add(key);
+        const text = [e.kind, np, comp, prop, l.subName].filter(Boolean).join(' '); // kind is searchable
+        out.push({ kind: 'usage', target: e.to, type: toA.type, edgeKind: e.kind, label: np || prop || comp, sub: `${base(toA.path)} ← ${base(fromA.path)}`, text });
+      }
+    } else {                                              // location-less edge → one edge entry
+      out.push({ kind: 'edge', target: e.to, type: toA.type, edgeKind: e.kind,
+        label: e.label || `${base(fromA.path)} → ${base(toA.path)}`,
+        sub: e.kind, text: `${e.kind} ${e.label || ''} ${fromA.path} ${toA.path}` });
     }
   }
   return out;
@@ -99,31 +109,45 @@ function hlText(str, pos) {
   return out + (run ? '</b>' : '');
 }
 
-const PALETTE_SCOPES = { '@': 'frame', '#': 'type', '>': 'usage' };
+// Scope sigils: @frame  #type  >usage  ~edge-kind. `#` and `~` are TWO-PART —
+// `#type query` / `~kind query` — the first token filters (asset type / edge
+// kind), the rest searches within the survivors.
+const PALETTE_SCOPES = { '@': 'frame', '#': 'type', '>': 'usage', '~': 'edge' };
+const TWO_PART = new Set(['type', 'edge']);
 export function renderPalette(raw) {
   if (!S.searchIndex) S.searchIndex = buildSearchIndex();
   raw = (raw || '').trim();
   let scope = null, q = raw.toLowerCase();
   if (raw && PALETTE_SCOPES[raw[0]]) { scope = PALETTE_SCOPES[raw[0]]; q = raw.slice(1).trim().toLowerCase(); }
   const uuidish = !scope && /^[0-9a-f-]{4,}$/i.test(q);
+  // Two-part scopes: split off the first token as the filter, the rest searches.
+  let filterTok = '', subQ = q;
+  if (TWO_PART.has(scope)) { const sp = q.indexOf(' '); filterTok = sp < 0 ? q : q.slice(0, sp); subQ = sp < 0 ? '' : q.slice(sp + 1).trim(); }
+  // What to highlight: the search part (subQ for two-part scopes, else the query).
+  const hlQ = TWO_PART.has(scope) ? subQ : q;
 
   let items;
   if (!q && !scope) {
     items = S.searchIndex.filter((e) => e.kind === 'asset').slice(0, 100); // empty query → assets
   } else {
+    const within = (e) => subQ ? Math.max(matchScore(subQ, e.label), matchScore(subQ, e.text)) : 1000; // 2-part: search the survivors
     const scored = [];
     for (const e of S.searchIndex) {
       if (scope === 'frame' && e.kind !== 'frame') continue;
       if (scope === 'usage' && e.kind !== 'usage') continue;
-      if (scope === 'type') { // '#': filter assets by type
-        if (e.kind !== 'asset') continue;
-        const sc = matchScore(q, e.type);
-        if (sc >= 0) scored.push([sc, e]);
+      if (scope === 'type') { // '#type query': filter assets by type, then search
+        if (e.kind !== 'asset' || (filterTok && matchScore(filterTok, e.type) < 0)) continue;
+        const sc = within(e); if (sc >= 0) scored.push([sc, e]);
         continue;
       }
-      if (!scope && e.kind === 'usage') continue; // usage only via '>'
+      if (scope === 'edge') { // '~kind query': filter edge-derived entries by kind, then search
+        if ((e.kind !== 'edge' && e.kind !== 'usage') || (filterTok && matchScore(filterTok, e.edgeKind || '') < 0)) continue;
+        const sc = within(e); if (sc >= 0) scored.push([sc, e]);
+        continue;
+      }
+      if (!scope && (e.kind === 'usage' || e.kind === 'edge')) continue; // usage via '>'/'~'; edge via '~'
       let sc = matchScore(q, e.label);
-      if (e.kind === 'asset') sc = Math.max(sc, matchScore(q, e.text)); // also full path
+      if (e.kind === 'asset' || e.kind === 'usage') sc = Math.max(sc, matchScore(q, e.text)); // also full path / component·property
       if (uuidish && e.kind === 'asset' && e.uuid.toLowerCase().includes(q)) sc = Math.max(sc, 900);
       if (sc < 0) continue;
       if (e.kind === 'frame') sc -= 0.5; // assets edge out frames on a tie
@@ -134,13 +158,13 @@ export function renderPalette(raw) {
   }
 
   S.paletteItems = items; S.paletteIdx = 0;
-  const tag = (e) => e.kind === 'frame' ? `<span class="ptag">${esc(t('palette.tagFrame'))}</span>`
-    : e.kind === 'usage' ? `<span class="ptag">${esc(t('palette.tagUsage'))}</span>` : '';
-  // Highlight matched chars (VSCode-style).
+  const TAGS = { frame: 'palette.tagFrame', usage: 'palette.tagUsage', edge: 'palette.tagEdge' };
+  const tag = (e) => TAGS[e.kind] ? `<span class="ptag">${esc(t(TAGS[e.kind]))}</span>` : '';
+  // Highlight matched chars (VSCode-style) using the search part.
   const hlOf = (e) => {
-    if (!q || scope === 'type') return { L: esc(e.label), S: esc(e.sub) };
+    if (!hlQ) return { L: esc(e.label), S: esc(e.sub) };
     if (e.kind === 'asset') {
-      const m = fuzzyMatch(q, e.text);
+      const m = fuzzyMatch(hlQ, e.text);
       if (!m) return { L: esc(e.label), S: esc(e.sub) };
       const dirLen = e.sub === '/' ? 0 : e.sub.length;
       return {
@@ -148,7 +172,7 @@ export function renderPalette(raw) {
         S: e.sub === '/' ? '/' : hlText(e.sub, m.pos.filter((p) => p < dirLen)),
       };
     }
-    const m = fuzzyMatch(q, e.label);
+    const m = fuzzyMatch(hlQ, e.label);
     return { L: m ? hlText(e.label, m.pos) : esc(e.label), S: esc(e.sub) };
   };
   const clo = (e) => { // ← 被依賴∑ (blast radius) · → 依賴∑ (bundle); a 0 side is omitted

@@ -14,7 +14,7 @@ const MESSAGES = {
     'empty.pickFirst': '先選擇專案目錄',
     'search.ph': '搜尋資產路徑…（或按 / 快速開啟）',
     'palette.ph': '搜尋檔名 / uuid…　(↑↓ 選擇 · Enter 開啟 · Esc 關閉)',
-    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> 型別　<b>&gt;</b> 用途/節點　·　貼 uuid 直接跳',
+    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> 型別　<b>&gt;</b> 用途/節點　<b>~</b> 邊種類　·　貼 uuid 直接跳',
     'welcome.tagline': '載入一個 <b>Cocos Creator 3.8.x</b> 專案，瀏覽資產的<b>使用情形</b>與<b>依賴拓撲</b>。<br>全程在瀏覽器端執行，<b>不會上傳任何檔案</b>。',
     'welcome.note': '需 Chrome / Edge（File System Access API）',
     'help.btn': '說明',
@@ -25,7 +25,7 @@ const MESSAGES = {
       + '<li><b>拓撲</b> — 以選中資產為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗。選一個節點會自動顯示它「用在哪」。</li>'
       + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資產體積、缺來源檔的 meta。</li></ul>'
       + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關枝。</p>'
-      + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 用途/節點；貼上 uuid 直接跳。</p>'
+      + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 用途/節點、<kbd>~</kbd> 邊種類；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
       + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁、<kbd>Esc</kbd> 清空類型篩選</li>'
       + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> 選擇專案目錄</li>'
       + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Delete</kbd> 回清單、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li></ul>',
@@ -64,6 +64,7 @@ const MESSAGES = {
     'palette.clo': '被依賴∑ {cin}（會牽連的） · 依賴∑ {cout}（會載入的）',
     'palette.tagFrame': '🖼 frame',
     'palette.tagUsage': '↪ 用途',
+    'palette.tagEdge': '↘ 邊',
     'palette.empty': '無符合',
     // 報告
     'rep.unused': '未使用 / 孤兒資源',
@@ -99,7 +100,7 @@ const MESSAGES = {
     'empty.pickFirst': 'Choose a project folder first',
     'search.ph': 'Search asset paths… (or press / to quick-open)',
     'palette.ph': 'Search name / uuid…  (↑↓ select · Enter open · Esc close)',
-    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> type　<b>&gt;</b> usage/node　·　paste a uuid to jump',
+    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> type　<b>&gt;</b> usage/node　<b>~</b> edge-kind　·　paste a uuid to jump',
     'welcome.tagline': 'Load a <b>Cocos Creator 3.8.x</b> project to explore asset <b>usage</b> and the <b>dependency topology</b>.<br>Everything runs in your browser — <b>no files are uploaded</b>.',
     'welcome.note': 'Requires Chrome / Edge (File System Access API)',
     'help.btn': 'Help',
@@ -110,7 +111,7 @@ const MESSAGES = {
       + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window. Selecting a node auto-shows where it is used.</li>'
       + '<li><b>Reports</b> — unused, orphan refs, atlas utilization, asset size, source-less metas.</li></ul>'
       + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports, and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
-      + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node; paste a uuid to jump.</p>'
+      + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node, <kbd>~</kbd> edge-kind; <kbd>#</kbd>/<kbd>~</kbd> are two-part (<code>#type query</code>, <code>~kind query</code>). Paste a uuid to jump.</p>'
       + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab, <kbd>Esc</kbd> clear type filter</li>'
       + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> choose project folder</li>'
       + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Delete</kbd> to list, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li></ul>',
@@ -144,6 +145,7 @@ const MESSAGES = {
     'palette.clo': 'Used-by∑ {cin} (affected) · Uses∑ {cout} (pulled in)',
     'palette.tagFrame': '🖼 frame',
     'palette.tagUsage': '↪ usage',
+    'palette.tagEdge': '↘ edge',
     'palette.empty': 'No match',
     'rep.unused': 'Unused / orphan assets',
     'rep.unusedSub': '{n} items · {size} (resources/ skipped)',
