@@ -19,7 +19,7 @@
 - **2.x 與 3.x 格式差很多**，必須以 3.x 為準重新驗證。
 
 ### 1.2 3.x 格式關鍵（用一個 3.8.x 樣本驗證）
-- png `.meta` importer `image`；子資產用短 id → `uuid@6c48a`(texture)、`uuid@f9941`(spriteFrame)。
+- png `.meta` importer `image`；子資源用短 id → `uuid@6c48a`(texture)、`uuid@f9941`(spriteFrame)。
 - plist `.meta` importer `sprite-atlas`；每張 frame `uuid@<id>`，`userData.imageUuidOrDatabaseUri` 連回底圖。
 - fnt `.meta` importer `bitmap-font`，`userData.textureUuid` 連 png。
 - Spine：skeleton `.json`(spine-data) + `.atlas`(importer `*`、可多頁) + png。
@@ -45,8 +45,8 @@ test/node-run.js                                          ← 無頭驗證器
 `FileProvider` 介面：`listFiles() / readText(path) / size(path)`，路徑相對 `assets/`。
 
 ### 2.2 解析模型
-- 掃所有 `.meta` → uuid 索引（含 `uuid@sub` 子資產）。
-- 走 prefab/scene/anim/mtl 的 JSON 找 `__uuid__`（資產邊）與 `__type__`（壓縮腳本 uuid）。
+- 掃所有 `.meta` → uuid 索引（含 `uuid@sub` 子資源）。
+- 走 prefab/scene/anim/mtl 的 JSON 找 `__uuid__`（資源邊）與 `__type__`（壓縮腳本 uuid）。
 - 從 meta 推導 atlas→png、font→png、spine 三件組。
 - 邊去重為 `(from, to, kind)`。
 
@@ -109,7 +109,7 @@ component 偵測最終用三個訊號：直接 `extends Component`、被 `__type
 ### 7.1 先用多 agent 研究可行性
 使用者要求前先做**可行性研究**（ultracode → 多 agent workflow，跑真實樣本專案）：
 - 核心鑰匙：scene/prefab 是扁平陣列、`{__id__:N}===arr[N]`；走訪 `__uuid__` 時順手記下 **(元件, 屬性路徑)**，元件的 `node.__id__` 沿 `_parent/_name` 走到根 → **節點路徑**。
-- 量化：239 個資產參照中 ~86% 是乾淨的 `元件.屬性`，~14% 是難解（prefab 實例 override 等），恰好 1 個無解（失效 fileId）。
+- 量化：239 個資源參照中 ~86% 是乾淨的 `元件.屬性`，~14% 是難解（prefab 實例 override 等），恰好 1 個無解（失效 fileId）。
 
 ### 7.2 Phase 1 實作
 - `refs.js extractContextRefs()` 擷取每個邊的 `locations:[{nodePath, component, property, subName}]`。
@@ -118,7 +118,7 @@ component 偵測最終用三個訊號：直接 `extends Component`、被 `__type
 ### 7.3 依回饋重設計 popup
 使用者覺得「全域使用清單」太雜。改成：
 - **只顯示拓撲當下這條關係**：選中項 ↔ 它在樹中的父項目那條邊的位置（由 `selectedKey` 切出父）。
-- 內容只留**位置細節**（樹上已看得到的資產名不重複）；元件本身的參照（property 為空）只顯示節點路徑。
+- 內容只留**位置細節**（樹上已看得到的資源名不重複）；元件本身的參照（property 為空）只顯示節點路徑。
 - 根/結構邊（如 plist→png 無節點位置）**自動隱藏**。
 - 拿掉 ⓘ 按鈕與 `i` 鍵 → **選中即自動出現**，位置算在選中格下方（不夠就翻上方）。
 - 修了巢狀 prefab：某 `Item.prefab` 在 `CommonPanel/bottom/node/control/node · cc.PrefabInfo.asset`。
@@ -142,7 +142,7 @@ component 偵測最終用三個訊號：直接 `extends Component`、被 `__type
 
 ## 10. 無頭 CLI（依賴查詢）
 
-核心既然 DOM-free 又能無頭跑,自然再包一層「能指名查詢、輸出可解析」的 CLI,讓人或 agent 直接問「某資產依賴誰 / 被誰依賴」,不必開瀏覽器。
+核心既然 DOM-free 又能無頭跑,自然再包一層「能指名查詢、輸出可解析」的 CLI,讓人或 agent 直接問「某資源依賴誰 / 被誰依賴」,不必開瀏覽器。
 
 ### 10.1 設計探索（依回饋收斂）
 
@@ -198,17 +198,17 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 `src/cli.js` 加 `--type T[,T2]`：`deps`/`uses` 樹做同樣的「保留通往該型別中間路徑」剪枝（重構為 `buildEdgeTree → pruneByType → renderTreeText`，**未帶 `--type` 時輸出逐字不變**，由測試鎖住）；`closure`/`find`/`--json` 過濾平面清單。
 
 ### 11.3 清單閉包欄 + 報告目錄欄 + 小修
-- 清單加 `被依賴∑`(`dependentClosure`＝影響範圍) / `依賴∑`(`dependencyClosure`＝打包量) 兩欄**傳遞閉包**，`setScan` 一次算完（~0ms/500 資產），樣式較直接 in/out 淡。
+- 清單加 `被依賴∑`(`dependentClosure`＝影響範圍) / `依賴∑`(`dependencyClosure`＝打包量) 兩欄**傳遞閉包**，`setScan` 一次算完（~0ms/500 資源），樣式較直接 in/out 淡。
 - 報告每列加**目錄欄**；sticky 表頭被「捲動容器上 padding」頂出一條縫、讓資料列從表頭上方漏出——拿掉容器上 padding 修掉。
 - **圖集利用率只算 `type='atlas'`**（sprite-atlas .plist），排除像 `decal.png` 這種 meta 帶 2 個 sprite-frame 的純 png。
 
-### 11.4 缺來源檔的 meta（已刪資產的殘留 meta）
-- 來源被刪、只剩 `.meta` 的資產**不索引**（比照資料夾 meta）。驗證移除後 **0 個新孤兒**：被引用者全走有守門的衍生 texture 邊，乾淨消失。
+### 11.4 缺來源檔的 meta（已刪資源的殘留 meta）
+- 來源被刪、只剩 `.meta` 的資源**不索引**（比照資料夾 meta）。驗證移除後 **0 個新孤兒**：被引用者全走有守門的衍生 texture 邊，乾淨消失。
 - 記 `scan.missing`（uuid+子 uuid → path），讓仍被 prefab/scene 以 `__uuid__` 引用者浮現為**具名「缺來源檔」孤兒**（不是裸 uuid）；UI 紅標、CLI 印路徑、`--json` 加 `path/missingSource`。
-- 報告加**摺疊「缺來源檔的 meta（已略過）」審計區**（`droppedMetaReport`）：列出全部、標「仍被引用（斷線要修）/ 無人引用（殘留可刪）」。精準度靠 `scan.missingReferenced`——在**所有指向資產的點**（`resolveUuid` + atlas/font 衍生邊 + 路徑型 spine via `missingByPath`）記錄，才抓得到「活著的 `.atlas` 仍列出一張已刪 page」這種只看 JSON 會漏的案例。
+- 報告加**摺疊「缺來源檔的 meta（已略過）」審計區**（`droppedMetaReport`）：列出全部、標「仍被引用（斷線要修）/ 無人引用（殘留可刪）」。精準度靠 `scan.missingReferenced`——在**所有指向資源的點**（`resolveUuid` + atlas/font 衍生邊 + 路徑型 spine via `missingByPath`）記錄，才抓得到「活著的 `.atlas` 仍列出一張已刪 page」這種只看 JSON 會漏的案例。
 
 ### 11.5 `/` 快速搜尋大升級
-從「只比對檔名」變成**多來源模糊搜尋**：`buildSearchIndex` 攤平 asset／frame（sprite-frame 名）／usage（edge.locations）三種，每筆 `target` 都是真實資產 uuid。比對改子序列模糊（`matchScore`：精確>前綴>子字串>子序列），**命中字 VSCode 式高亮**（`fuzzyMatch` 回位置、標所有出現處，所以 `prefab` 連檔名與資料夾一起亮）。範圍前綴 `@`frame `#`type `>`usage、貼 uuid 直跳；每筆右欄顯示 `←被依賴∑ →依賴∑`（0 不畫）；打字回捲到頂。
+從「只比對檔名」變成**多來源模糊搜尋**：`buildSearchIndex` 攤平 asset／frame（sprite-frame 名）／usage（edge.locations）三種，每筆 `target` 都是真實資源 uuid。比對改子序列模糊（`matchScore`：精確>前綴>子字串>子序列），**命中字 VSCode 式高亮**（`fuzzyMatch` 回位置、標所有出現處，所以 `prefab` 連檔名與資料夾一起亮）。範圍前綴 `@`frame `#`type `>`usage、貼 uuid 直跳；每筆右欄顯示 `←被依賴∑ →依賴∑`（0 不畫）；打字回捲到頂。
 
 ### 11.6 命名 **Coir** + 發佈
 - 取名：`Cocos` 本就是椰子屬，依賴樹⇄椰子樹的雙關 →「Coir（椰殼纖維）」。改 `package.json`/`bin`(`cag`→`coir`)/`localStorage`/`<title>`/docs；目錄 `assets-graph`→`coir`（給使用者一支 `rename-to-coir.sh`，順帶搬 `.claude` 記憶）。
@@ -222,7 +222,7 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - 拓撲欄頭改符號 `←層N`/`→層N`＋層0 染色（避免與 palette 的 `←數量` 撞義）；usage popup 右上角加複製鈕。
 
 ### 11.8 外掛化（型別＋邊可擴充）
-動機：讓別人容易加新資產型別與新邊，而不必動 `scan.js` 核心。把原本 inline 的 meta 衍生邊（atlas/font/particle/spine 三件組）抽成 `src/core/plugins/` 下**一型一檔**的 plugin（每個檔同時帶該型別的 `importerTypes`/`typeByExt`、`edges(ctx)`、`colors`），`index.js` 匯出 `BUILTIN_PLUGINS`／`PLUGINS`（內建即全部，外部 plugin 由呼叫端組合）。
+動機：讓別人容易加新資源型別與新邊，而不必動 `scan.js` 核心。把原本 inline 的 meta 衍生邊（atlas/font/particle/spine 三件組）抽成 `src/core/plugins/` 下**一型一檔**的 plugin（每個檔同時帶該型別的 `importerTypes`/`typeByExt`、`edges(ctx)`、`colors`），`index.js` 匯出 `BUILTIN_PLUGINS`／`PLUGINS`（內建即全部，外部 plugin 由呼叫端組合）。
 
 - **介面**：plugin 是純物件 `{ name, importerTypes?, typeByExt?, jsonSourceExts?, rootTypes?, colors?, messages?, edges(ctx)? }`；`edges` **只用 `ctx`**（index＋`addEdge`/`resolveUuid`／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），不 import 任何東西 → 第三方 plugin 零 build step。
 - **接線**：`scanProject(fp,{plugins=PLUGINS})` 預設吃 registry，所以 **CLI／node-run／瀏覽器同一套**；`meta.js` 改 `buildTypeResolver(plugins)`＋`knownTypes(plugins)`（移除靜態 `KNOWN_TYPES`/`normalizeType`，baseline `IMPORTER_TYPE` 不含 atlas/font/particle/spine——那些回到各自 plugin）；`analyze.js` 的 root 型別 union `scan.rootTypes`；`ui.js` 把 plugin `colors` 併進 `TYPE_COLOR`、`messages` 經新增的 `registerMessages` 併進 i18n（皆在 `setScan` 首次繪製前）。
@@ -245,16 +245,27 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 
 **一輪 code review 修掉的**:`−`/`+` 加 modifier 守門(不攔 `Cmd/Ctrl±` 縮放)、CLI `--plugin` 加 `!startsWith('-')` 守門(不吞後面旗標)、`Esc` 加 typing 判斷(打字中不清篩選)。
 
+### 11.11 拓撲／快速搜尋虛擬化 + 拓撲內找尋
+項目一多時拓撲會卡——`renderTopo` 只用 `inWin` 限制**欄**（固定 5 欄），不限制**列**：被幾百個 prefab 依賴的 texture，那一欄就吐幾百個 cell 進 DOM。改成**垂直虛擬化**（列高固定 30px，數學精確）：
+
+- `topo.js` 把「建樹」與「畫」拆開——`buildSide` 只在換中心／選取／篩選時跑一次、快取進 `S.topo`；捲動時只 `paintTopo()` 重畫**視窗內的列**（rAF 節流），底部一個 spacer 撐住總捲動高度，DOM 永遠約一個螢幕的 cell。cell 點擊改**事件委派**；←→ 導覽與置中改用 cell **資料**（row）計算，不再靠 DOM rect（離畫面的 cell 已不在 DOM）。
+- **自適應 padding**：原本固定 `padding-block:45vh`，小圖會浮在一大片空白裡。改成 JS 設 `視窗高/2 − 列高/2`——每一列都能捲到視窗正中、短樹也置中且不留多餘空捲區，resize 時 `reflowTopo` 重新貼合。
+- `/` 快速搜尋同款虛擬化（列高 32px、委派、spacer），順手**拿掉 100 筆上限**，所有命中都捲得到。
+- **拓撲內 `Ctrl/⌘+F` 找尋**：虛擬化後捲出畫面的節點不在 DOM、原生 Ctrl+F 找不到 → 自製找尋搜 cell **資料**（顯示中欄位的全部 cell，含中心），命中**琥珀色高亮**、`Enter`/`⇧Enter` 上下個、`Esc` 關，**只垂直捲到該節點**（不改中心、不重建樹，所以 matches 不會跑掉）。找尋列是 `#topo` 的兄弟節點，`renderTopo` 重寫 innerHTML 不會把它清掉。
+
+### 11.12 CI build + GitHub Pages 部署（dist 不再進 repo）
+原本 Pages 直接從 `main`/root 服務整個 repo，所以 `dist/app.bundle.js` 必須 commit（也順帶把 `src/`、`test/` 都公開了）。改用 **GitHub Actions** 當 Pages 來源：`.github/workflows/deploy.yml` 在 push 到 main 時 `npm ci` → typecheck → test → build，再發佈一份**精準的**靜態站（`index.html` + `dist/` + `img/coir-topology.png` + robots/sitemap，**不含 `.md`**）。於是 **`dist/` 改為 gitignore、`git rm --cached` 移出 repo**——純建置產物，CI 每次自己重 build。同時把截圖從 `docs/` 搬到 `img/`（`docs/` 只留 markdown，發佈時不再連同 `.md` 一起 cp，900K 的 README-only 編輯器截圖也不發佈），og:image 與 README 連結改指 `img/`。
+
 ---
 
 ## 12. 最終狀態
 
-- **形式**：純前端（HTML+JS，無第三方執行期庫，~40KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT）。
+- **形式**：純前端（HTML+JS，無第三方執行期庫，~60KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT，由 **GitHub Actions** 自動 build＋部署，`dist/` 不進 repo）。
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
-- **三分頁 + 全域型別篩選 bar**：清單（可排序資產表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
+- **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**＋`Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**103 個案例**：CLI 97 + MCP 6，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
-- **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資產>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
+- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**106 個案例**：CLI 98 + MCP 6 + 外掛虛擬節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
 
 > 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。
 

@@ -12,26 +12,26 @@ const MESSAGES = {
     'tab.topo': '拓撲',
     'tab.reports': '報告',
     'empty.pickFirst': '先選擇專案目錄',
-    'search.ph': '搜尋資產路徑…（或按 / 快速開啟）',
+    'search.ph': '搜尋資源路徑…（或按 / 快速開啟）',
     'palette.ph': '搜尋檔名 / uuid…　(↑↓ 選擇 · Enter 開啟 · Esc 關閉)',
-    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> 型別　<b>&gt;</b> 用途/節點　<b>~</b> 邊種類　·　貼 uuid 直接跳',
-    'welcome.tagline': '載入一個 <b>Cocos Creator 3.8.x</b> 專案，瀏覽資產的<b>使用情形</b>與<b>依賴拓撲</b>。<br>全程在瀏覽器端執行，<b>不會上傳任何檔案</b>。',
+    'palette.hint': '<b>@</b> sprite-frame　<b>#</b> 型別　<b>&gt;</b> 引用處/節點　<b>~</b> 邊種類　·　貼 uuid 直接跳',
+    'welcome.tagline': '載入一個 <b>Cocos Creator 3.8.x</b> 專案，瀏覽資源的<b>使用情形</b>與<b>依賴拓撲</b>。<br>全程在瀏覽器端執行，<b>不會上傳任何檔案</b>。',
     'welcome.note': '需 Chrome / Edge（File System Access API）',
     'help.btn': '說明',
     'help.title': '說明',
     'help.close': '關閉',
-    'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資產的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
-      + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資產表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為拓撲中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
-      + '<li><b>拓撲</b> — 以選中資產為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗。選一個節點會自動顯示它「用在哪」。</li>'
-      + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資產體積、缺來源檔的 meta。</li></ul>'
-      + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關枝。</p>'
-      + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 用途/節點、<kbd>~</kbd> 邊種類（單打 <kbd>~</kbd> 列出可選種類）；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
+    'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資源的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
+      + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資源表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為拓撲中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
+      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗。選一個節點會自動顯示它「用在哪」。</li>'
+      + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資源體積、缺來源檔的 meta。</li></ul>'
+      + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關的分支。</p>'
+      + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 引用處/節點、<kbd>~</kbd> 邊種類（單打 <kbd>~</kbd> 列出可選種類）；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
       + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁、<kbd>Esc</kbd> 清空類型篩選</li>'
       + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> 選擇專案目錄</li>'
-      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Delete</kbd> 回清單、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li></ul>',
+      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Delete</kbd> 回清單、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> 在此拓撲中尋找、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li></ul>',
     'help.github': '在 GitHub 上查看 ↗',
     // banner / status
-    'stats': '{assets} 資產 · {edges} 邊 · {orphans} 孤兒參照',
+    'stats': '{assets} 資源 · {edges} 邊 · {orphans} 孤兒參照',
     'err.noFsApi': '此瀏覽器不支援 File System Access API — 請用 Chrome / Edge，並透過 http://localhost 開啟',
     'status.reading': '讀取目錄…',
     'status.scanning': '掃描 {n} 個檔案…',
@@ -44,16 +44,22 @@ const MESSAGES = {
     // 清單 columns
     'col.base': '名稱', 'col.dir': '目錄', 'col.type': '類型', 'col.size': '大小',
     'col.in': '被依賴', 'col.cin': '被依賴∑', 'col.out': '依賴', 'col.cout': '依賴∑',
-    'col.in.t': '直接被引用的資產數',
-    'col.cin.t': '被依賴閉包：直接或間接會被牽連的資產總數',
-    'col.out.t': '直接依賴的資產數',
-    'col.cout.t': '依賴閉包：載入時會傳遞拉進來的資產總數',
+    'col.in.t': '直接被引用的資源數',
+    'col.cin.t': '被依賴閉包：直接或間接會被牽連的資源總數',
+    'col.out.t': '直接依賴的資源數',
+    'col.cout.t': '依賴閉包：載入時會連帶拉進來的資源總數',
     'list.count': '{n} 項',
     'list.cap': '（顯示前 {cap}）',
     // 拓撲
-    'topo.hint': '從「清單」選一個資產，或按 / 搜尋，作為中心。',
+    'topo.hint': '從「清單」選一個資源，或按 / 搜尋，作為中心。',
     'topo.layer': '層',
     'topo.copyPath': '複製完整路徑',
+    'topo.findPh': '在目前拓撲中尋找節點…',
+    'topo.findCount': '{cur}/{total}',
+    'topo.findNone': '無相符',
+    'topo.findPrev': '上一個 (⇧Enter)',
+    'topo.findNext': '下一個 (Enter)',
+    'topo.findClose': '關閉 (Esc)',
     'usage.header': '在 {file} 內 · {n} 處',
     'usage.root': '(根節點)',
     'usage.copyTitle': '複製全部到剪貼簿',
@@ -61,11 +67,11 @@ const MESSAGES = {
     'usage.copied': '已複製使用位置',
     'copy.named': '已複製：{name}',
     // palette
-    'palette.clo': '被依賴∑ {cin}（會牽連的） · 依賴∑ {cout}（會載入的）',
+    'palette.clo': '被依賴∑ {cin}（會受牽連） · 依賴∑ {cout}（會被拉進）',
     'palette.tagFrame': '🖼 frame',
-    'palette.tagUsage': '↪ 用途',
+    'palette.tagUsage': '↪ 引用處',
     'palette.tagEdge': '↘ 邊',
-    'palette.empty': '無符合',
+    'palette.empty': '無相符',
     // 報告
     'rep.unused': '未使用 / 孤兒資源',
     'rep.unusedSub': '{n} 項 · {size}（resources/ 已略過）',
@@ -74,7 +80,7 @@ const MESSAGES = {
     'rep.orphanMissing': '· {n} 個缺來源檔',
     'rep.atlas': '圖集利用率',
     'rep.atlasSub': '{n} 個圖集',
-    'rep.size': '資產體積',
+    'rep.size': '資源體積',
     'rep.dropped': '缺來源檔的 meta（已略過）',
     'rep.droppedSub': '{n} 個',
     'rep.droppedRefd': '{n} 個仍被引用',
@@ -84,7 +90,7 @@ const MESSAGES = {
     'rep.sources': '{n} 來源',
     'orphan.missingTitle': '{ref} · 被 {count} 處引用，但來源檔已不存在',
     'tag.missingSrc': '缺來源檔',
-    'tag.unrefd': '未被參照',
+    'tag.unrefd': '未被引用',
     'tag.whole': '整圖動態取用',
     'tag.stillRef': '仍被引用',
     'tag.noRef': '無人引用',
@@ -114,7 +120,7 @@ const MESSAGES = {
       + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node, <kbd>~</kbd> edge-kind (type <kbd>~</kbd> to list them); <kbd>#</kbd>/<kbd>~</kbd> are two-part (<code>#type query</code>, <code>~kind query</code>). Paste a uuid to jump.</p>'
       + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab, <kbd>Esc</kbd> clear type filter</li>'
       + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> choose project folder</li>'
-      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Delete</kbd> to list, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li></ul>',
+      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Delete</kbd> to list, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> find in this topology, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li></ul>',
     'help.github': 'View on GitHub ↗',
     'stats': '{assets} assets · {edges} edges · {orphans} orphan refs',
     'err.noFsApi': 'This browser lacks the File System Access API — use Chrome / Edge over http://localhost',
@@ -136,6 +142,12 @@ const MESSAGES = {
     'topo.hint': 'Pick an asset in the List, or press / to search, as the centre.',
     'topo.layer': 'L',
     'topo.copyPath': 'Copy full path',
+    'topo.findPh': 'Find a node in this topology…',
+    'topo.findCount': '{cur}/{total}',
+    'topo.findNone': 'No matches',
+    'topo.findPrev': 'Previous (⇧Enter)',
+    'topo.findNext': 'Next (Enter)',
+    'topo.findClose': 'Close (Esc)',
     'usage.header': 'in {file} · {n} sites',
     'usage.root': '(root node)',
     'usage.copyTitle': 'Copy all to clipboard',

@@ -146,11 +146,21 @@
   .th.center { justify-content:center; background:rgba(79,195,247,.12); box-shadow:inset 0 -2px 0 var(--acc); }
   .th .thc { color:var(--fg); background:var(--panel2); border-radius:8px; padding:0 6px; }
   .treebody { flex:1; overflow:auto; min-height:0; }
+  #topoFind { position:absolute; top:8px; right:14px; z-index:30; display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:5px 8px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #topoFind[hidden] { display:none; }
+  #topoFindInput { background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--fg); font-size:12px; padding:4px 8px; width:210px; outline:none; }
+  #topoFindInput:focus { border-color:var(--acc); }
+  #topoFindInput.nomatch { border-color:#e57373; }
+  #topoFind .tf-count { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; min-width:42px; text-align:center; }
+  #topoFind .tf-btn { background:transparent; border:0; color:var(--mut); cursor:pointer; font-size:12px; padding:2px 5px; border-radius:4px; line-height:1; }
+  #topoFind .tf-btn:hover { background:var(--panel); color:var(--fg); }
   .tree { display:grid; grid-template-columns:repeat(5,1fr); grid-auto-rows:30px; align-content:start; padding-block:0; /* padding-block set adaptively in JS (renderTopo): viewport/2 − row/2 */
           background-image:linear-gradient(to right, var(--line) 1px, transparent 1px); background-size:20% 100%; }
   .cell { display:flex; align-items:center; gap:5px; padding:0 10px; border-bottom:1px solid #1a2029; cursor:pointer; overflow:hidden; }
   .cell:hover { background:var(--panel2); }
   .cell.sel { background:#243042; box-shadow:inset 2px 0 0 var(--acc); }
+  .cell.find-hit { box-shadow:inset 0 0 0 1px #ffb74d; }                                  /* a find match (amber, distinct from blue selection) */
+  .cell.find-cur { background:rgba(255,183,77,.20); box-shadow:inset 0 0 0 2px #ffb74d; } /* the current find match */
   .cell.root { background:#26303d; border:1px solid var(--acc); border-radius:5px; justify-content:center; font-weight:600; }
   .cell.root.sel { box-shadow:0 0 0 2px var(--acc); }
   .cell.left { flex-direction:row-reverse; text-align:right; }
@@ -221,6 +231,13 @@
   </section>
   <section id="tab-topo" class="tab" hidden>
     <div id="topo"><div class="colhint" data-i18n="topo.hint">從「清單」選一個資產，或按 / 搜尋，作為中心。</div></div>
+    <div id="topoFind" hidden>
+      <input id="topoFindInput" type="text" data-i18n-ph="topo.findPh" placeholder="在拓撲中尋找節點…" spellcheck="false" autocomplete="off">
+      <span id="topoFindCount" class="tf-count"></span>
+      <button id="topoFindPrev" class="tf-btn" type="button" data-i18n-title="topo.findPrev" title="上一個 (⇧Enter)">▲</button>
+      <button id="topoFindNext" class="tf-btn" type="button" data-i18n-title="topo.findNext" title="下一個 (Enter)">▼</button>
+      <button id="topoFindClose" class="tf-btn" type="button" data-i18n-title="topo.findClose" title="關閉 (Esc)">✕</button>
+    </div>
   </section>
   <section id="tab-reports" class="tab" hidden>
     <div id="reports"><div class="empty" data-i18n="empty.pickFirst">先選擇專案目錄</div></div>

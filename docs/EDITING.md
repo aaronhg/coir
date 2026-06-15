@@ -42,7 +42,7 @@
 **統一索引規則**:`[i]` 是 **0-based、陣列順序**的「相對」索引,出現在三個位置且語義一致——同名節點(leaf)、同型元件、陣列元素;`#N` 是**絕對陣列索引逃生口**(跳過所有比對,直接 `arr[N]`,可帶 `.prop`)。`prop[i]` 在 `setDeep` 正規化成 `prop.i`,故 `[i]` 與 `.i` 兩種寫法皆可。
 
 **幾個解析規則:**
-- **分隔符 `:`**(非 `@`):`@` 保留給 `uuid@sub`(子資產);選擇器用 `:` 表「節點的元件」,語義不重疊。
+- **分隔符 `:`**(非 `@`):`@` 保留給 `uuid@sub`(子資源);選擇器用 `:` 表「節點的元件」,語義不重疊。
 - **型別 `.` 與屬性 `.` 用白名單消歧**:`cc.Label` 自帶命名空間點,會跟屬性點相撞。解析時拿 scan 已知「該節點實際掛了哪些元件 `__type__`」當白名單,對 `:` 之後做**最長比對**(`cc.Label` 命中即型別,剩下 `_string` 即屬性)。自訂腳本以解壓 `__type__` 後的類名進白名單。
 - **完整路徑優先**:先試 nodePath 字面完全匹配(節點若真叫 `Slot[0]` 能選到),再退回剝尾端 `[i]`。
 - 解析不唯一 → **exit 2** 列候選。
@@ -59,7 +59,7 @@
 | `--bool <true\|false>` | 布林 | `--bool false` |
 | `--color #RRGGBB[AA]` 或 `--color r g b a` | `cc.Color`(非法 hex → 報錯) | `--color #ff0000ff` |
 | `--vec2/--vec3/--vec4 …` / `--size w h` / `--quat …` | 對應 `cc.*` 包裝型別 | `--vec3 0 0 1` |
-| `--uuid <asset>` | `{__uuid__:…}`(經 `resolveAsset`;沒給資產 → 報錯) | `--uuid icons/coin.png` |
+| `--uuid <asset>` | `{__uuid__:…}`(經 `resolveAsset`;沒給資源 → 報錯) | `--uuid icons/coin.png` |
 | `--null` | `null`(清除) | |
 | `--json '<json>'` | 整顆物件/陣列/值;`__type__` 若是**類名**自動轉壓縮 token(builtin / 已壓縮 passthrough;未知類名 → 報錯) | `--json '{"__type__":"SpriteConfig","frameName":"x"}'` |
 
@@ -76,7 +76,7 @@
 
 共用旗標:`--dry-run`(只定位不寫)・`--backup`(寫前存 `.bak`)・`-o json`(結構化輸出;預設 text)。
 
-### Tier 0 — 資產引用層(文字補丁、最小 diff、版本無關)
+### Tier 0 — 資源引用層(文字補丁、最小 diff、版本無關)
 | 指令 | 作用 |
 |---|---|
 | `swap-uuid <oldAsset> <newAsset>` | 全檔重指引用 A→B(含 `A@sub`→`B@sub`;`old===new` 為 no-op) |
@@ -91,9 +91,9 @@
 ### Tier 1 — 屬性值層(parse-rewrite)
 | 指令 | 作用 |
 |---|---|
-| `get <sel>` | **唯讀** —— 讀某 selector 的值/節點/元件。`-o json` 印原始值(可直接餵回 `set --json`);text 形式會把 `{__uuid__}` 標出資產路徑、把壓縮 `__type__` 標出類名 |
+| `get <sel>` | **唯讀** —— 讀某 selector 的值/節點/元件。`-o json` 印原始值(可直接餵回 `set --json`);text 形式會把 `{__uuid__}` 標出資源路徑、把壓縮 `__type__` 標出類名 |
 | `set <sel:Type.prop> <值旗標>` | 改基本值 / enum / 包裝型別 / `--json` 自訂物件 |
-| `set-uuid <sel:Type.prop> <asset>` | 把某屬性指到某資產(清除用 `set … --null`) |
+| `set-uuid <sel:Type.prop> <asset>` | 把某屬性指到某資源(清除用 `set … --null`) |
 
 > `get`/`set` 是讀寫對:`coir edit X.prefab get "A:Comp._cfg" -o json` 拿到的物件,改完可用 `set "A:Comp._cfg" --json '<那串>'` 寫回(壓縮 `__type__` passthrough,閉環)。
 
@@ -120,7 +120,7 @@
 ### 專案級(`--all`)
 | 指令 | 作用 |
 |---|---|
-| `edit --all swap-uuid <oldAsset> <newAsset>` | 把**所有** prefab/scene 對某資產的引用重指(僅 prefab/scene;無法解析的檔會警告不靜默) |
+| `edit --all swap-uuid <oldAsset> <newAsset>` | 把**所有** prefab/scene 對某資源的引用重指(僅 prefab/scene;無法解析的檔會警告不靜默) |
 
 `--all` 只支援 `swap-uuid`(uuid-keyed 才能跨檔通用);selector-based op 配 `--all` 直接報錯。
 
@@ -128,11 +128,11 @@
 
 | 編輯種類 | 模式 | diff |
 |---|---|---|
-| `swap-uuid`(含 `--all`):純資產重指 | **文字外科補丁**(引號定錨字串替換) | 最小,不重排不重序列化 |
+| `swap-uuid`(含 `--all`):純資源重指 | **文字外科補丁**(引號定錨字串替換) | 最小,不重排不重序列化 |
 | 其餘全部(`set`/節點 op/結構增刪) | **parse → 改陣列 → `JSON.stringify(…,2)`**(+ 結構 op 做索引壓縮) | 動到值/拓撲,整體重序列化 |
 
 ### 文字補丁(swap-uuid)
-`"<old>"`→`"<new>"` 與 `"<old>@`→`"<new>@`(子資產 sub-id 不動)。完整 uuid 在 prefab 裡只出現在 `__uuid__` 值(壓縮 `__type__` 是不同字串,碰不到),所以引號定錨安全。
+`"<old>"`→`"<new>"` 與 `"<old>@`→`"<new>@`(子資源 sub-id 不動)。完整 uuid 在 prefab 裡只出現在 `__uuid__` 值(壓縮 `__type__` 是不同字串,碰不到),所以引號定錨安全。
 
 ### 索引壓縮(rm 的核心,`removeEntries`)
 ```
@@ -150,7 +150,7 @@ keep = arr 過濾掉 set;remapIds:每個 {__id__:N} → oldToNew[N]
 - `--dry-run`:寫前預覽(印 locations / 將寫入值)。
 - **格式檢查**:`loadDoc` 確認是 3.x array-of-objects(擋 2.x `.fire`、非陣列)。
 - **selector 唯一解析**:歧義 → exit 2 列候選。
-- **值型別檢查**:節點 op 收錯型別旗標、`--color` 非法 hex、`--uuid` 缺資產、`--json` 未知類名 → 全部報錯**不寫檔**。
+- **值型別檢查**:節點 op 收錯型別旗標、`--color` 非法 hex、`--uuid` 缺資源、`--json` 未知類名 → 全部報錯**不寫檔**。
 - **巢狀 prefab 實例護欄**:selector op 偵測目標(`assertEditable`)、`rm-node` 偵測**整個子樹**(`subtreeHasInstance`)有沒有 `PrefabInfo.instance ≠ null`,有就擋下並指路(去 source prefab 改)。`swap-uuid` 不受限(純重指,任何位置都安全)。
 - **寫**:原子寫(temp → rename);`--backup` 存 `<file>.bak`。
 - **rm-component 防呆**:只接受有 `node` back-ref 的真元件,`#N` 指到 PrefabInfo/CompPrefabInfo/ClickEvent 會被擋。
@@ -208,7 +208,7 @@ coir edit Shop.prefab tree                                  # 縮排階層 + #in
 coir edit Shop.prefab tree --with cc.Label -o json          # 只列 Label 節點,附現成 selector
 coir edit Shop.prefab tree --under "Canvas/Panel" --depth 2 # 限子樹 + 層數
 
-# Tier0:把某資產的引用換成另一個(單檔 / 全專案)
+# Tier0:把某資源的引用換成另一個(單檔 / 全專案)
 coir edit Shop.prefab swap-uuid old/coin.png new/coin.png --dry-run
 coir edit --all swap-uuid old/coin.png new/coin.png --backup
 

@@ -9,6 +9,18 @@ import { setTab } from './ui.js';
 import { showUsage, positionUsage } from './usage.js';
 import { copyToClipboard } from './copy.js';
 
+// ---- in-topo find (Ctrl/⌘+F) state ----------------------------------------
+// Virtualization keeps off-screen cells out of the DOM, so the browser's native
+// find can't see them. This searches the tree's cell DATA instead and scrolls /
+// highlights matches. (Scope: cells in the shown columns — what you can reach by
+// scrolling; deeper nodes are a re-centre via "/".)
+let findActive = false;
+let findMatches = [];    // [{ key, row, off }] over the current tree, sorted for next/prev
+let findIdx = -1;
+let findSet = new Set();  // match keys, for the cell-highlight lookup
+let findCurKey = null;    // the current match's key (stronger highlight)
+function findClass(key) { return key === findCurKey ? ' find-cur' : findSet.has(key) ? ' find-hit' : ''; }
+
 // A node's neighbours (the topology shows the TRUE structure; the 清單 type
 // badges filter only the list, not the tree).
 function neighborsOf(uuid, dir) {
@@ -133,7 +145,7 @@ function cellHtml(c, col) {
   const a = S.scan.assets.get(c.uuid);
   const sym = c.cycle ? '↻' : c.hasKids ? (c.side === 'L' ? '◂' : '▸') : '';
   const dh = c.dir ? `<span class="cdh" style="opacity:.5;margin-left:.35em;font-size:.82em">${esc(c.dir)}</span>` : '';
-  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${c.key === S.selectedKey ? ' sel' : ''}"` +
+  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${c.key === S.selectedKey ? ' sel' : ''}${findClass(c.key)}"` +
     ` data-key="${esc(c.key)}" data-uuid="${c.uuid}" data-side="${c.side}"` +
     ` title="${esc(a ? a.path : c.uuid)}" style="grid-column:${col};grid-row:${c.row + 1}">` +
     `<span class="tw">${sym}</span><span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span>` +
@@ -160,7 +172,7 @@ function setAdaptivePad(tb) {
 // The layer-0 (centre) cell — always row 0.
 function rootCellHtml(col) {
   const a = S.scan.assets.get(S.treeRoot);
-  return `<div class="cell root${S.selectedKey === S.treeRoot ? ' sel' : ''}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
+  return `<div class="cell root${S.selectedKey === S.treeRoot ? ' sel' : ''}${findClass(S.treeRoot)}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
     ` title="${esc(a ? a.path : S.treeRoot)}" style="grid-column:${col};grid-row:1">` +
     `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : S.treeRoot)}</span>` +
     (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
@@ -220,6 +232,7 @@ export function renderTopo() {
   tb.onscroll = () => { if (paintScheduled) return; paintScheduled = true; requestAnimationFrame(() => { paintScheduled = false; paintTopo(); }); };
 
   setAdaptivePad(tb); // size the padding to this viewport BEFORE painting (paint/centre read it)
+  if (findActive) { computeFindMatches($('topoFindInput').value); pickFindIdx(); updateFindCount(); } // rebuild ⇒ refresh highlights (no scroll yank; centreSelected drives scroll)
   paintTopo();        // first paint (at scrollTop 0) — its spacer establishes the full scroll height…
   centerSelected(tb); // …so this scroll-to-centre isn't clamped to an empty .tree, then…
   paintTopo();        // …repaint for the centred position
@@ -234,6 +247,83 @@ export function reflowTopo() {
   centerSelected(tb);
   paintTopo();
 }
+
+// ---- in-topo find (Ctrl/⌘+F) ----------------------------------------------
+export function openTopoFind() {
+  if (!S.treeRoot) return;
+  findActive = true;
+  $('topoFind').hidden = false;
+  const inp = $('topoFindInput');
+  inp.focus(); inp.select();
+  runTopoFind(); // re-run any retained query
+}
+export function closeTopoFind() {
+  if (!findActive) return;
+  findActive = false; findMatches = []; findIdx = -1; findSet = new Set(); findCurKey = null;
+  $('topoFind').hidden = true;
+  if (S.topo) paintTopo(); // drop the highlights
+}
+// Gather matches over the current tree (shown columns only — those are reachable
+// by scrolling; the root counts as row 0).
+function computeFindMatches(raw) {
+  findMatches = []; findSet = new Set();
+  const q = (raw || '').trim().toLowerCase();
+  if (!q || !S.topo) return;
+  const { left, right, lo, hi } = S.topo;
+  const inWin = (off) => off >= lo && off <= hi;
+  const add = (key, uuid, row, off) => {
+    if (!inWin(off)) return;
+    const a = S.scan.assets.get(uuid);
+    if ((a ? a.path : uuid).toLowerCase().includes(q)) { findMatches.push({ key, row, off }); findSet.add(key); }
+  };
+  add(S.treeRoot, S.treeRoot, 0, 0);
+  for (const c of left) add(c.key, c.uuid, c.row, -c.depth);
+  for (const c of right) add(c.key, c.uuid, c.row, c.depth);
+  findMatches.sort((a, b) => a.row - b.row || a.off - b.off);
+}
+// After (re)computing matches, keep the same match selected if it survives, else
+// fall back to the one nearest the viewport centre.
+function pickFindIdx() {
+  if (!findMatches.length) { findIdx = -1; findCurKey = null; return; }
+  let i = findCurKey ? findMatches.findIndex((m) => m.key === findCurKey) : -1;
+  if (i < 0) i = nearestMatchIdx();
+  findIdx = i; findCurKey = findMatches[i].key;
+}
+function nearestMatchIdx() {
+  const tb = $('topo').querySelector('.treebody');
+  if (!tb || !findMatches.length) return 0;
+  const padTop = parseFloat(getComputedStyle(tb.querySelector('.tree')).paddingTop) || 0;
+  const centerRow = (tb.scrollTop + tb.clientHeight / 2 - padTop) / ROW_H;
+  let best = 0, bd = Infinity;
+  findMatches.forEach((m, i) => { const d = Math.abs(m.row - centerRow); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+function updateFindCount() {
+  const el = $('topoFindCount'); if (!el) return;
+  const typed = !!$('topoFindInput').value.trim();
+  el.textContent = findMatches.length ? t('topo.findCount', { cur: findIdx + 1, total: findMatches.length }) : (typed ? t('topo.findNone') : '');
+  $('topoFindInput').classList.toggle('nomatch', typed && !findMatches.length);
+}
+function jumpToCurrent() {
+  const m = findMatches[findIdx];
+  if (!m) { if (S.topo) paintTopo(); return; }
+  findCurKey = m.key;
+  const tb = $('topo').querySelector('.treebody');
+  if (tb) scrollRowToCenter(tb, m.row);
+  paintTopo();
+  updateFindCount();
+}
+export function runTopoFind() { // on input: recompute, jump to the nearest/kept match
+  computeFindMatches($('topoFindInput').value);
+  pickFindIdx();
+  if (findIdx >= 0) jumpToCurrent(); else { updateFindCount(); if (S.topo) paintTopo(); }
+}
+export function topoFindStep(dir) { // Enter / ↑↓ : next / prev match
+  if (!findMatches.length) return;
+  findIdx = (findIdx + dir + findMatches.length) % findMatches.length;
+  jumpToCurrent();
+}
+export function isTopoFindActive() { return findActive; }
 // Render ONLY the cells whose row is in the viewport (± buffer); a spacer one row
 // past the last cell holds the full scroll height (grid-auto-rows reserves every
 // implicit row). Runs on every scroll frame — keeps the DOM at ~a screenful of cells.
@@ -262,10 +352,11 @@ function selectedRowOf() {
   const c = S.lastCells.find((x) => x.key === S.selectedKey);
   return c ? c.row : 0;
 }
-function centerSelected(tb) {
+function scrollRowToCenter(tb, row) {
   const padTop = parseFloat(getComputedStyle(tb.querySelector('.tree')).paddingTop) || 0;
-  tb.scrollTop = Math.max(0, padTop + selectedRowOf() * ROW_H + ROW_H / 2 - tb.clientHeight / 2);
+  tb.scrollTop = Math.max(0, padTop + row * ROW_H + ROW_H / 2 - tb.clientHeight / 2);
 }
+function centerSelected(tb) { scrollRowToCenter(tb, selectedRowOf()); }
 export function selectTopoKey(key) {
   pushNav();           // remember the current selection before moving
   S.selectedKey = key; renderTopo();

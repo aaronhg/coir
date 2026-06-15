@@ -9,7 +9,7 @@ import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
-import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid } from './topo.js';
+import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, openTopoFind, closeTopoFind, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
@@ -47,6 +47,19 @@ export function initUI({ onPick }) {
     if (!$('usagePopup').hidden && !e.target.closest('#usagePopup') && !e.target.closest('.cell')) closeUsage();
   });
   $('topo').addEventListener('wheel', onTopoWheel, { passive: false });
+  // In-topo find (Ctrl/⌘+F) — its own input handler; stopPropagation so the global
+  // onKey (Esc/arrows) doesn't double-handle the keys this bar owns.
+  const tfi = $('topoFindInput');
+  tfi.oninput = () => runTopoFind();
+  tfi.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); topoFindStep(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); topoFindStep(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); topoFindStep(-1); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTopoFind(); }
+  };
+  $('topoFindNext').onclick = () => { topoFindStep(1); tfi.focus(); };
+  $('topoFindPrev').onclick = () => { topoFindStep(-1); tfi.focus(); };
+  $('topoFindClose').onclick = () => closeTopoFind();
   let resizeRaf = 0;
   window.addEventListener('resize', () => { // adaptive topo padding depends on viewport height → re-fit
     if (S.tab !== 'topo' || !S.treeRoot) return;
@@ -62,7 +75,7 @@ export function setTab(name) {
   $('tab-topo').hidden = name !== 'topo';
   $('tab-reports').hidden = name !== 'reports';
   renderTypeFilters(); // badge 母體隨分頁切換(拓撲→層0鄰域)
-  if (name !== 'topo') closeUsage();
+  if (name !== 'topo') { closeUsage(); closeTopoFind(); }
   if (name === 'topo') renderTopo();
   else if (name === 'reports') renderReports(); // reflect the current global filter
   else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
@@ -125,6 +138,8 @@ function onKey(e) {
   const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
   const mod = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
   if ((e.key === 'p' || e.key === 'P') && mod) { e.preventDefault(); openPalette(); return; }        // Ctrl/⌘+P = "/"
+  if ((e.key === 'f' || e.key === 'F') && mod && S.tab === 'topo' && S.treeRoot) { e.preventDefault(); openTopoFind(); return; } // Ctrl/⌘+F find in the (virtualized) topology
+
   if ((e.key === 'r' || e.key === 'R') && mod) { e.preventDefault(); $('pickBtn').click(); return; }  // Ctrl/⌘+R 選擇目錄
   if ((e.key === 'c' || e.key === 'C') && mod) {                                                      // Ctrl/⌘+C 複製名稱
     if (typing) return;                                            // copying inside an input
@@ -133,7 +148,8 @@ function onKey(e) {
     if (u && S.scan && S.scan.assets.has(u)) { e.preventDefault(); copyName(u); }
     return;
   }
-  if (e.key === 'Escape') {                                        // Esc：先關彈窗，再清空類型篩選
+  if (e.key === 'Escape') {                                        // Esc：先關找尋列、彈窗，再清空類型篩選
+    if (isTopoFindActive()) { e.preventDefault(); closeTopoFind(); return; }
     if (!$('usagePopup').hidden) { e.preventDefault(); closeUsage(); return; }
     if (!typing && S.selectedTypes.size) { e.preventDefault(); toggleType('__all'); return; } // 打字中不清篩選
     return;

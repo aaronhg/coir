@@ -34,10 +34,10 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 
 | 工具 | 作用 |
 |---|---|
-| `find(query, type?)` | 依名稱找資產 |
+| `find(query, type?)` | 依名稱找資源 |
 | `deps(asset, direction?, type?, limit?)` | 依賴(誰依賴它 / 它依賴誰)+ 使用位置 selector |
 | `closure(asset, type?, list?)` | 打包閉包(blast radius) |
-| `info(asset)` | 單一資產 record |
+| `info(asset)` | 單一資源 record |
 | `analyze(section?, type?, dropped?, list?)` | 專案級稽核:`stats`/`unused`/`orphans`/`atlas`/`size`/`all`(預設 stats)|
 | **`tree(file, with?, under?, depth?)`** | 結構發現:節點階層 + 每個元件的現成 `nodePath:Type` selector |
 | `get(file, selector)` | 讀某 selector 的值/節點/元件(可餵回 `edit_set`) |
@@ -54,7 +54,7 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 Cocos Creator 同時在跑、會改檔,所以:
 
 - **`fs.watch(assets, {recursive})` 失效快取**(debounce):編輯器存檔/import 等任何變動 → 標 dirty → 下次工具呼叫前 `ensureFresh()` 才重掃。只在真的有變動時重掃。
-- **編輯一律 load fresh**:每次寫都直接讀當下磁碟內容再 mutate → atomic write;快取只拿來解析資產,不當被編輯檔的內容。
+- **編輯一律 load fresh**:每次寫都直接讀當下磁碟內容再 mutate → atomic write;快取只拿來解析資源,不當被編輯檔的內容。
 - **mtime guard**(預設開):寫前比對檔案 mtime,若自讀取後被改過(編輯器存了檔)→ **中止**不覆寫;要強制覆寫傳 `force: true`。
 - **工具序列化**:一次跑一個工具,杜絕兩個寫互踩 / 讀撞重掃。
 - **逃生口**:`rescan` 強制重掃;`status` 看狀態。
