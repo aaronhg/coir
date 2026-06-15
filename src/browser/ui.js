@@ -18,6 +18,11 @@ import { copyName } from './copy.js';
 
 export function initUI({ onPick }) {
   applyStaticI18n(); // localize the static shell for the detected/saved locale
+  // Build stamp (welcome card + help footer): short commit · build date.
+  // Values injected by webpack DefinePlugin (__BUILD__).
+  const b = __BUILD__;
+  const stamp = `${b.commit} · ${b.date}`;
+  for (const id of ['buildInfo', 'buildInfoHelp']) { const el = $(id); if (el) el.textContent = stamp; }
   const ls = $('langSel');
   if (ls) { ls.value = getLocale(); ls.onchange = () => { setLocale(ls.value); relocalize(); }; }
   $('pickBtn').onclick = onPick;

@@ -58,7 +58,8 @@
   .help-x { margin-left:auto; background:transparent; border:0; color:var(--mut); font-size:16px; cursor:pointer; line-height:1; padding:2px 4px; }
   .help-x:hover { color:var(--fg); }
   .help-body { flex:1 1 auto; min-height:0; padding:4px 18px 20px; overflow:auto; color:var(--fg); font-size:13px; line-height:1.7; }
-  .help-foot { flex:0 0 auto; padding:10px 16px; border-top:1px solid var(--line); }
+  .help-foot { flex:0 0 auto; padding:10px 16px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .ver { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
   .help-foot a { color:var(--acc); text-decoration:none; font-size:12px; }
   .help-foot a:hover { text-decoration:underline; }
   .help-body h3 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--acc); margin:18px 0 6px; }
@@ -86,6 +87,7 @@
   .welcome-box .wbtn:hover { filter:brightness(1.08); }
   .welcome-box .wbtn:disabled { opacity:.5; cursor:not-allowed; }
   .welcome-box .note { color:var(--mut); font-size:12px; margin:16px 0 0; }
+  .welcome-box .ver { margin:12px 0 0; opacity:.75; }
   .tab { position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
   .tab[hidden] { display:none; }
   #tab-list { padding:0 10px 10px; overflow:auto; } /* NO top padding: a sticky thead top:0 inside a padded scroller leaves a band where rows bleed above the header */
@@ -223,6 +225,7 @@
       <p class="tagline" data-i18n-html="welcome.tagline"></p>
       <button id="welcomeBtn" class="wbtn" data-i18n="btn.pick">選擇 Cocos 專案目錄</button>
       <p class="note" data-i18n="welcome.note">需 Chrome / Edge（File System Access API）</p>
+      <p class="ver" id="buildInfo"></p>
     </div>
   </div>
   <section id="tab-list" class="tab">
@@ -255,7 +258,7 @@
   <div class="help-box">
     <div class="help-head"><span data-i18n="help.title">說明</span><button id="helpClose" class="help-x" data-i18n-title="help.close" title="關閉" aria-label="Close">✕</button></div>
     <div class="help-body" data-i18n-html="help.body"></div>
-    <div class="help-foot"><a href="https://github.com/aaronhg/coir" target="_blank" rel="noopener" data-i18n="help.github">View on GitHub ↗</a></div>
+    <div class="help-foot"><a href="https://github.com/aaronhg/coir" target="_blank" rel="noopener" data-i18n="help.github">View on GitHub ↗</a><span class="ver" id="buildInfoHelp"></span></div>
   </div>
 </div>
 <script src="dist/app.bundle.js"></script>
