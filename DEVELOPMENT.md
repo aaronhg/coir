@@ -256,13 +256,20 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 ### 11.12 CI build + GitHub Pages 部署（dist 不再進 repo）
 原本 Pages 直接從 `main`/root 服務整個 repo，所以 `dist/app.bundle.js` 必須 commit（也順帶把 `src/`、`test/` 都公開了）。改用 **GitHub Actions** 當 Pages 來源：`.github/workflows/deploy.yml` 在 push 到 main 時 `npm ci` → typecheck → test → build，再發佈一份**精準的**靜態站（`index.html` + `dist/` + `img/coir-topology.png` + robots/sitemap，**不含 `.md`**）。於是 **`dist/` 改為 gitignore、`git rm --cached` 移出 repo**——純建置產物，CI 每次自己重 build。同時把截圖從 `docs/` 搬到 `img/`（`docs/` 只留 markdown，發佈時不再連同 `.md` 一起 cp，900K 的 README-only 編輯器截圖也不發佈），og:image 與 README 連結改指 `img/`。
 
+### 11.13 拓撲呈現強化：連線 overlay／選取鏈高亮／頂端 bar（篩選＋麵包屑）
+拓撲是把 DAG 攤成樹、本來**沒有連線**，欄間歸屬只靠位置暗示（第一個子節點與父同列），深了就難讀。補三件事：
+
+- **父子連線**：`paintTopo` 依**可見** cell 的 grid 座標即時生一張 `<svg class="edges">`（每條 parent→child 用 cubic bezier 跨欄界）。`.tree` 設 `position:relative`、連線 `z-index:0`＋`pointer-events:none`、cell `z-index:1` 壓在線上方。座標對齊靠 `padTop + row*ROW_H + ROW_H/2`（與 cell 實際位置同一套）。線條**一律灰色**（依使用者回饋，避免喧賓奪主）。
+- **選取鏈高亮**：選中一個節點時，`computeSelPath` 沿 `parentKeyOf` 走出**祖先鏈（root→選取）＋直接子節點**（`pathSet`/`childSet`），cell 標 `.onpath`/`.kid`、鏈上連線標 `.hot`，全用灰調；真正的「選取／中心」維持藍色。
+- **頂端 bar `#topobar`**（選定中心後才浮現）：左邊一個**篩選框**＝**真的隱藏非相符節點**（與型別篩選共用 `buildSide` 剪枝：型別 ∧ 路徑關鍵字、任一篩選啟用就建深樹 `DEEP`、輸入 debounce、清空或 `Esc` 即還原完整樹）；右邊一條**麵包屑**＝選取項到中心的整條鏈，**方向固定「被依賴 → 依賴」**（依帶號 `offsetOfKey` 排序，不論選取在哪一側都不翻轉），每一節可點即跳選，旁邊一顆固定**複製鈕**把整條鏈以**每行一個完整路徑**複製。原本 `Ctrl/⌘+F` 的**找尋**（高亮＋跳轉）則**還原**成樹區**右上角浮動框**——為此把 `#topo` 包進定位容器 `#topowrap`，找尋框是 `#topo` 的兄弟節點（`renderTopo` 重寫 `#topo.innerHTML` 不會清掉它）。分工清楚：**篩選縮小範圍、找尋在結果內定位**。
+
 ---
 
 ## 12. 最終狀態
 
 - **形式**：純前端（HTML+JS，無第三方執行期庫，~60KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT，由 **GitHub Actions** 自動 build＋部署，`dist/` 不進 repo）。
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
-- **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**＋`Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
+- **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**、灰色父子連線、選取鏈高亮、頂端 bar＝篩選框（隱藏非相符）＋麵包屑（被依賴→依賴）＋複製整條鏈，右上角浮動 `Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
 - **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**106 個案例**：CLI 98 + MCP 6 + 外掛虛擬節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
 - **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。

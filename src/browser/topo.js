@@ -21,6 +21,34 @@ let findSet = new Set();  // match keys, for the cell-highlight lookup
 let findCurKey = null;    // the current match's key (stronger highlight)
 function findClass(key) { return key === findCurKey ? ' find-cur' : findSet.has(key) ? ' find-hit' : ''; }
 
+// The topo bar's filter query (prunes the tree to matching nodes + the path back
+// to the centre); lower-cased, '' when empty. Separate from the find overlay.
+function topoFilterText() { const inp = $('topoFilterInput'); return inp ? inp.value.trim().toLowerCase() : ''; }
+
+// ---- selected-node path highlight ------------------------------------------
+// The chain root → selection (its ancestors) plus the selection's direct
+// children, so the connection between the centre and the selection is visible
+// at a glance: cells get .onpath/.kid and the SVG connectors on it get .hot.
+let pathSet = new Set();   // keys on the chain root → selection (inclusive)
+let childSet = new Set();  // keys of the selection's direct children
+// The tree-parent of a cell key. A depth-1 key is `side:rootUuid>child`; its
+// stripped prefix `side:rootUuid` has no '>' → it maps back to the real root cell.
+function parentKeyOf(key) {
+  if (!key || key === S.treeRoot) return null;
+  const i = key.lastIndexOf('>');
+  if (i < 0) return null;
+  const pk = key.slice(0, i);
+  return pk.includes('>') ? pk : S.treeRoot;
+}
+function computeSelPath() {
+  pathSet = new Set(); childSet = new Set();
+  if (!S.treeRoot) return;
+  const sel = S.selectedKey || S.treeRoot;
+  for (let k = sel; k && k !== S.treeRoot; k = parentKeyOf(k)) pathSet.add(k);
+  pathSet.add(S.treeRoot);
+  for (const c of S.lastCells) if (parentKeyOf(c.key) === sel) childSet.add(c.key);
+}
+
 // A node's neighbours (the topology shows the TRUE structure; the 清單 type
 // badges filter only the list, not the tree).
 function neighborsOf(uuid, dir) {
@@ -73,7 +101,16 @@ export function focus(uuid) {
 
 // ---- build one side of the tree (filtered to branches reaching a type) ----
 function buildSide(rootUuid, dir, side, maxDepth) {
-  const filtering = S.selectedTypes.size > 0;
+  const types = S.selectedTypes;
+  const fq = topoFilterText();
+  const filtering = types.size > 0 || !!fq; // type filter and/or the bar's text filter
+  const nodeMatch = (uuid) => {
+    const a = S.scan.assets.get(uuid);
+    if (!a) return false;
+    if (types.size && !types.has(a.type)) return false;
+    if (fq && !a.path.toLowerCase().includes(fq)) return false;
+    return true;
+  };
   // Pass 1 — build the node tree (cycle-guarded), dropping non-matching leaves.
   function build(uuid, depth, key, anc) {
     const cycle = anc.has(uuid);
@@ -86,8 +123,7 @@ function buildSide(rootUuid, dir, side, maxDepth) {
         if (cn) children.push(cn);
       }
     }
-    const a = S.scan.assets.get(uuid);
-    const match = !filtering || (a && S.selectedTypes.has(a.type));
+    const match = !filtering || nodeMatch(uuid);
     if (filtering && !match && children.length === 0) return null; // prune dead branch
     const hasKids = filtering ? children.length > 0 : realKids.length > 0;
     return { uuid, depth, key, cycle, hasKids, children };
@@ -145,7 +181,7 @@ function cellHtml(c, col) {
   const a = S.scan.assets.get(c.uuid);
   const sym = c.cycle ? '↻' : c.hasKids ? (c.side === 'L' ? '◂' : '▸') : '';
   const dh = c.dir ? `<span class="cdh" style="opacity:.5;margin-left:.35em;font-size:.82em">${esc(c.dir)}</span>` : '';
-  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${c.key === S.selectedKey ? ' sel' : ''}${findClass(c.key)}"` +
+  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${pathSet.has(c.key) ? ' onpath' : ''}${childSet.has(c.key) ? ' kid' : ''}${c.key === S.selectedKey ? ' sel' : ''}${findClass(c.key)}"` +
     ` data-key="${esc(c.key)}" data-uuid="${c.uuid}" data-side="${c.side}"` +
     ` title="${esc(a ? a.path : c.uuid)}" style="grid-column:${col};grid-row:${c.row + 1}">` +
     `<span class="tw">${sym}</span><span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span>` +
@@ -172,7 +208,7 @@ function setAdaptivePad(tb) {
 // The layer-0 (centre) cell — always row 0.
 function rootCellHtml(col) {
   const a = S.scan.assets.get(S.treeRoot);
-  return `<div class="cell root${S.selectedKey === S.treeRoot ? ' sel' : ''}${findClass(S.treeRoot)}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
+  return `<div class="cell root${pathSet.has(S.treeRoot) ? ' onpath' : ''}${S.selectedKey === S.treeRoot ? ' sel' : ''}${findClass(S.treeRoot)}" data-key="${esc(S.treeRoot)}" data-uuid="${S.treeRoot}"` +
     ` title="${esc(a ? a.path : S.treeRoot)}" style="grid-column:${col};grid-row:1">` +
     `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : S.treeRoot)}</span>` +
     (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
@@ -184,14 +220,18 @@ function rootCellHtml(col) {
 // per centre/select; scrolling re-paints (cheap) without rebuilding.
 export function renderTopo() {
   if (!S.scan) return;
-  if (!S.treeRoot) { $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`; S.topo = null; return; }
+  const bar = $('topobar');
+  if (!S.treeRoot) { $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`; S.topo = null; if (bar) bar.hidden = true; renderCrumb(); return; }
+  if (bar) bar.hidden = false;
   const viewOffset = offsetOfKey(S.selectedKey);
   const lo = viewOffset - 2, hi = viewOffset + 2;
   const DEEP = 24;
-  const right = buildSide(S.treeRoot, 'out', 'R', S.selectedTypes.size ? DEEP : hi);
-  const left = buildSide(S.treeRoot, 'in', 'L', S.selectedTypes.size ? DEEP : 2 - viewOffset);
+  const deep = S.selectedTypes.size || topoFilterText(); // any filter ⇒ build deep so distant matches survive the prune
+  const right = buildSide(S.treeRoot, 'out', 'R', deep ? DEEP : hi);
+  const left = buildSide(S.treeRoot, 'in', 'L', deep ? DEEP : 2 - viewOffset);
   S.lastCells = [...left, ...right];
   tagSiblingDirs(S.lastCells); // disambiguate same-name siblings (append distinguishing dir)
+  computeSelPath();            // highlight sets for the selection's chain + children
   const inWin = (off) => off >= lo && off <= hi;
   let maxRow = 0;
   for (const c of S.lastCells) if (inWin(c.side === 'L' ? -c.depth : c.depth)) maxRow = Math.max(maxRow, c.row);
@@ -232,11 +272,56 @@ export function renderTopo() {
   tb.onscroll = () => { if (paintScheduled) return; paintScheduled = true; requestAnimationFrame(() => { paintScheduled = false; paintTopo(); }); };
 
   setAdaptivePad(tb); // size the padding to this viewport BEFORE painting (paint/centre read it)
-  if (findActive) { computeFindMatches($('topoFindInput').value); pickFindIdx(); updateFindCount(); } // rebuild ⇒ refresh highlights (no scroll yank; centreSelected drives scroll)
+  if (findActive) { computeFindMatches($('topoFindInput').value); pickFindIdx(); updateFindCount(); } // rebuild ⇒ refresh find highlights (no scroll yank; centreSelected drives scroll)
   paintTopo();        // first paint (at scrollTop 0) — its spacer establishes the full scroll height…
   centerSelected(tb); // …so this scroll-to-centre isn't clamped to an empty .tree, then…
   paintTopo();        // …repaint for the centred position
   showUsage(); // auto-show the "used where" info for the selected ↔ parent edge
+  renderCrumb(); // breadcrumb root → selection (right side of the topo bar)
+}
+// The selection's chain, ALWAYS ordered 被依賴 → 依賴 (left = dependents, right =
+// dependencies) by signed offset, so the breadcrumb's orientation is fixed and
+// never flips to 依賴 → 被依賴 regardless of which side the selection is on.
+function crumbKeys() {
+  if (!S.treeRoot) return [];
+  const sel = S.selectedKey || S.treeRoot;
+  const keys = [];
+  for (let k = sel; k && k !== S.treeRoot; k = parentKeyOf(k)) keys.push(k);
+  keys.push(S.treeRoot);
+  keys.sort((a, b) => offsetOfKey(a) - offsetOfKey(b)); // fixed orientation (−被依賴 … +依賴)
+  return keys;
+}
+const crumbUuid = (key) => (key === S.treeRoot ? S.treeRoot : key.split('>').pop());
+// Breadcrumb of the selection's chain; each crumb re-selects (and re-centres on) that node.
+function renderCrumb() {
+  const el = $('topoCrumb');
+  if (!el) return;
+  const sel = S.selectedKey || S.treeRoot;
+  const keys = crumbKeys();
+  const nameOf = (key) => {
+    const a = S.scan.assets.get(crumbUuid(key));
+    return a ? base(a.path) : `${crumbUuid(key).slice(0, 10)}…`;
+  };
+  const crumb = (key) => `<button class="cr${key === sel ? ' cur' : ''}" type="button" data-key="${esc(key)}" title="${esc(nameOf(key))}">${esc(nameOf(key))}</button>`;
+  const SEP = '<span class="crsep">›</span>';
+  const MAX = 7;
+  if (keys.length > MAX) { // keep both extremes (selection sits at one of them)
+    const tail = keys.slice(keys.length - (MAX - 2)).map(crumb).join(SEP);
+    el.innerHTML = `${crumb(keys[0])}${SEP}<span class="crsep">…</span>${SEP}${tail}`;
+  } else {
+    el.innerHTML = keys.map(crumb).join(SEP);
+  }
+}
+// Copy the whole chain (被依賴 → 依賴) as full asset paths — the fixed copy button beside the breadcrumb.
+export function copyCrumbChain() {
+  const keys = crumbKeys();
+  if (!keys.length) return;
+  const txt = keys.map((key) => { const a = S.scan.assets.get(crumbUuid(key)); return a ? a.path : crumbUuid(key); }).join('\n');
+  const btn = $('topoCrumbCopy');
+  copyToClipboard(txt, () => {
+    if (btn) { btn.innerHTML = CHECK_ICON; btn.classList.add('ok'); setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('ok'); }, 1200); }
+    setStatus(t('copy.chain', { n: keys.length }));
+  });
 }
 // Re-fit the padding + re-centre + repaint without rebuilding the tree — for
 // window resize, where the viewport (and thus the centring padding) changed.
@@ -249,7 +334,7 @@ export function reflowTopo() {
 }
 
 // ---- in-topo find (Ctrl/⌘+F) ----------------------------------------------
-export function openTopoFind() {
+export function openTopoFind() { // Ctrl/⌘+F — the floating find overlay (top-right of the tree)
   if (!S.treeRoot) return;
   findActive = true;
   $('topoFind').hidden = false;
@@ -262,6 +347,14 @@ export function closeTopoFind() {
   findActive = false; findMatches = []; findIdx = -1; findSet = new Set(); findCurKey = null;
   $('topoFind').hidden = true;
   if (S.topo) paintTopo(); // drop the highlights
+}
+// Clear the bar's text filter (and rebuild the now-unpruned tree). Esc / ✕.
+export function clearTopoFilter() {
+  const inp = $('topoFilterInput');
+  if (!inp) return;
+  if (!inp.value) { inp.blur(); return; }
+  inp.value = '';
+  if (S.treeRoot) renderTopo();
 }
 // Gather matches over the current tree (shown columns only — those are reachable
 // by scrolling; the root counts as row 0).
@@ -339,12 +432,33 @@ function paintTopo() {
   const inWin = (off) => off >= lo && off <= hi;
   const gcol = (off) => off - lo + 1;
   const vis = (c, off) => inWin(off) && c.row >= rFrom && c.row <= rTo;
+  // parent-row lookup for the connector overlay (full sides, so an off-screen
+  // parent still anchors a visible child's line)
+  const rowByKey = new Map();
+  for (const c of left) rowByKey.set(c.key, c.row);
+  for (const c of right) rowByKey.set(c.key, c.row);
+  const cw = (tree.clientWidth || tb.clientWidth) / 5;
+  const yOf = (row) => padTop + row * ROW_H + ROW_H / 2;
+  const INSET = 12;
+  let edges = '';
+  const addEdge = (c, off) => { // a smooth parent→child connector crossing the shared column boundary
+    const pk = parentKeyOf(c.key);
+    const pRow = pk === S.treeRoot ? 0 : rowByKey.get(pk);
+    if (pRow == null) return;
+    const pY = yOf(pRow), cY = yOf(c.row);
+    const bx = (c.side === 'R' ? off - lo : off - lo + 1) * cw; // boundary between parent & child columns
+    const pX = c.side === 'R' ? bx - INSET : bx + INSET;
+    const cX = c.side === 'R' ? bx + INSET : bx - INSET;
+    const hot = pathSet.has(c.key) || childSet.has(c.key);
+    edges += `<path class="${hot ? 'hot' : ''}" d="M${pX} ${pY}C${bx} ${pY} ${bx} ${cY} ${cX} ${cY}"/>`;
+  };
   let body = '';
   if (inWin(0) && rFrom <= 0) body += rootCellHtml(gcol(0));
-  for (const c of left) { const off = -c.depth; if (vis(c, off)) body += cellHtml(c, gcol(off)); }
-  for (const c of right) { const off = c.depth; if (vis(c, off)) body += cellHtml(c, gcol(off)); }
+  for (const c of left) { const off = -c.depth; if (vis(c, off)) { body += cellHtml(c, gcol(off)); addEdge(c, off); } }
+  for (const c of right) { const off = c.depth; if (vis(c, off)) { body += cellHtml(c, gcol(off)); addEdge(c, off); } }
   body += `<div class="vspacer" style="grid-column:1;grid-row:${maxRow + 2}"></div>`; // reserve full height
-  tree.innerHTML = body;
+  const svgH = padTop * 2 + (maxRow + 2) * ROW_H; // pad above + below + every reserved row
+  tree.innerHTML = `<svg class="edges" style="height:${svgH}px">${edges}</svg>${body}`;
   if (!$('usagePopup').hidden) positionUsage($('usagePopup')); // re-pin (or hide if its cell scrolled off)
 }
 function selectedRowOf() {

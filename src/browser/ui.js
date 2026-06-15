@@ -9,7 +9,7 @@ import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
-import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, openTopoFind, closeTopoFind, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
+import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
@@ -21,7 +21,7 @@ export function initUI({ onPick }) {
   // Build stamp (welcome card + help footer): short commit · build date.
   // Values injected by webpack DefinePlugin (__BUILD__).
   const b = __BUILD__;
-  const stamp = `${b.commit} · ${b.date}`;
+  const stamp = b.commit === 'dev' ? 'dev' : `${b.commit} · ${b.date}`; // dev build → just 'dev' (no frozen/misleading SHA)
   for (const id of ['buildInfo', 'buildInfoHelp']) { const el = $(id); if (el) el.textContent = stamp; }
   const ls = $('langSel');
   if (ls) { ls.value = getLocale(); ls.onchange = () => { setLocale(ls.value); relocalize(); }; }
@@ -52,8 +52,8 @@ export function initUI({ onPick }) {
     if (!$('usagePopup').hidden && !e.target.closest('#usagePopup') && !e.target.closest('.cell')) closeUsage();
   });
   $('topo').addEventListener('wheel', onTopoWheel, { passive: false });
-  // In-topo find (Ctrl/⌘+F) — its own input handler; stopPropagation so the global
-  // onKey (Esc/arrows) doesn't double-handle the keys this bar owns.
+  // In-topo find (Ctrl/⌘+F) — floating overlay top-right; its own input handler,
+  // stopPropagation so the global onKey (Esc/arrows) doesn't double-handle the keys.
   const tfi = $('topoFindInput');
   tfi.oninput = () => runTopoFind();
   tfi.onkeydown = (e) => {
@@ -65,6 +65,15 @@ export function initUI({ onPick }) {
   $('topoFindNext').onclick = () => { topoFindStep(1); tfi.focus(); };
   $('topoFindPrev').onclick = () => { topoFindStep(-1); tfi.focus(); };
   $('topoFindClose').onclick = () => closeTopoFind();
+  // Topo bar — filter box (prunes the tree, debounced) with its own Esc-to-clear.
+  const tflt = $('topoFilterInput');
+  let filterTimer = 0;
+  tflt.oninput = () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => { if (S.treeRoot) renderTopo(); }, 150); };
+  tflt.onkeydown = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); clearTopoFilter(); } };
+  $('topoFilterClear').onclick = () => { clearTopoFilter(); tflt.focus(); };
+  // Breadcrumb (right side of the topo bar): click a crumb to re-select that node.
+  $('topoCrumb').onclick = (e) => { const cr = e.target.closest('.cr'); if (cr) selectTopoKey(cr.dataset.key); };
+  $('topoCrumbCopy').onclick = copyCrumbChain; // copy the whole chain (被依賴 → 依賴)
   let resizeRaf = 0;
   window.addEventListener('resize', () => { // adaptive topo padding depends on viewport height → re-fit
     if (S.tab !== 'topo' || !S.treeRoot) return;
@@ -80,7 +89,7 @@ export function setTab(name) {
   $('tab-topo').hidden = name !== 'topo';
   $('tab-reports').hidden = name !== 'reports';
   renderTypeFilters(); // badge 母體隨分頁切換(拓撲→層0鄰域)
-  if (name !== 'topo') { closeUsage(); closeTopoFind(); }
+  if (name !== 'topo') { closeUsage(); closeTopoFind(); } // the text filter persists (its bar is inside the now-hidden topo tab)
   if (name === 'topo') renderTopo();
   else if (name === 'reports') renderReports(); // reflect the current global filter
   else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
@@ -115,6 +124,7 @@ function setScan(s, name, plugins = PLUGINS) {
   }
   S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;
   S.searchIndex = null;
+  $('topoFilterInput').value = ''; // a new project resets the topo text filter
   $('welcome').hidden = true; // first-run card → gone once a project is loaded
   $('filterbar').hidden = false;
   S.nodeIndex = [...s.assets.values()].map((a) => ({

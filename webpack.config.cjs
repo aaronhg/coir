@@ -15,10 +15,12 @@ function gitShort() {
   try { return cp.execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
   catch { return (process.env.GITHUB_SHA || process.env.COIR_COMMIT || '').slice(0, 7) || 'dev'; }
 }
-const BUILD = { version: pkg.version, commit: gitShort(), date: new Date().toISOString().slice(0, 10) };
-
 module.exports = (env, argv) => {
   const isProd = argv.mode === 'production';
+  // Real commit only for the prod (CI) build that actually ships. The dev build
+  // stamps 'dev' — a long-running dev server computes this once at startup, and a
+  // working tree with uncommitted edits matches no single commit anyway.
+  const BUILD = { version: pkg.version, commit: isProd ? gitShort() : 'dev', date: new Date().toISOString().slice(0, 10) };
   return {
     entry: './src/browser/app.js',
     output: {
