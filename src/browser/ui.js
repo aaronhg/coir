@@ -1,67 +1,20 @@
-// DOM layer. Three banner tabs over one content area:
-//   清單  : sortable asset table (= layer 0; pick a root here)
-//   拓撲  : a BIDIRECTIONAL column-aligned tree centred on the root —
-//          被依賴層n … | 層0 | … 依賴層n  (dependents fan left, deps fan right)
-//   報告  : unused / orphan / atlas-utilization / size reports
-// "/" opens a VSCode-style quick-open by filename. "r" restores the saved path.
-
-import {
-  unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, summary, droppedMetaReport,
-} from '../core/analyze.js';
-import { dependencyClosure, dependentClosure } from '../core/graph.js';
-import { decompressUuid } from '../core/uuid.js';
-import { componentName } from '../core/selector.js';
-import { PLUGINS } from '../core/plugins/index.js';
+// DOM orchestrator: wires the shell (tabs, keyboard, palette/usage events),
+// loads a scan, and re-localizes. The features live in their own modules:
+//   list.js  topo.js  usage.js  palette.js  reports.js  filterbar.js  copy.js
+// and the shared state + helpers in state.js. Three banner tabs (清單 / 拓撲 /
+// 報告) over one content area; "/" opens quick-open.
+import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus } from './state.js';
 import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
-
-// Baseline colors for the core (non-plugin) types. Plugin-owned types (atlas,
-// font, particle, spine, spine-atlas) bring their own `colors`, merged in by
-// setScan — so each plugin is the single source of truth for its type's color.
-const TYPE_COLOR = {
-  image: '#4fc3f7', texture: '#4dd0e1', 'sprite-frame': '#4fc3f7', prefab: '#81c784',
-  scene: '#ff8a65', script: '#90a4ae', audio: '#a1887f', anim: '#4db6ac',
-  material: '#9575cd', effect: '#7e57c2',
-  json: '#b0bec5', text: '#b0bec5', orphan: '#ef5350',
-};
-const typeColor = (t) => TYPE_COLOR[t] || '#b0bec5';
-const $ = (id) => document.getElementById(id);
-const base = (p) => p.slice(p.lastIndexOf('/') + 1);
-const dirOf = (p) => { const i = p.lastIndexOf('/'); return i === -1 ? '' : p.slice(0, i + 1); };
-const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-const COLS = [
-  { key: 'base', labelKey: 'col.base', cls: 'cnm' },
-  { key: 'dir', labelKey: 'col.dir', cls: 'cdir' },
-  { key: 'type', labelKey: 'col.type', cls: 'ctype' },
-  { key: 'size', labelKey: 'col.size', cls: 'cnum', num: true },
-  { key: 'in', labelKey: 'col.in', cls: 'cnum', num: true, titleKey: 'col.in.t' },
-  { key: 'cin', labelKey: 'col.cin', cls: 'cnum cclo', num: true, titleKey: 'col.cin.t' },
-  { key: 'out', labelKey: 'col.out', cls: 'cnum', num: true, titleKey: 'col.out.t' },
-  { key: 'cout', labelKey: 'col.cout', cls: 'cnum cclo', num: true, titleKey: 'col.cout.t' },
-];
-
-let scan = null;
-let adj = null;
-let byTypeCache = {};
-let nodeIndex = [];
-let closureByUuid = new Map(); // uuid -> nodeIndex entry, for the palette's ∑ columns
-let sortKey = 'dir';
-let sortDir = 1;
-let selectedTypes = new Set(); // empty == all types — ONE global filter for 清單/拓撲/報告
-let tab = 'list';
-let treeRoot = null;           // centre asset (層0)
-let selectedKey = null;        // selected key (root uuid, or a side-prefixed key)
-let lastCells = [];            // cells from the last renderTopo (keyboard nav)
-let navHistory = [];           // topology back-stack of { treeRoot, selectedKey }  (− = 上一動)
-let navForward = [];           // topology forward-stack  (+ = 下一動)
-let listSel = null;            // 清單鍵盤游標的 uuid (↑↓ 切換、Enter 設為中心)
-let listClickTimer = null;     // 清單單擊/雙擊 區分
-let cellClickTimer = null;
-let paletteItems = [];
-let paletteIdx = 0;
-let searchIndex = null; // lazily-built multi-source palette index (assets/frames/usage)
-const FILTER_KEY = 'coir.filter'; // 持久化清單過濾（搜尋字串 + 型別篩選）
+import { summary } from '../core/analyze.js';
+import { dependencyClosure, dependentClosure } from '../core/graph.js';
+import { PLUGINS } from '../core/plugins/index.js';
+import { renderTable, moveListSel, scrollListToSelection } from './list.js';
+import { renderTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid } from './topo.js';
+import { closeUsage } from './usage.js';
+import { openPalette, closePalette, renderPalette, movePalette, pickPalette } from './palette.js';
+import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
+import { renderReports } from './reports.js';
+import { copyName } from './copy.js';
 
 export function initUI({ onPick }) {
   applyStaticI18n(); // localize the static shell for the detected/saved locale
@@ -75,16 +28,16 @@ export function initUI({ onPick }) {
   $('search').oninput = () => { saveFilter(); renderTable(); };
   for (const b of document.querySelectorAll('.btabs button')) b.onclick = () => setTab(b.dataset.tab);
   document.body.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-uuid]');
-    if (!t || t.closest('#topo') || t.closest('#palette') || t.closest('#nodeList')) return; // 清單列自有單擊/雙擊處理
-    if (scan && scan.assets.has(t.dataset.uuid)) focus(t.dataset.uuid);
+    const el = e.target.closest('[data-uuid]');
+    if (!el || el.closest('#topo') || el.closest('#palette') || el.closest('#nodeList')) return; // 清單列自有單擊/雙擊處理
+    if (S.scan && S.scan.assets.has(el.dataset.uuid)) focus(el.dataset.uuid);
   });
   const pin = $('paletteInput');
   pin.oninput = () => renderPalette(pin.value);
   pin.onkeydown = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); movePalette(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); movePalette(-1); }
-    else if (e.key === 'Enter') { e.preventDefault(); const it = paletteItems[paletteIdx]; if (it) pickPalette(it.target); }
+    else if (e.key === 'Enter') { e.preventDefault(); const it = S.paletteItems[S.paletteIdx]; if (it) pickPalette(it.target); }
     else if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
   };
   $('palette').onclick = (e) => { if (e.target === $('palette')) closePalette(); };
@@ -97,62 +50,36 @@ export function initUI({ onPick }) {
   return { setScan, onProgress, setStatus };
 }
 
-function setTab(t) {
-  tab = t;
-  for (const b of document.querySelectorAll('.btabs button')) b.classList.toggle('active', b.dataset.tab === t);
-  $('tab-list').hidden = t !== 'list';
-  $('tab-topo').hidden = t !== 'topo';
-  $('tab-reports').hidden = t !== 'reports';
+export function setTab(name) {
+  S.tab = name;
+  for (const b of document.querySelectorAll('.btabs button')) b.classList.toggle('active', b.dataset.tab === name);
+  $('tab-list').hidden = name !== 'list';
+  $('tab-topo').hidden = name !== 'topo';
+  $('tab-reports').hidden = name !== 'reports';
   renderTypeFilters(); // badge 母體隨分頁切換(拓撲→層0鄰域)
-  if (t !== 'topo') closeUsage();
-  if (t === 'topo') renderTopo();
-  else if (t === 'reports') renderReports(); // reflect the current global filter
-  else if (t === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
+  if (name !== 'topo') closeUsage();
+  if (name === 'topo') renderTopo();
+  else if (name === 'reports') renderReports(); // reflect the current global filter
+  else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
 }
-// On 拓撲→清單: scroll the selected node's row into view (else the centre's), and flash it.
-function scrollListToSelection() {
-  const list = $('nodeList');
-  const sel = selectedUuid();
-  let target = sel ? list.querySelector(`tr[data-uuid="${sel}"]`) : null;
-  if (!target && treeRoot) target = list.querySelector(`tr[data-uuid="${treeRoot}"]`);
-  if (!target) return;
-  setListSel(target.dataset.uuid, false); // 進清單時把它設為鍵盤游標
-  requestAnimationFrame(() => {
-    target.scrollIntoView({ block: 'center' });
-    target.classList.remove('flash');
-    void target.offsetWidth;           // reflow → restart the flash if re-triggered
-    target.classList.add('flash');
-    setTimeout(() => target.classList.remove('flash'), 1200);
-  });
+function cycleTab(delta) {
+  const tabs = ['list', 'topo', 'reports'];
+  const i = tabs.indexOf(S.tab);
+  setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
 }
-// ---- 清單鍵盤游標：↑↓ 切換列、Enter 設為中心 -------------------------------
-function listRows() { return [...$('nodeList').querySelectorAll('tbody tr[data-uuid]')]; }
-function setListSel(uuid, scroll) {
-  listSel = uuid;
-  for (const r of listRows()) r.classList.toggle('lsel', r.dataset.uuid === uuid);
-  if (scroll) { const el = $('nodeList').querySelector('tr.lsel'); if (el) el.scrollIntoView({ block: 'nearest' }); }
-}
-function moveListSel(delta) {
-  const rows = listRows();
-  if (!rows.length) return;
-  const i = rows.findIndex((r) => r.dataset.uuid === listSel);
-  if (i < 0) { setListSel(rows[delta > 0 ? 0 : rows.length - 1].dataset.uuid, true); return; } // 無游標→端點
-  setListSel(rows[Math.max(0, Math.min(rows.length - 1, i + delta))].dataset.uuid, true);
-}
-function setStatus(msg) { $('status').textContent = msg || ''; }
 function onProgress({ phase, done, total }) { setStatus(`${phase} ${done}/${total}`); }
 function renderStats() {
-  if (scan) $('stats').textContent = t('stats', { assets: scan.assets.size, edges: scan.edges.length, orphans: scan.orphanRefs.length });
+  if (S.scan) $('stats').textContent = t('stats', { assets: S.scan.assets.size, edges: S.scan.edges.length, orphans: S.scan.orphanRefs.length });
 }
 // Re-apply every translation after a language switch.
 function relocalize() {
   applyStaticI18n();
-  if (!scan) return;
+  if (!S.scan) return;
   renderStats();
   renderTypeFilters();
   renderTable();
   renderReports();
-  if (tab === 'topo') renderTopo();
+  if (S.tab === 'topo') renderTopo();
 }
 
 // ---- data ----------------------------------------------------------------
@@ -163,18 +90,18 @@ function setScan(s, name, plugins = PLUGINS) {
     if (p.colors) Object.assign(TYPE_COLOR, p.colors);
     if (p.messages) registerMessages(p.messages);
   }
-  scan = s; adj = s.adjacency; treeRoot = null; selectedKey = null; selectedTypes = new Set(); navHistory = []; navForward = []; listSel = null;
-  searchIndex = null;
+  S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;
+  S.searchIndex = null;
   $('welcome').hidden = true; // first-run card → gone once a project is loaded
   $('filterbar').hidden = false;
-  nodeIndex = [...s.assets.values()].map((a) => ({
+  S.nodeIndex = [...s.assets.values()].map((a) => ({
     uuid: a.uuid, path: a.path, base: base(a.path), dir: dirOf(a.path),
     type: a.type, size: a.size, in: a.in, out: a.out,
-    cin: dependentClosure(adj, a.uuid).size, // transitive dependents (blast radius)
-    cout: dependencyClosure(adj, a.uuid).size, // transitive deps (bundle)
+    cin: dependentClosure(S.adj, a.uuid).size, // transitive dependents (blast radius)
+    cout: dependencyClosure(S.adj, a.uuid).size, // transitive deps (bundle)
   }));
-  closureByUuid = new Map(nodeIndex.map((n) => [n.uuid, n]));
-  const sum = summary(s); byTypeCache = sum.byType;
+  S.closureByUuid = new Map(S.nodeIndex.map((n) => [n.uuid, n]));
+  const sum = summary(s); S.byTypeCache = sum.byType;
   restoreFilter(); // 還原上次的清單過濾（型別只保留專案實際有的）
   $('projectName').textContent = name;
   renderStats();
@@ -186,420 +113,7 @@ function setScan(s, name, plugins = PLUGINS) {
   setTab('list');
 }
 
-// ---- type badges: solo on first click, additive afterwards ---------------
-// The badge count is per-tab: 清單/報告 span the whole project (byTypeCache),
-// 拓撲 counts only 層0's neighbourhood — 層0 plus everything reachable up- or
-// down-stream (both closures), matching the always-fully-expanded tree.
-function typeAllowed(t) { return selectedTypes.size === 0 || selectedTypes.has(t); }
-function currentTypeCounts() {
-  if (tab !== 'topo' || !treeRoot) return byTypeCache;
-  const counts = {};
-  const nbhd = new Set([treeRoot, ...dependentClosure(adj, treeRoot), ...dependencyClosure(adj, treeRoot)]);
-  for (const u of nbhd) { const a = scan.assets.get(u); if (a) counts[a.type] = (counts[a.type] || 0) + 1; }
-  return counts;
-}
-function renderTypeFilters() {
-  const counts = currentTypeCounts();
-  const types = Object.keys(byTypeCache).sort(); // stable full type list across tabs
-  $('typeFilters').innerHTML = types.map((t) => {
-    const on = selectedTypes.size === 0 || selectedTypes.has(t);
-    const n = counts[t] || 0;
-    return `<button class="chip${on ? ' on' : ''}${n === 0 ? ' zero' : ''}" data-type="${t}">` +
-      `<span class="dot" style="background:${typeColor(t)}"></span>${t} <b>${n}</b></button>`;
-  }).join('') + (selectedTypes.size ? `<button class="chip clr" data-type="__all">${esc(t('filter.all'))}</button>` : '');
-  const fl = $('filterbar').querySelector('.flabel');
-  if (fl) fl.textContent = (tab === 'topo' && treeRoot) ? t('filter.labelTopo') : t('filter.label');
-  for (const c of $('typeFilters').querySelectorAll('.chip')) c.onclick = () => toggleType(c.dataset.type);
-}
-function toggleType(t) {
-  if (t === '__all') selectedTypes.clear();
-  else if (selectedTypes.size === 0) selectedTypes = new Set([t]);
-  else if (selectedTypes.has(t)) selectedTypes.delete(t);
-  else selectedTypes.add(t);
-  saveFilter();
-  renderTypeFilters();
-  renderTable();
-  if (tab === 'topo') { selectedKey = treeRoot; renderTopo(); } // re-centre; old selection may be pruned
-  else if (tab === 'reports') renderReports();
-}
-function saveFilter() {
-  try { localStorage.setItem(FILTER_KEY, JSON.stringify({ q: $('search').value, types: [...selectedTypes] })); } catch { /* ignore */ }
-}
-function restoreFilter() {
-  let f; try { f = JSON.parse(localStorage.getItem(FILTER_KEY) || 'null'); } catch { f = null; }
-  $('search').value = f && typeof f.q === 'string' ? f.q : '';
-  const types = f && Array.isArray(f.types) ? f.types.filter((t) => byTypeCache[t]) : []; // 丟掉專案沒有的型別
-  selectedTypes = new Set(types);
-}
-
-// ---- 清單: sortable asset table ------------------------------------------
-function sortRows(rows) {
-  const col = COLS.find((c) => c.key === sortKey) || COLS[0];
-  return rows.slice().sort((a, b) => {
-    let r = col.num ? (a[sortKey] || 0) - (b[sortKey] || 0) : String(a[sortKey]).localeCompare(String(b[sortKey]));
-    if (r === 0 && sortKey !== 'base') r = a.base.localeCompare(b.base);
-    return r * sortDir;
-  });
-}
-function renderTable() {
-  if (!scan) return;
-  const q = $('search').value.trim().toLowerCase();
-  const filtered = nodeIndex.filter((n) => typeAllowed(n.type) && (!q || n.path.toLowerCase().includes(q)));
-  const rows = sortRows(filtered);
-  const cap = 1000; const shown = rows.slice(0, cap);
-  const arrow = (k) => (k === sortKey ? `<span class="ar">${sortDir > 0 ? '▲' : '▼'}</span>` : '');
-  const head = `<tr>${COLS.map((c) => `<th class="${c.cls}" data-col="${c.key}"${c.titleKey ? ` title="${esc(t(c.titleKey))}"` : ''}>${esc(t(c.labelKey))}${arrow(c.key)}</th>`).join('')}</tr>`;
-  const body = shown.map((n) =>
-    `<tr data-uuid="${n.uuid}"${n.uuid === treeRoot ? ' class="rooted"' : ''} title="${esc(n.path)}">` +
-    `<td class="cnm"><span class="dot" style="background:${typeColor(n.type)}"></span>${esc(n.base)}</td>` +
-    `<td class="cdir" title="${esc(n.dir)}">${esc(n.dir || '/')}</td>` +
-    `<td class="ctype">${n.type}</td>` +
-    `<td class="cnum">${kb(n.size)}</td>` +
-    `<td class="cnum">${n.in}</td><td class="cnum cclo">${n.cin}</td>` +
-    `<td class="cnum">${n.out}</td><td class="cnum cclo">${n.cout}</td></tr>`).join('');
-  $('nodeList').innerHTML =
-    `<div id="nodeCount">${esc(t('list.count', { n: filtered.length }))}${rows.length > cap ? esc(t('list.cap', { cap })) : ''}</div>` +
-    `<table class="ptable"><thead>${head}</thead><tbody>${body}</tbody></table>`;
-  for (const th of $('nodeList').querySelectorAll('th[data-col]')) {
-    th.onclick = () => { const k = th.dataset.col; if (k === sortKey) sortDir *= -1; else { sortKey = k; sortDir = 1; } renderTable(); };
-  }
-  for (const r of $('nodeList').querySelectorAll('tbody tr[data-uuid]')) { // 單擊選中、雙擊設為中心
-    r.onclick = () => { clearTimeout(listClickTimer); const u = r.dataset.uuid; listClickTimer = setTimeout(() => setListSel(u, false), 200); };
-    r.ondblclick = () => { clearTimeout(listClickTimer); focus(r.dataset.uuid); };
-  }
-  if (listSel) { const r = $('nodeList').querySelector(`tr[data-uuid="${listSel}"]`); if (r) r.classList.add('lsel'); else listSel = null; } // 保留游標
-}
-
-// ---- shared: a node's neighbours (topology shows the TRUE structure; the
-//      清單 type badges filter only the list, not the tree) ----------------
-function neighborsOf(uuid, dir) {
-  const list = dir === 'out' ? (adj.out.get(uuid) || []) : (adj.inc.get(uuid) || []);
-  const m = new Map();
-  for (const n of list) {
-    const other = dir === 'out' ? n.to : n.from;
-    if (scan.assets.has(other) && !m.has(other)) m.set(other, true);
-  }
-  return m;
-}
-function sortByTypeName(a, b) {
-  const ax = scan.assets.get(a), ay = scan.assets.get(b);
-  return (ax.type).localeCompare(ay.type) || base(ax.path).localeCompare(base(ay.path));
-}
-
-// ---- pick a root (from table/report/palette) -----------------------------
-// ---- topology navigation history (Delete / Backspace = back) -------------
-// Records each centre+selection before it changes; goBack pops to the previous.
-function pushNav() {
-  if (!treeRoot) return;
-  const top = navHistory[navHistory.length - 1];
-  if (top && top.treeRoot === treeRoot && top.selectedKey === selectedKey) return; // skip no-op
-  navHistory.push({ treeRoot, selectedKey });
-  if (navHistory.length > 200) navHistory.shift();
-  navForward = []; // a new navigation invalidates the forward stack
-}
-function applyNav(s) {
-  treeRoot = s.treeRoot; selectedKey = s.selectedKey;
-  renderTable(); renderTopo();
-  const a = scan.assets.get(selectedUuid());
-  if (a) setStatus(a.path);
-}
-function goBack() {    // − 上一動
-  if (tab !== 'topo' || !navHistory.length) return;
-  navForward.push({ treeRoot, selectedKey });
-  applyNav(navHistory.pop());
-}
-function goForward() { // + 下一動
-  if (tab !== 'topo' || !navForward.length) return;
-  navHistory.push({ treeRoot, selectedKey });
-  applyNav(navForward.pop());
-}
-function focus(uuid) {
-  pushNav();            // remember the current centre/selection before re-centring
-  treeRoot = uuid; selectedKey = uuid;
-  renderTable();        // highlight the chosen row in 清單
-  setTab('topo');       // switch to the tree and render (centres the root)
-  const a = scan.assets.get(uuid); // 提示中心節點的完整路徑
-  if (a) setStatus(a.path);
-}
-
-// ---- 拓撲: bidirectional column-aligned tree -----------------------------
-// One side of the tree (deps to the right / dependents to the left), fully
-// expanded to maxDepth. A node's first (kept) child shares its row; later
-// children start new rows. When the global type filter is active we keep only
-// nodes whose type matches OR that lead to a match (中間節點) — dead branches
-// are pruned, but 層0 (rendered separately) is always kept.
-function buildSide(rootUuid, dir, side, maxDepth) {
-  const filtering = selectedTypes.size > 0;
-  // Pass 1 — build the node tree (cycle-guarded), dropping non-matching leaves.
-  function build(uuid, depth, key, anc) {
-    const cycle = anc.has(uuid);
-    const realKids = cycle ? [] : [...neighborsOf(uuid, dir).keys()];
-    const children = [];
-    if (!cycle && depth < maxDepth) {
-      const ca = new Set(anc).add(uuid);
-      for (const cu of realKids.sort(sortByTypeName)) {
-        const cn = build(cu, depth + 1, `${key}>${cu}`, ca);
-        if (cn) children.push(cn);
-      }
-    }
-    const a = scan.assets.get(uuid);
-    const match = !filtering || (a && selectedTypes.has(a.type));
-    if (filtering && !match && children.length === 0) return null; // prune dead branch
-    const hasKids = filtering ? children.length > 0 : realKids.length > 0;
-    return { uuid, depth, key, cycle, hasKids, children };
-  }
-  // Pass 2 — assign rows over the kept tree and flatten to cells.
-  const cells = []; let row = -1;
-  function layout(n, inheritRow) {
-    const myRow = inheritRow != null ? inheritRow : ++row;
-    cells.push({ uuid: n.uuid, depth: n.depth, row: myRow, key: n.key, hasKids: n.hasKids, cycle: n.cycle, side });
-    n.children.forEach((c, i) => layout(c, i === 0 ? myRow : null));
-  }
-  if (maxDepth < 1) return cells;
-  const anc = new Set([rootUuid]);
-  for (const cu of [...neighborsOf(rootUuid, dir).keys()].sort(sortByTypeName)) {
-    const n = build(cu, 1, `${side}:${rootUuid}>${cu}`, anc);
-    if (n) layout(n, null);
-  }
-  return cells;
-}
-// Among same-name siblings, the shortest path part that tells them apart — drop
-// the common leading + trailing segments, keep the differing middle. e.g.
-// ".../en_us/plist/x.plist" vs ".../zh_hk/plist/x.plist" -> "en_us" / "zh_hk".
-function distinguishingDirs(paths) {
-  const segs = paths.map((p) => p.split('/'));
-  const minLen = Math.min(...segs.map((s) => s.length));
-  let pre = 0;
-  while (pre < minLen - 1 && segs.every((s) => s[pre] === segs[0][pre])) pre++;
-  let suf = 0;
-  while (suf < minLen - 1 - pre && segs.every((s) => s[s.length - 1 - suf] === segs[0][segs[0].length - 1 - suf])) suf++;
-  return segs.map((s) => s.slice(pre, s.length - suf).join('/'));
-}
-// Tag each cell with `.dir` (a directory hint) when its basename collides with a
-// sibling under the same tree-parent — so the 拓撲 can disambiguate same-name files.
-function tagSiblingDirs(cells) {
-  const byParent = new Map();
-  for (const c of cells) {
-    c.dir = null;
-    const pk = c.key.slice(0, c.key.lastIndexOf('>'));
-    if (!byParent.has(pk)) byParent.set(pk, []);
-    byParent.get(pk).push(c);
-  }
-  for (const sibs of byParent.values()) {
-    const byBase = new Map();
-    for (const c of sibs) {
-      const a = scan.assets.get(c.uuid);
-      const b = a ? base(a.path) : c.uuid;
-      if (!byBase.has(b)) byBase.set(b, []);
-      byBase.get(b).push(c);
-    }
-    for (const group of byBase.values()) {
-      if (group.length < 2) continue;
-      const dirs = distinguishingDirs(group.map((c) => { const a = scan.assets.get(c.uuid); return a ? a.path : c.uuid; }));
-      group.forEach((c, i) => { c.dir = dirs[i]; });
-    }
-  }
-}
-function cellHtml(c, col) {
-  const a = scan.assets.get(c.uuid);
-  const sym = c.cycle ? '↻' : c.hasKids ? (c.side === 'L' ? '◂' : '▸') : '';
-  const dh = c.dir ? `<span class="cdh" style="opacity:.5;margin-left:.35em;font-size:.82em">${esc(c.dir)}</span>` : '';
-  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${c.key === selectedKey ? ' sel' : ''}"` +
-    ` data-key="${esc(c.key)}" data-uuid="${c.uuid}" data-side="${c.side}"` +
-    ` title="${esc(a ? a.path : c.uuid)}" style="grid-column:${col};grid-row:${c.row + 1}">` +
-    `<span class="tw">${sym}</span><span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span>` +
-    `<span class="cnm">${esc(a ? base(a.path) : c.uuid.slice(0, 10) + '…')}${dh}</span>` +
-    (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
-    `</div>`;
-}
-// signed offset of a selected key (層0=0, 依賴=+depth, 被依賴=-depth)
-function offsetOfKey(key) {
-  if (!key || key === treeRoot) return 0;
-  const depth = key.split('>').length - 1;
-  return key[0] === 'L' ? -depth : depth;
-}
-function renderTopo() {
-  if (!scan) return;
-  if (!treeRoot) { $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`; return; }
-  // 5-column window centred on the selected node's offset. Build each side only
-  // as deep as the window shows — but when the type filter is on, build the full
-  // reachable tree (cycle-bounded) so matches deeper than the window still keep
-  // their connecting path visible.
-  const viewOffset = offsetOfKey(selectedKey);
-  const lo = viewOffset - 2, hi = viewOffset + 2;
-  const DEEP = 24;
-  const right = buildSide(treeRoot, 'out', 'R', selectedTypes.size ? DEEP : hi);
-  const left = buildSide(treeRoot, 'in', 'L', selectedTypes.size ? DEEP : 2 - viewOffset);
-  lastCells = [...left, ...right];
-  tagSiblingDirs(lastCells); // disambiguate same-name siblings (append distinguishing dir)
-  const inWin = (off) => off >= lo && off <= hi;
-  const gcol = (off) => off - lo + 1; // 1..5
-  const cnt = (cells, d) => cells.filter((c) => c.depth === d).length;
-
-  let head = '<div class="topohead">';
-  const lyr = t('topo.layer');
-  for (let gc = 1; gc <= 5; gc++) {
-    const off = lo + (gc - 1);
-    // ← 被依賴 / → 依賴 (arrow = direction); 「層n」 = which layer (NOT a count, so
-    // it doesn't clash with the palette's ←count →count); the .thc pill = node
-    // count at that layer. 層0 has no label — the tinted centre column says it.
-    const label = off === 0 ? '' : off > 0 ? `<i>→</i>${lyr}${off}` : `<i>←</i>${lyr}${-off}`;
-    const count = off === 0 ? '' : off > 0 ? cnt(right, off) : cnt(left, -off);
-    head += `<div class="th${off === 0 ? ' center' : ''}">${label}${count !== '' ? `<span class="thc">${count}</span>` : ''}</div>`;
-  }
-  head += '</div>';
-
-  let body = '<div class="treebody"><div class="tree">';
-  if (inWin(0)) {
-    const a = scan.assets.get(treeRoot);
-    body += `<div class="cell root${selectedKey === treeRoot ? ' sel' : ''}" data-key="${esc(treeRoot)}" data-uuid="${treeRoot}"` +
-      ` title="${esc(a ? a.path : treeRoot)}" style="grid-column:${gcol(0)};grid-row:1">` +
-      `<span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span><span class="cnm">${esc(a ? base(a.path) : treeRoot)}</span>` +
-      (a ? `<button class="cell-copy" type="button" title="${esc(t('topo.copyPath'))}" data-copy="${esc(a.path)}">${COPY_ICON}</button>` : '') +
-      `</div>`;
-  }
-  for (const c of left) { const off = -c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
-  for (const c of right) { const off = c.depth; if (inWin(off)) body += cellHtml(c, gcol(off)); }
-  body += '</div></div>';
-  $('topo').innerHTML = head + body;
-  for (const el of $('topo').querySelectorAll('.cell')) {
-    const key = el.dataset.key, uuid = el.dataset.uuid;
-    el.onclick = () => { clearTimeout(cellClickTimer); cellClickTimer = setTimeout(() => selectTopoKey(key), 200); };
-    el.ondblclick = () => { clearTimeout(cellClickTimer); focus(uuid); };
-  }
-  for (const cb of $('topo').querySelectorAll('.cell-copy')) { // hover 顯示，複製完整路徑
-    cb.onclick = (ev) => {
-      ev.stopPropagation();
-      copyToClipboard(cb.dataset.copy, () => {
-        cb.innerHTML = CHECK_ICON; cb.classList.add('ok');
-        setTimeout(() => { cb.innerHTML = COPY_ICON; cb.classList.remove('ok'); }, 1200);
-        setStatus(t('copy.named', { name: cb.dataset.copy }));
-      });
-    };
-  }
-  const selEl = $('topo').querySelector('.cell.sel') || $('topo').querySelector('.cell.root');
-  if (selEl) selEl.scrollIntoView({ block: 'center', inline: 'nearest' }); // 上下置中
-  showUsage(); // auto-show the "used where" info for the selected ↔ parent edge
-}
-function selectTopoKey(key) {
-  pushNav();           // remember the current selection before moving
-  selectedKey = key; renderTopo();
-  const a = scan.assets.get(selectedUuid()); // 提示選中節點的完整路徑
-  if (a) setStatus(a.path);
-}
-
-// ---- selection + clipboard helpers ---------------------------------------
-function selectedUuid() {
-  if (!treeRoot) return null;
-  if (!selectedKey || selectedKey === treeRoot) return treeRoot;
-  return selectedKey.split('>').pop();
-}
-function copyToClipboard(text, done) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
-  } else fallbackCopy(text, done);
-}
-function copyName(uuid) {
-  const name = base(scan.assets.get(uuid).path);
-  copyToClipboard(name, () => setStatus(t('copy.named', { name })));
-}
-function fallbackCopy(s, done) {
-  const ta = document.createElement('textarea');
-  ta.value = s; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); done(); } catch { /* ignore */ }
-  document.body.removeChild(ta);
-}
-
-// ---- usage popup: where/how an asset is used ("被依賴" sites) -------------
-// Canonical component name (cc.Sprite / ResSprite) — same as the CLI --where and
-// the edit selector, so a usage line reads back as a paste-able selector.
-const compName = (raw) => componentName(scan, raw);
-const COPY_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
-const CHECK_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-let usageText = ''; // plain-text of the current usage popup, for its copy button
-function flashCopied(btn) {
-  btn.innerHTML = CHECK_ICON; btn.classList.add('ok');
-  setTimeout(() => { btn.innerHTML = COPY_ICON; btn.classList.remove('ok'); }, 1200);
-  setStatus(t('usage.copied'));
-}
-// Auto-shown for the SELECTED cell: where it sits inside its tree-parent (the
-// adjacent node already on screen). Only the location detail — the from/to
-// asset names are already visible in the tree. Hidden for the centre/root and
-// for relationships with no node location (structural edges).
-function showUsage() {
-  const pop = $('usagePopup');
-  if (tab !== 'topo' || !scan || !treeRoot || !selectedKey || selectedKey === treeRoot) { pop.hidden = true; return; }
-  const segs = selectedKey.split('>');
-  const a = segs[segs.length - 1];
-  const p = segs.length >= 3 ? segs[segs.length - 2] : treeRoot; // tree-parent uuid
-  const side = selectedKey[0];
-  const from = side === 'R' ? p : a; // the scene/prefab that contains the usage
-  const to = side === 'R' ? a : p;   // the asset being used
-  const fromA = scan.assets.get(from);
-  if (!fromA) { pop.hidden = true; return; }
-  const locs = scan.edges.filter((e) => e.from === from && e.to === to).flatMap((e) => e.locations || []);
-  if (!locs.length) { pop.hidden = true; return; } // structural edge / no node-level location
-  const seen = new Set(); const rows = []; const plain = [];
-  for (const l of locs) {
-    const npRaw = l.nodePath || t('usage.root');
-    const comp = compName(l.component);
-    let headRaw, tail = '', tailRaw = '';
-    if (l.property && l.property.startsWith('click')) { // cc.Button ClickEvent — show a badge
-      const method = l.property.replace(/^click → /, '').replace(/\(\)$/, '');
-      headRaw = l.nodePath && comp ? `${npRaw}:${comp}` : npRaw;
-      tail = `<span class="up-click">▶ ${esc(method)}</span>`; tailRaw = `▶ ${method}`;
-    } else {
-      // nodePath:Comp.prop — a paste-able edit selector; the frame stays as a tail.
-      headRaw = l.nodePath && comp ? `${npRaw}:${comp}${l.property ? `.${l.property}` : ''}`
-        : (comp && l.property ? `${npRaw}  ${comp}.${l.property}` : npRaw);
-      if (l.subName) { tail = esc(`🖼 ${l.subName}`); tailRaw = `🖼 ${l.subName}`; }
-    }
-    const head = esc(headRaw);
-    const key = `${headRaw}|${tailRaw}`;
-    if (seen.has(key)) continue; seen.add(key);
-    rows.push(`<div class="up-site">${head}${tail ? `  ·  ${tail}` : ''}</div>`);
-    plain.push(`${headRaw}${tailRaw ? `  ·  ${tailRaw}` : ''}`);
-  }
-  usageText = plain.join('\n'); // just the usage sites, no header line
-  const headHtml = t('usage.header', { file: `<b>${esc(base(fromA.path))}</b>`, n: rows.length });
-  pop.innerHTML = `<div class="up-head"><span>${headHtml}</span>` +
-    `<button class="up-copy" type="button" title="${esc(t('usage.copyTitle'))}" aria-label="${esc(t('usage.copyAria'))}">${COPY_ICON}</button></div>` +
-    `<div class="up-list">${rows.join('')}</div>`;
-  pop.hidden = false;
-  const cb = pop.querySelector('.up-copy');
-  if (cb) cb.onclick = (ev) => { ev.stopPropagation(); copyToClipboard(usageText, () => flashCopied(cb)); };
-  positionUsage(pop);
-}
-function closeUsage() { $('usagePopup').hidden = true; }
-function positionUsage(pop) {
-  const sel = $('topo').querySelector('.cell.sel');
-  if (!sel) { pop.hidden = true; return; }
-  const r = sel.getBoundingClientRect();
-  const top0 = $('topo').getBoundingClientRect().top; // below the banner + column header
-  const vw = window.innerWidth, vh = window.innerHeight, m = 8;
-  pop.style.maxHeight = 'none';
-  const pw = pop.offsetWidth || 360;
-  const left = Math.min(Math.max(m, r.left), vw - pw - m);
-  // Put the popup on whichever side of the cell has more room, and cap its
-  // height to that space (it scrolls internally) so it never covers the banner.
-  const below = vh - m - (r.bottom + 6);
-  const above = (r.top - 6) - (top0 + 4);
-  if (below >= above) {
-    pop.style.top = `${r.bottom + 6}px`;
-    pop.style.maxHeight = `${Math.max(90, below)}px`;
-  } else {
-    pop.style.maxHeight = `${Math.max(90, above)}px`;
-    pop.style.top = `${Math.max(top0 + 4, r.top - 6 - pop.offsetHeight)}px`;
-  }
-  pop.style.left = `${left}px`;
-  return;
-}
-function cycleTab(delta) {
-  const tabs = ['list', 'topo', 'reports'];
-  const i = tabs.indexOf(tab);
-  setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
-}
+// ---- global keys ---------------------------------------------------------
 function onKey(e) {
   if (!$('palette').hidden) return; // palette has its own handler
   if (!$('help').hidden) { if (e.key === 'Escape') { e.preventDefault(); $('help').hidden = true; } return; } // help open → only Esc
@@ -611,24 +125,24 @@ function onKey(e) {
     if (typing) return;                                            // copying inside an input
     if (window.getSelection && window.getSelection().toString()) return; // a text selection exists → let the browser copy it
     const u = selectedUuid();
-    if (u && scan && scan.assets.has(u)) { e.preventDefault(); copyName(u); }
+    if (u && S.scan && S.scan.assets.has(u)) { e.preventDefault(); copyName(u); }
     return;
   }
   if (e.key === 'Escape') {                                        // Esc：先關彈窗，再清空類型篩選
     if (!$('usagePopup').hidden) { e.preventDefault(); closeUsage(); return; }
-    if (!typing && selectedTypes.size) { e.preventDefault(); toggleType('__all'); return; } // 打字中不清篩選
+    if (!typing && S.selectedTypes.size) { e.preventDefault(); toggleType('__all'); return; } // 打字中不清篩選
     return;
   }
   if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
   if (typing) return;
   if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; } // Tab 切分頁
-  if (tab === 'list') {                                   // 清單：↑↓ 切換項目、Enter 設為中心
+  if (S.tab === 'list') {                                 // 清單：↑↓ 切換項目、Enter 設為中心
     if (e.key === 'ArrowDown') { e.preventDefault(); moveListSel(1); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); moveListSel(-1); return; }
-    if (e.key === 'Enter' && listSel) { e.preventDefault(); focus(listSel); return; }
+    if (e.key === 'Enter' && S.listSel) { e.preventDefault(); focus(S.listSel); return; }
     return;
   }
-  if (tab !== 'topo' || !treeRoot) return;
+  if (S.tab !== 'topo' || !S.treeRoot) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); setTab('list'); return; }  // 回清單
   if (e.key === '-' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goBack(); return; }                        // − 上一動（不攔 Cmd/Ctrl±縮放）
   if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goForward(); return; }  // + 下一動
@@ -637,297 +151,4 @@ function onKey(e) {
   if (!dir) return;
   e.preventDefault();
   navTree(dir);
-}
-// Shared tree navigation (keyboard arrows + trackpad swipe).
-// ↑/↓ : move within the current column. ←/→ : move one column toward 被依賴/依賴
-// and select the item NEAREST the viewport vertical centre (skip if empty).
-function navTree(dir) {
-  if (!treeRoot) return;
-  if (dir === 'up' || dir === 'down') {
-    if (!selectedKey || selectedKey === treeRoot) return; // 層0 is a single cell
-    const side = selectedKey[0];
-    const depth = selectedKey.split('>').length - 1;
-    const col = lastCells.filter((c) => c.side === side && c.depth === depth).sort((a, b) => a.row - b.row);
-    const nx = col[col.findIndex((c) => c.key === selectedKey) + (dir === 'down' ? 1 : -1)];
-    if (nx) selectTopoKey(nx.key);
-    return;
-  }
-  const targetOffset = offsetOfKey(selectedKey) + (dir === 'right' ? 1 : -1);
-  const topoEl = $('topo');
-  const cells = [...topoEl.querySelectorAll('.cell')].filter((el) => offsetOfKey(el.dataset.key) === targetOffset);
-  if (!cells.length) return; // no item that direction → don't move
-  const area = topoEl.querySelector('.treebody') || topoEl;
-  const box = area.getBoundingClientRect();
-  const centerY = box.top + box.height / 2;
-  let best = null, bestD = Infinity;
-  for (const el of cells) {
-    const r = el.getBoundingClientRect();
-    const d = Math.abs((r.top + r.height / 2) - centerY);
-    if (d < bestD) { bestD = d; best = el; }
-  }
-  if (best) selectTopoKey(best.dataset.key);
-}
-// Trackpad two-finger horizontal swipe → ←/→ navigation (and blocks the macOS
-// browser back/forward gesture). Swipe right (back, deltaX<0) → left/toward
-// centre; swipe left (forward, deltaX>0) → right/deeper.
-let swipeAccum = 0, swipeLock = false, swipeTimer = null;
-function onTopoWheel(e) {
-  if (tab !== 'topo' || !treeRoot) return;
-  if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return; // vertical → normal scroll
-  e.preventDefault();                                   // block browser back/forward
-  if (swipeLock) return;
-  swipeAccum += e.deltaX;
-  clearTimeout(swipeTimer);
-  swipeTimer = setTimeout(() => { swipeAccum = 0; }, 180);
-  if (swipeAccum <= -50) fireSwipe('left');
-  else if (swipeAccum >= 50) fireSwipe('right');
-}
-function fireSwipe(dir) {
-  navTree(dir);
-  swipeLock = true; swipeAccum = 0; clearTimeout(swipeTimer);
-  setTimeout(() => { swipeLock = false; }, 450);
-}
-
-// ---- quick-open palette ("/") --------------------------------------------
-function openPalette() {
-  if (!scan) return;
-  closeUsage();
-  $('palette').hidden = false;
-  const inp = $('paletteInput'); inp.value = ''; renderPalette(''); inp.focus();
-}
-function closePalette() { $('palette').hidden = true; }
-
-// Searchable entries from every angle. Each `target` is a real asset uuid, so
-// picking any kind focuses an asset.
-//   asset : a file (label=name, text=full path, also matchable by uuid)
-//   frame : a sprite-frame inside an atlas/sheet (label=frame name) → its owner
-//   usage : where an asset is used (node path · component.property · frame · click)
-function buildSearchIndex() {
-  const out = [];
-  for (const a of scan.assets.values()) {
-    out.push({ kind: 'asset', target: a.uuid, type: a.type, uuid: a.uuid, label: base(a.path), sub: dirOf(a.path) || '/', text: a.path });
-    for (const sa of a.subAssets || []) {
-      if (sa.kind !== 'sprite-frame' || !sa.name || sa.name === 'spriteFrame') continue; // skip the default single-png frame
-      out.push({ kind: 'frame', target: a.uuid, type: a.type, label: sa.name, sub: base(a.path), text: sa.name });
-    }
-  }
-  const seen = new Set();
-  for (const e of scan.edges) {
-    if (!e.locations || !e.locations.length) continue;
-    const toA = scan.assets.get(e.to); const fromA = scan.assets.get(e.from);
-    if (!toA || !fromA) continue;
-    for (const l of e.locations) {
-      const comp = l.component ? compName(l.component) : '';
-      const np = l.nodePath || ''; const prop = l.property || '';
-      const text = [np, comp, prop, l.subName].filter(Boolean).join(' ');
-      if (!text) continue;
-      const key = `${e.to}|${np}|${comp}|${prop}`;
-      if (seen.has(key)) continue; seen.add(key);
-      out.push({ kind: 'usage', target: e.to, type: toA.type, label: np || prop || comp, sub: `${base(toA.path)} ← ${base(fromA.path)}`, text });
-    }
-  }
-  return out;
-}
-// Subsequence (fuzzy) score, with word-boundary and consecutive-run bonuses;
-// stays well below the substring scores so exact hits always rank first.
-function subseqScore(q, t) {
-  let ti = 0, score = 0, prev = -2;
-  for (let i = 0; i < q.length; i++) {
-    const f = t.indexOf(q[i], ti);
-    if (f < 0) return -1;
-    let s = 1;
-    if (f === 0 || '/_-. '.includes(t[f - 1])) s += 5;
-    if (f === prev + 1) s += 3;
-    score += s; prev = f; ti = f + 1;
-  }
-  return score;
-}
-function matchScore(q, t) { // higher = better; -1 = no match. q already lowercased.
-  if (!q) return 0;
-  t = t.toLowerCase();
-  const idx = t.indexOf(q);
-  if (idx === 0) return 1000 - t.length;                                            // prefix
-  if (idx > 0) return ('/_-. '.includes(t[idx - 1]) ? 700 : 500) - idx - t.length * 0.1; // substring
-  return subseqScore(q, t);                                                          // subsequence
-}
-// Like matchScore but returns the matched character indices in `t` (for
-// highlighting). Prefers a contiguous substring; else the greedy subsequence.
-function fuzzyMatch(q, t) {
-  if (!q) return { pos: [] };
-  const tl = t.toLowerCase();
-  if (tl.includes(q)) { // highlight EVERY substring occurrence (e.g. ".prefab" in the name AND "/prefab/" in the dir)
-    const pos = [];
-    for (let idx = tl.indexOf(q); idx !== -1; idx = tl.indexOf(q, idx + q.length)) {
-      for (let i = 0; i < q.length; i++) pos.push(idx + i);
-    }
-    return { pos };
-  }
-  let ti = 0; const pos = []; // subsequence fallback (cross-field, e.g. "dd")
-  for (let i = 0; i < q.length; i++) {
-    const f = tl.indexOf(q[i], ti);
-    if (f < 0) return null;
-    pos.push(f); ti = f + 1;
-  }
-  return { pos };
-}
-// Wrap the matched indices of `str` in <b class="hl"> (bold + accent), escaping
-// the rest. Contiguous matched runs share one tag.
-function hlText(str, pos) {
-  if (!pos || !pos.length) return esc(str);
-  const set = new Set(pos);
-  let out = '', run = false;
-  for (let i = 0; i < str.length; i++) {
-    const m = set.has(i);
-    if (m && !run) { out += '<b class="hl">'; run = true; }
-    else if (!m && run) { out += '</b>'; run = false; }
-    out += esc(str[i]);
-  }
-  return out + (run ? '</b>' : '');
-}
-
-const PALETTE_SCOPES = { '@': 'frame', '#': 'type', '>': 'usage' };
-function renderPalette(raw) {
-  if (!searchIndex) searchIndex = buildSearchIndex();
-  raw = (raw || '').trim();
-  let scope = null, q = raw.toLowerCase();
-  if (raw && PALETTE_SCOPES[raw[0]]) { scope = PALETTE_SCOPES[raw[0]]; q = raw.slice(1).trim().toLowerCase(); }
-  const uuidish = !scope && /^[0-9a-f-]{4,}$/i.test(q);
-
-  let items;
-  if (!q && !scope) {
-    items = searchIndex.filter((e) => e.kind === 'asset').slice(0, 100); // empty query → assets
-  } else {
-    const scored = [];
-    for (const e of searchIndex) {
-      if (scope === 'frame' && e.kind !== 'frame') continue;
-      if (scope === 'usage' && e.kind !== 'usage') continue;
-      if (scope === 'type') { // '#': filter assets by type
-        if (e.kind !== 'asset') continue;
-        const sc = matchScore(q, e.type);
-        if (sc >= 0) scored.push([sc, e]);
-        continue;
-      }
-      if (!scope && e.kind === 'usage') continue; // usage only via '>'
-      let sc = matchScore(q, e.label);
-      if (e.kind === 'asset') sc = Math.max(sc, matchScore(q, e.text)); // also full path
-      if (uuidish && e.kind === 'asset' && e.uuid.toLowerCase().includes(q)) sc = Math.max(sc, 900);
-      if (sc < 0) continue;
-      if (e.kind === 'frame') sc -= 0.5; // assets edge out frames on a tie
-      scored.push([sc, e]);
-    }
-    scored.sort((a, b) => b[0] - a[0]);
-    items = scored.slice(0, 100).map((x) => x[1]);
-  }
-
-  paletteItems = items; paletteIdx = 0;
-  const tag = (e) => e.kind === 'frame' ? `<span class="ptag">${esc(t('palette.tagFrame'))}</span>`
-    : e.kind === 'usage' ? `<span class="ptag">${esc(t('palette.tagUsage'))}</span>` : '';
-  // Highlight matched chars (VSCode-style). For assets the match is on the full
-  // path, split back onto the displayed dir + name; frames/usage match the label.
-  const hlOf = (e) => {
-    if (!q || scope === 'type') return { L: esc(e.label), S: esc(e.sub) };
-    if (e.kind === 'asset') {
-      const m = fuzzyMatch(q, e.text);
-      if (!m) return { L: esc(e.label), S: esc(e.sub) };
-      const dirLen = e.sub === '/' ? 0 : e.sub.length;
-      return {
-        L: hlText(e.label, m.pos.filter((p) => p >= dirLen).map((p) => p - dirLen)),
-        S: e.sub === '/' ? '/' : hlText(e.sub, m.pos.filter((p) => p < dirLen)),
-      };
-    }
-    const m = fuzzyMatch(q, e.label);
-    return { L: m ? hlText(e.label, m.pos) : esc(e.label), S: esc(e.sub) };
-  };
-  const clo = (e) => { // ← 被依賴∑ (blast radius) · → 依賴∑ (bundle); a 0 side is omitted
-    const n = closureByUuid.get(e.target);
-    const cin = n ? n.cin : 0, cout = n ? n.cout : 0;
-    const parts = [];
-    if (cin) parts.push(`<i>←</i>${cin}`);
-    if (cout) parts.push(`<i>→</i>${cout}`);
-    if (!parts.length) return '<span class="pclo"></span>'; // keep the column width for alignment
-    return `<span class="pclo" title="${esc(t('palette.clo', { cin, cout }))}">${parts.join(' ')}</span>`;
-  };
-  $('paletteList').innerHTML = items.map((e, i) => {
-    const { L, S } = hlOf(e);
-    return `<div class="pitem${i === 0 ? ' on' : ''}" data-uuid="${e.target}">` +
-      `<span class="dot" style="background:${typeColor(e.type)}"></span>` +
-      `<span class="pnm">${L}</span>${tag(e)}` +
-      `<span class="pdir" title="${esc(e.sub)}">${S}</span>${clo(e)}</div>`;
-  }).join('') || `<div class="empty">${esc(t('palette.empty'))}</div>`;
-  for (const el of $('paletteList').querySelectorAll('.pitem')) el.onclick = () => pickPalette(el.dataset.uuid);
-  $('paletteList').scrollTop = 0; // new query resets selection to item 0 → scroll it back into view
-}
-function movePalette(d) {
-  if (!paletteItems.length) return;
-  paletteIdx = (paletteIdx + d + paletteItems.length) % paletteItems.length;
-  const els = $('paletteList').querySelectorAll('.pitem');
-  els.forEach((e, i) => e.classList.toggle('on', i === paletteIdx));
-  if (els[paletteIdx]) els[paletteIdx].scrollIntoView({ block: 'nearest' });
-}
-function pickPalette(uuid) { closePalette(); if (scan && scan.assets.has(uuid)) focus(uuid); }
-
-// ---- 報告 -----------------------------------------------------------------
-function refRow(uuid, path, type, right) {
-  return `<div class="ref" data-uuid="${uuid}"><span class="dot" style="background:${typeColor(type)}"></span>` +
-    `<span class="nm">${esc(base(path))}</span><span class="rdir" title="${esc(dirOf(path))}">${esc(dirOf(path) || '/')}</span>` +
-    `<span class="meta">${right || ''}</span></div>`;
-}
-// Every report respects the ONE global type filter (the bar under the banner).
-function renderReports() {
-  if (!scan) return;
-  const unused = unusedReport(scan); const orphans = orphanRefReport(scan);
-  const atlas = atlasUtilizationReport(scan); const size = sizeReport(scan);
-  const dropped = droppedMetaReport(scan);
-  const section = (title, sub, body, open = true) =>
-    `<details${open ? ' open' : ''}><summary>${title} <span class="sub">${sub}</span></summary><div class="rbody">${body}</div></details>`;
-
-  const unusedItems = unused.items.filter((i) => typeAllowed(i.type));
-  const unusedSize = unusedItems.reduce((s, i) => s + (i.size || 0), 0);
-  const unusedBody = unusedItems.length
-    ? unusedItems.slice(0, 300).map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('')
-    : `<div class="empty">${esc(t('rep.none'))}</div>`;
-
-  const orphanBody = orphans.items.length // orphans have no asset type → unfiltered
-    ? orphans.items.slice(0, 200).map((i) => i.missingSource
-      ? `<div class="ref orphan missing" title="${esc(t('orphan.missingTitle', { ref: i.ref, count: i.count }))}">` +
-        `<span class="dot" style="background:${typeColor('orphan')}"></span>` +
-        `<span class="nm">${esc(base(i.path))}</span><span class="rdir">${esc(dirOf(i.path) || '/')}</span>` +
-        `<span class="meta"><span class="warn">${esc(t('tag.missingSrc'))}</span> · ${esc(t('rep.sources', { n: i.count }))}</span></div>`
-      : `<div class="ref orphan"><code>${esc(i.ref)}</code><span class="meta">${esc(t('rep.sources', { n: i.count }))}</span></div>`).join('')
-    : `<div class="empty">${esc(t('rep.none'))}</div>`;
-
-  const atlasItems = atlas.items.filter((i) => typeAllowed(i.type));
-  const atlasBody = atlasItems.map((i) => {
-    const tag = !i.referenced ? `<span class="warn">${esc(t('tag.unrefd'))}</span>` : i.wholeReferenced ? `<span class="dyn">${esc(t('tag.whole'))}</span>` : '';
-    return `<div class="ref" data-uuid="${i.uuid}"><span class="dot" style="background:${typeColor(i.type)}"></span>` +
-      `<span class="nm">${esc(base(i.path))}</span><span class="rdir" title="${esc(dirOf(i.path))}">${esc(dirOf(i.path) || '/')}</span>` +
-      `<span class="meta">${i.used}/${i.total} (${(i.ratio * 100).toFixed(0)}%) ${tag}</span></div>`;
-  }).join('') || `<div class="empty">${esc(t('rep.noAtlas'))}</div>`;
-
-  const sizeTypes = Object.entries(size.byType).filter(([t]) => typeAllowed(t)).sort((a, b) => b[1].size - a[1].size);
-  const sizeTotal = sizeTypes.reduce((s, [, v]) => s + v.size, 0);
-  const sizeItems = size.items.filter((i) => typeAllowed(i.type));
-  const sizeBody =
-    `<table class="tt"><tr><th>${esc(t('size.type'))}</th><th>${esc(t('size.count'))}</th><th>${esc(t('size.total'))}</th></tr>` +
-    sizeTypes.map(([ty, v]) =>
-      `<tr><td><span class="dot" style="background:${typeColor(ty)}"></span>${ty}</td><td>${v.count}</td><td>${kb(v.size)}</td></tr>`).join('') +
-    `<tr class="tot"><td>${esc(t('size.sum'))}</td><td></td><td>${kb(sizeTotal)}</td></tr></table>` +
-    `<h4>${esc(t('size.largest'))}</h4>` + sizeItems.slice(0, 100).map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('');
-
-  const droppedBody = dropped.items.length
-    ? dropped.items.map((i) =>
-      `<div class="ref orphan${i.referenced ? ' missing' : ''}" title="${esc(i.path)}">` +
-      `<span class="dot" style="background:${typeColor('orphan')}"></span>` +
-      `<span class="nm">${esc(base(i.path))}</span><span class="rdir">${esc(dirOf(i.path) || '/')}</span>` +
-      `<span class="meta">${i.referenced ? `<span class="warn">${esc(t('tag.stillRef'))}</span>` : `<span class="muted">${esc(t('tag.noRef'))}</span>`}</span></div>`).join('')
-    : `<div class="empty">${esc(t('rep.none'))}</div>`;
-
-  $('reports').innerHTML =
-    section(t('rep.unused'), t('rep.unusedSub', { n: unusedItems.length, size: kb(unusedSize) }), unusedBody) +
-    section(t('rep.orphan'), t('rep.orphanSub', { n: orphans.total }) + (orphans.missingSourceCount ? ' ' + t('rep.orphanMissing', { n: orphans.missingSourceCount }) : ''), orphanBody) +
-    section(t('rep.atlas'), t('rep.atlasSub', { n: atlasItems.length }), atlasBody) +
-    section(t('rep.size'), kb(sizeTotal), sizeBody) +
-    (dropped.total
-      ? section(t('rep.dropped'), t('rep.droppedSub', { n: dropped.total }) + ' · ' + (dropped.referencedCount ? t('rep.droppedRefd', { n: dropped.referencedCount }) : t('rep.droppedNoRef')), droppedBody, false)
-      : '');
 }
