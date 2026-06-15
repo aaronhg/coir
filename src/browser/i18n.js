@@ -22,7 +22,7 @@ const MESSAGES = {
     'help.close': '關閉',
     'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資源的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
       + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資源表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為拓撲中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
-      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗。選一個節點會自動顯示它「用在哪」。</li>'
+      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗，父子間以灰色連線相連、選中時整條鏈（祖先）與直接子節點會加亮。選一個節點會自動顯示它「用在哪」。頂端的 bar：左邊<b>篩選框</b>會直接隱藏不相符的節點（清空或 <kbd>Esc</kbd> 即還原），右邊<b>麵包屑</b>顯示到中心的整條鏈（方向固定「被依賴 → 依賴」，每節可點跳選，旁邊一顆按鈕複製整條鏈）。</li>'
       + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資源體積、缺來源檔的 meta。</li></ul>'
       + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關的分支。</p>'
       + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 引用處/節點、<kbd>~</kbd> 邊種類（單打 <kbd>~</kbd> 列出可選種類）；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
@@ -118,7 +118,7 @@ const MESSAGES = {
     'help.close': 'Close',
     'help.body': '<h3>What it is</h3><p>Load a <b>Cocos Creator 3.8.x</b> project to analyze asset <b>usage</b> and the <b>dependency topology</b>. Everything runs in your browser — no files are uploaded.</p>'
       + '<h3>Three tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click to select, double-click (or <kbd>Enter</kbd>) to centre the topology on it; <kbd>↑</kbd> <kbd>↓</kbd> move between rows.</li>'
-      + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window. Selecting a node auto-shows where it is used.</li>'
+      + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window, with grey parent→child connectors and the selected node\'s chain (ancestors) + direct children highlighted. Selecting a node auto-shows where it is used. The top bar: a <b>filter box</b> on the left that hides non-matching nodes (clear or <kbd>Esc</kbd> restores), and a <b>breadcrumb</b> on the right showing the chain to the centre (fixed dependents → dependencies, each crumb clickable, with a button to copy the whole chain).</li>'
       + '<li><b>Reports</b> — unused, orphan refs, atlas utilization, asset size, source-less metas.</li></ul>'
       + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports, and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
       + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node, <kbd>~</kbd> edge-kind (type <kbd>~</kbd> to list them); <kbd>#</kbd>/<kbd>~</kbd> are two-part (<code>#type query</code>, <code>~kind query</code>). Paste a uuid to jump.</p>'
