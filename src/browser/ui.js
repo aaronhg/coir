@@ -115,7 +115,10 @@ function relocalize() {
 }
 
 // ---- data ----------------------------------------------------------------
-function setScan(s, name, plugins = PLUGINS) {
+function setScan(s, name, opts = {}) {
+  // `opts`: { plugins, viewer, center }. viewer = a URL-hash topology snapshot →
+  // topology only (no list/reports/picker), focus `center` instead of the list.
+  const { plugins = PLUGINS, viewer = false, center = null } = opts;
   // Fold plugin presentation into the UI before the first render: type colors
   // into TYPE_COLOR (plugin wins), localized strings into the i18n catalog.
   for (const p of plugins) {
@@ -127,6 +130,7 @@ function setScan(s, name, plugins = PLUGINS) {
   $('topoFilterInput').value = ''; // a new project resets the topo text filter
   $('welcome').hidden = true; // first-run card → gone once a project is loaded
   $('filterbar').hidden = false;
+  document.body.classList.toggle('viewer', viewer); // CSS hides list/reports/picker in viewer mode
   S.nodeIndex = [...s.assets.values()].map((a) => ({
     uuid: a.uuid, path: a.path, base: base(a.path), dir: dirOf(a.path),
     type: a.type, size: a.size, in: a.in, out: a.out,
@@ -135,11 +139,12 @@ function setScan(s, name, plugins = PLUGINS) {
   }));
   S.closureByUuid = new Map(S.nodeIndex.map((n) => [n.uuid, n]));
   const sum = summary(s); S.byTypeCache = sum.byType;
-  restoreFilter(); // 還原上次的清單過濾（型別只保留專案實際有的）
+  if (!viewer) restoreFilter(); // 還原上次的清單過濾（型別只保留專案實際有的）；快照不繼承本機篩選
   $('projectName').textContent = name;
   renderStats();
   setStatus('');
   renderTypeFilters();
+  if (viewer) { focus(center); return; } // snapshot → straight to the topology, centred
   renderTable();
   renderReports();
   $('topo').innerHTML = `<div class="colhint">${esc(t('topo.hint'))}</div>`;

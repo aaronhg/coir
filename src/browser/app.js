@@ -2,6 +2,7 @@
 import { fsApiSupported, pickProjectDirectory, makeProvider } from './fsapi.js';
 import { scanProject } from '../core/scan.js';
 import { buildAdjacency } from '../core/graph.js';
+import { decodeTopo } from '../core/topohash.js';
 import { PLUGINS, dedupePlugins } from '../core/plugins/index.js';
 import { initUI } from './ui.js';
 import { t } from './i18n.js';
@@ -65,7 +66,12 @@ async function loadProjectPlugins(root) {
 
 const ui = initUI({ onPick: handlePick });
 
-if (!fsApiSupported()) {
+// Viewer mode: a `#topo=<blob>` URL carries a topology snapshot → render it
+// directly (no File System Access, no project pick). Otherwise the normal flow.
+const hashMatch = location.hash.match(/^#topo=(.+)$/);
+if (hashMatch) {
+  viewerFromHash(hashMatch[1]).catch((e) => { console.error(e); ui.setStatus(t('status.error', { msg: (e && e.message) || e })); });
+} else if (!fsApiSupported()) {
   ui.setStatus(t('err.noFsApi'));
   document.getElementById('pickBtn').disabled = true;
   document.getElementById('welcomeBtn').disabled = true;
@@ -88,7 +94,7 @@ async function handlePick() {
     const plugins = dedupePlugins([...PLUGINS, ...globalP, ...projectP, ...runtimePlugins]);
     const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress });
     scan.adjacency = buildAdjacency(scan.edges);
-    ui.setScan(scan, provider.projectName, plugins);
+    ui.setScan(scan, provider.projectName, { plugins });
     // Show the active NON-builtin plugins, each prefixed `source.name`.
     const ext = plugins.filter((p) => !PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
     if (ext.length) ui.setStatus(t('status.plugins', { names: ext.join(', ') }));
@@ -97,4 +103,32 @@ async function handlePick() {
     console.error(e);
     ui.setStatus(t('status.error', { msg: (e && e.message) || e }));
   }
+}
+
+// ---- viewer mode (URL-hash topology snapshot) ----------------------------
+// Rebuild a scan-like object from a #topo payload (synthetic integer ids,
+// no File API). The topology UI consumes it like any scan; `boundary` flags nodes
+// whose real neighbours were trimmed, `locMore` edges have usage detail not shipped.
+function scanFromPayload(p) {
+  const ty = p.ty || [], k = p.k || [];
+  const assets = new Map(), byPath = new Map();
+  (p.n || []).forEach((nd, i) => {
+    const a = { uuid: String(i), path: nd[0], type: ty[nd[1]] ?? 'orphan', ext: '', importer: '', size: 0, in: 0, out: 0, subAssets: [], hasSource: true, boundary: nd[2] === 1 };
+    assets.set(a.uuid, a); byPath.set(a.path, a);
+  });
+  const edges = (p.e || []).map(([from, to, kIdx, extra]) => {
+    const e = { from: String(from), to: String(to), kind: k[kIdx] ?? '?', weight: 1, locations: [] };
+    if (Array.isArray(extra)) e.locations = extra.map((l) => ({ nodePath: l[0] || '', component: l[1] || '', property: l[2] || '', subName: l[3] || '' }));
+    else if (extra === 1) e.locMore = true; // has usage detail, omitted from this snapshot
+    return e;
+  });
+  for (const e of edges) { const f = assets.get(e.from), tA = assets.get(e.to); if (f) f.out++; if (tA) tA.in++; }
+  return { assets, byPath, edges, orphanRefs: [], metaErrors: [], missing: new Map(), missingReferenced: new Set(), files: [], rootTypes: new Set(), subOwner: new Map(), subUsage: new Map() };
+}
+async function viewerFromHash(blob) {
+  const payload = await decodeTopo(blob);
+  const scan = scanFromPayload(payload);
+  scan.adjacency = buildAdjacency(scan.edges);
+  ui.setScan(scan, payload.t || t('viewer.title'), { viewer: true, center: String(payload.c) });
+  ui.setStatus(t('status.snapshot', { n: scan.assets.size }));
 }

@@ -181,7 +181,7 @@ function cellHtml(c, col) {
   const a = S.scan.assets.get(c.uuid);
   const sym = c.cycle ? '↻' : c.hasKids ? (c.side === 'L' ? '◂' : '▸') : '';
   const dh = c.dir ? `<span class="cdh" style="opacity:.5;margin-left:.35em;font-size:.82em">${esc(c.dir)}</span>` : '';
-  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${pathSet.has(c.key) ? ' onpath' : ''}${childSet.has(c.key) ? ' kid' : ''}${c.key === S.selectedKey ? ' sel' : ''}${findClass(c.key)}"` +
+  return `<div class="cell ${c.side === 'L' ? 'left' : 'right'}${pathSet.has(c.key) ? ' onpath' : ''}${childSet.has(c.key) ? ' kid' : ''}${c.key === S.selectedKey ? ' sel' : ''}${findClass(c.key)}${a && a.boundary ? ' bnd' : ''}"` +
     ` data-key="${esc(c.key)}" data-uuid="${c.uuid}" data-side="${c.side}"` +
     ` title="${esc(a ? a.path : c.uuid)}" style="grid-column:${col};grid-row:${c.row + 1}">` +
     `<span class="tw">${sym}</span><span class="dot" style="background:${typeColor(a ? a.type : 'orphan')}"></span>` +
@@ -474,8 +474,8 @@ function centerSelected(tb) { scrollRowToCenter(tb, selectedRowOf()); }
 export function selectTopoKey(key) {
   pushNav();           // remember the current selection before moving
   S.selectedKey = key; renderTopo();
-  const a = S.scan.assets.get(selectedUuid()); // 提示選中節點的完整路徑
-  if (a) setStatus(a.path);
+  const a = S.scan.assets.get(selectedUuid()); // 提示選中節點的完整路徑(快照的邊界節點加註)
+  if (a) setStatus(a.boundary ? `${a.path} · ${t('topo.boundary')}` : a.path);
 }
 export function selectedUuid() {
   if (!S.treeRoot) return null;

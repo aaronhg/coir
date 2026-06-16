@@ -17,8 +17,16 @@ export function showUsage() {
   const to = side === 'R' ? a : p;   // the asset being used
   const fromA = S.scan.assets.get(from);
   if (!fromA) { pop.hidden = true; return; }
-  const locs = S.scan.edges.filter((e) => e.from === from && e.to === to).flatMap((e) => e.locations || []);
-  if (!locs.length) { pop.hidden = true; return; } // structural edge / no node-level location
+  const matched = S.scan.edges.filter((e) => e.from === from && e.to === to);
+  const locs = matched.flatMap((e) => e.locations || []);
+  if (!locs.length) {
+    if (matched.some((e) => e.locMore)) { // snapshot: usage exists but wasn't shipped → generic hint
+      pop.innerHTML = `<div class="up-head"><span><b>${esc(base(fromA.path))}</b></span></div>` +
+        `<div class="up-list"><div class="up-site up-more">${esc(t('usage.more'))}</div></div>`;
+      pop.hidden = false; positionUsage(pop); return;
+    }
+    pop.hidden = true; return; // structural edge / no node-level location
+  }
   const seen = new Set(); const rows = []; const plain = [];
   for (const l of locs) {
     const npRaw = l.nodePath || t('usage.root');

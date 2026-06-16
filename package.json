@@ -13,6 +13,10 @@
     "coir": "src/cli.js"
   },
   "types": "./types/index.d.ts",
+  "exports": {
+    ".": { "types": "./types/index.d.ts", "default": "./src/index.js" },
+    "./package.json": "./package.json"
+  },
   "files": [
     "src",
     "types",

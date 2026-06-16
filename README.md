@@ -229,6 +229,19 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 
 外掛在 CLI 也生效：`<coir 根>/coir.plugins.mjs`（全域）與 `<專案>/coir.plugins.mjs`（該專案）會自動載入，或用 `--plugin <檔>` 指定（見「外掛」）。
 
+## 嵌入 / 整合（viewer · embedder · Cocos 擴充）
+
+核心 DOM-free、零相依，所以能把「指著一個資源直接看它的拓撲」嵌進別的工具。
+
+### URL 快照 viewer（`#topo=`）
+把某資源的**鄰域子圖**壓進網址 hash —— `https://aaronhg.github.io/coir/#topo=<blob>` —— 開連結就**直接進拓撲**、聚焦那個資源。資料全在 hash（節點整數索引 + gzip + base64url），所以**不需 File System Access、不需 server**：連非 Chromium（Firefox / Safari / 手機）都看得了（只有「選目錄掃描」那條才需 FSA）。可分享、可加書籤。`encodeTopo`/`decodeTopo` 在 `src/core/topohash.js`（Node 也能跑），會自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`（預設 256KB、可調）、永遠回連結；鄰域外緣節點標 `⋯`、超出範圍的使用處給「未載入」提示。
+
+### 嵌入出口（`import('coir')`）
+`package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `makeFsProvider` / `PLUGINS`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。
+
+### Cocos Creator 3.8 擴充（`cocos-extension/`）
+資源**右鍵** → 子選單按層列出 **被依賴（←）／依賴（→）**，每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。詳見 `cocos-extension/README.md`。
+
 ## 架構
 
 ```
@@ -239,6 +252,7 @@ src/core/      # 與 DOM/瀏覽器無關的純核心，Node 與瀏覽器共用
   scan.js      #   掃描 FileProvider → 資源索引 + 依賴邊
   graph.js     #   鄰接表、依賴/被依賴閉包
   analyze.js   #   未使用、孤兒、圖集利用率、體積、閉包、缺來源檔 meta 報告
+  topohash.js  #   鄰域子圖 ⇄ `#topo=` URL 快照（encode/decode；viewer + 嵌入共用）
   plugins/     #   內建外掛（atlas/font/particle/spine）+ registry（index.js）；型別與邊可外掛擴充
 src/browser/   # 瀏覽器層（純 DOM，無第三方執行期庫）
   fsapi.js     #   File System Access → FileProvider
@@ -252,7 +266,10 @@ src/browser/   # 瀏覽器層（純 DOM，無第三方執行期庫）
 src/node/
   fsProvider.js #  Node fs → FileProvider（node-run.js 與 cli.js 共用）
   loadPlugins.js #  載入 repo 外的外掛（coir.plugins.mjs 全域/專案、--plugin）
-src/cli.js        # 無頭依賴查詢 CLI（deps/uses/closure/find，bin: coir）
+src/cli.js        # 無頭 CLI（deps/uses/closure/find/info/analyze/edit/mcp，bin: coir）
+src/seam/ edit/ mcp/  # 共用讀寫 seam + CLI/MCP 呈現（見 docs/EDITING.md、docs/MCP.md）
+src/index.js      # 嵌入出口 barrel：`import('coir')`（package.json exports 對應）
+cocos-extension/  # Cocos Creator 3.8 擴充（右鍵查依賴 + 開拓撲快照）+ install.sh
 test/node-run.js  # 整份報告的無頭驗證器
 test/cli.test.js  # node:test：對合成專案跑 cli.js 端對端
 index.html        # 應用外殼 + CSS（載入 dist/app.bundle.js）

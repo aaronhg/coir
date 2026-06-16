@@ -268,6 +268,13 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 
 順手把 headless 邏輯 seam **收進 `src/seam/`**:`query.js`(讀)、`shared.js`(resolve／edgeMaps／helpers)、`pluginCommands.js`(命令註冊)。頂層只剩 `cli.js`／`editCli.js`(CLI 呈現)+ 各功能目錄(`core`／`browser`／`node`／`edit`／`mcp`／`seam`);寫端 `edit/ops.js` 維持與 `editPrefab.js` 同住。純搬移:10 處 import 改完、全測試綠。
 
+### 11.15 URL 快照 viewer + 嵌入出口 + Cocos 擴充
+為了能「指著一個資源直接看它的拓撲」嵌進別的工具(尤其 Cocos 編輯器):
+
+- **URL 快照 viewer**(`src/core/topohash.js`):把某資源的**鄰域子圖**壓進網址 hash `#topo=<blob>`(節點整數索引 + intern 型別/種類 + gzip + base64url;`CompressionStream` Node/瀏覽器皆有 → 零依賴、兩端共用)。瀏覽器看到 `#topo=` 就 decode → 畫拓撲,**完全不碰 File System Access** → 非 Chromium(Firefox/Safari/手機)也能看,只有「選目錄掃描」那條才需 FSA。`encodeTopo` 自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`(預設 256KB、可調),連 depth 1 都爆就丟使用處、**永遠回連結**;邊界節點標 `⋯`、使用處只放最近 ±2 層、更外層給「未載入」提示。round-trip／縮小／邊界有 `test/topohash.test.js`。
+- **嵌入出口**:`package.json` 加 `exports`(`.` → `src/index.js` barrel),host 一行 `import('coir')` 就拿到 `scanProject`／`buildAdjacency`／`encodeTopo`／`makeFsProvider`／`PLUGINS`…(Node 端;瀏覽器仍走 `app.js`)。
+- **Cocos Creator 3.8 擴充**(`cocos-extension/`):資源**右鍵** → 子選單按層列出**被依賴(←)／依賴(→)**,每筆點了跳到該資源(`Editor.Selection.select`),頂層開拓撲快照(`encodeTopo` → `shell.openExternal('…#topo=')`)。擴充主行程 **in-process 跑 coir-core**(快取 scan、asset-db 變動失效),選單必須同步建構 → 靠 main 推來的圖快取(`request` 暖機 + `coir:graph` broadcast 更新);en/zh i18n(`Editor.I18n.t`);`install.sh` 一鍵複製 + symlink coir(免 npm link)。坑:`onAssetMenu` **不能 async**(編輯器不 await → 整個選單消失),所以改同步 + 快取。
+
 ---
 
 ## 12. 最終狀態
@@ -276,7 +283,8 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
 - **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**、灰色父子連線、選取鏈高亮、頂端 bar＝篩選框（隱藏非相符）＋麵包屑（被依賴→依賴）＋複製整條鏈，右上角浮動 `Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**112 個案例**：CLI 98 + MCP 6 + 外掛命令 CLI 4／MCP 2 + 虛擬節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**116 個案例**：CLI 98 + MCP 6 + 外掛命令 6 + topohash 4 + 外掛節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **嵌入 / 分享**：`#topo=<blob>` **URL 快照 viewer**（鄰域子圖塞進 hash → 開連結直接看拓撲，**不需 File API、跨瀏覽器**；`src/core/topohash.js` 的 `encodeTopo`/`decodeTopo`，自動縮深度塞進 256KB）；`import('coir')` **嵌入出口**（`exports` → `src/index.js`）；**Cocos Creator 3.8 擴充**（`cocos-extension/`：資源右鍵看 被依賴/依賴 分層 + 跳轉 + 開拓撲快照，in-process 跑 coir-core，`install.sh` 部署）。
 - **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
 
 > 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。
