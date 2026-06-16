@@ -1,0 +1,22 @@
+{
+  "package_version": 2,
+  "name": "coir",
+  "version": "0.1.0",
+  "title": "i18n:coir.ext_title",
+  "description": "i18n:coir.ext_desc",
+  "author": "coir",
+  "editor": ">=3.8.0",
+  "main": "./main.js",
+  "contributions": {
+    "assets": {
+      "menu": {
+        "methods": "./assets-menu.js",
+        "assetMenu": "onAssetMenu"
+      }
+    },
+    "messages": {
+      "open-topo": { "methods": ["openTopo"] },
+      "all-graph": { "methods": ["allGraph"] }
+    }
+  }
+}
