@@ -143,6 +143,62 @@ export interface Plugin {
   colors?: Record<string, string>; // type -> hex (browser UI)
   messages?: Record<string, Record<string, string>>; // locale -> key -> string (browser i18n)
   edges?(ctx: PluginContext): void | Promise<void>;
+  /**
+   * Commands this plugin contributes. Registered ONCE: a command runs as
+   * `coir <name> …` on the CLI and — when it carries an `inputSchema` — is ALSO
+   * exposed as an MCP tool (`coir mcp`). Built-ins always win: a `name` that
+   * collides with deps/uses/closure/find/info/analyze/edit/mcp is ignored with a
+   * warning. CLI commands are listed in `coir --help`.
+   */
+  commands?: PluginCommand[];
+}
+
+/**
+ * A command contributed by a plugin. The same definition serves the CLI and (when
+ * `inputSchema` is present) MCP: `run(ctx)` RETURNS its result and never prints —
+ * each host presents it (CLI prints `text`, or JSON on `-o json`; MCP returns
+ * `data`).
+ */
+export interface PluginCommand {
+  name: string; // the subcommand / tool token: `coir <name> …`
+  usage?: string; // one-line usage shown under "Plugin commands" in `coir --help`
+  description?: string; // MCP tool description (falls back to usage)
+  /** JSON Schema for the args object. Present → the command is ALSO an MCP tool. */
+  inputSchema?: object;
+  /** Names mapping CLI positionals → `ctx.args` keys (so it matches the MCP JSON shape). Defaults to the inputSchema property order. A trailing `?` marks optional. */
+  positional?: string[];
+  run(ctx: CommandContext): CommandResult | void | Promise<CommandResult | void>;
+}
+
+/** What a command's `run` returns: `data` (structured, for `-o json` / MCP) and/or `text` (human CLI output); or an `error`. */
+export type CommandResult =
+  | { data?: any; text?: string }
+  | { error: string; candidates?: string[] };
+
+/**
+ * What a command's `run(ctx)` receives — the finished scan plus resolution/IO
+ * helpers, normalized so one `run` works in both hosts. `args` is a NAMED object
+ * (CLI positionals mapped via `positional`; MCP's JSON arguments). `env` lets a
+ * command branch if it must.
+ */
+export interface CommandContext {
+  env: 'cli' | 'mcp';
+  command: string; // the invoked command name
+  args: Record<string, any>; // named args (same shape in both hosts)
+  argv?: string[]; // CLI only: raw positionals (escape hatch)
+  flags?: Record<string, any>; // CLI only: parsed flags (json, limit, depth, where, types:Set, …); {} in MCP
+  projectDir: string;
+  scan: ScanResult;
+  readText(path: string): Promise<string>; // read any source under assets/ (POSIX-relative)
+  resolveAsset(query: string): string; // path/basename/uuid[@sub] → uuid; on miss the CLI prints candidates + exits 2, MCP throws (→ a clean tool error)
+  edgeMaps(): { out: Map<string, Edge[]>; inc: Map<string, Edge[]> };
+  uuid: {
+    mainUuid(ref: string): string;
+    subOf(ref: string): string | null;
+    looksCompressed(token: string): boolean;
+    decompressUuid(token: string): string;
+  };
+  util: { base(p: string): string; kb(n: number): string };
 }
 
 export interface ScanOptions {

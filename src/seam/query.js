@@ -3,8 +3,8 @@
 // (`-o json`) form of each query command, with NO console/exit. cli.js's text
 // commands and the MCP server both call these, so the query data model is one
 // place. (The CLI's text rendering stays in cli.js; this is the json substance.)
-import { mainUuid } from './core/uuid.js';
-import { closureReport, summary, unusedReport, orphanRefReport, droppedMetaReport, atlasUtilizationReport, sizeReport } from './core/analyze.js';
+import { mainUuid } from '../core/uuid.js';
+import { closureReport, summary, unusedReport, orphanRefReport, droppedMetaReport, atlasUtilizationReport, sizeReport } from '../core/analyze.js';
 import { base, edgeSort, orphansOf, locJson } from './shared.js';
 
 /**

@@ -91,7 +91,7 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 - 推導邊：圖集→底圖、字型→底圖、粒子→底圖、spine 三件組（皆為**內建外掛**，可再擴充，見下方「外掛」）；以及 component → 基底 component 的 `extends`（類別繼承）邊。
 - cc.Button 的 ClickEvent 接線：`_componentId`（壓縮的處理腳本 uuid）+ `handler`（方法名）→ 一條 script 邊，位置記為 `click → 方法()`。
 
-## 外掛（擴充型別與邊）
+## 外掛（擴充型別、邊與命令）
 
 型別與依賴邊都可外掛。內建的「圖集→底圖／字型→底圖／粒子→底圖／Spine 三件組」就是四個內建外掛（`src/core/plugins/{atlas,font,particle,spine}.js`，每檔同時帶該型別的對應、邊邏輯與顏色）。要新增一種資源型別或一種邊，寫一個 plugin 即可，不必動核心。
 
@@ -122,6 +122,14 @@ export default {
 | 瀏覽器 runtime | `window.coir.use(plugin)`（選專案前） | 該頁 |
 
 > 全域與專案的 `coir.plugins.mjs` **CLI 與瀏覽器都會自動載入** —— 瀏覽器透過 dev server 取得 coir 根那份、用 File System Access 讀被選專案那份（每次選專案重讀，要選含 `assets/` 的專案根目錄）。開啟專案後右上狀態列會列出生效的非內建 plugin，標成 `來源.名稱`（`global`／`project`／`use`）。
+
+### 命令（commands）— 一份定義，CLI ＋ MCP 兩個介面
+
+plugin 除了型別／邊，還能加**命令**：`commands: [{ name, usage?, description?, inputSchema?, positional?, run(ctx) }]`。一個命令**登記一次**就同時：在 **CLI** 跑 `coir <name> …`（列在 `coir --help` 的「Plugin commands」）；帶了 `inputSchema` 的話**也自動成為 MCP 工具**（`coir mcp`）。（命令是 headless 的，只在 CLI／MCP，不在瀏覽器。）
+
+內建命令（`deps`/`uses`/`closure`/`find`/`info`/`analyze`/`edit`/`mcp`）永遠優先，撞名的 plugin 命令會被忽略＋警告。`run(ctx)` **回傳**結果、**從不印**——`{ data, text? }` 或 `{ error, candidates? }`：CLI 印 `text`（`-o json` 印 `data`）、MCP 回 `data`，所以同一個 `run` 兩邊通用。`ctx` 跨宿主一致：`env`（'cli'｜'mcp'）、`args`（具名物件——CLI positionals 經 `positional` 對映、MCP 是 JSON arguments）、`scan`、`readText`、`resolveAsset`（path/basename/uuid→uuid；CLI 撞名印候選 + `exit 2`、MCP throw → 乾淨 tool error）、`edgeMaps`、`uuid.*`、`util.{base,kb}`（CLI 另有 `flags`/`argv`）。
+
+例如一個外部 plugin 可以這樣加 `coir timeline <prefab>`（也是 `timeline` MCP 工具），用一個 `run` 同時服務 CLI 與 agent，而不必 fork coir。註冊表在 `src/seam/pluginCommands.js`，契約見 `types/index.d.ts`（`PluginCommand`/`CommandContext`/`CommandResult`）。
 
 ### 範例：`audio-call`（把 `audioPlay('x')` 連到音檔）
 

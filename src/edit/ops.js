@@ -8,7 +8,7 @@
 // (except writeAtomic's concurrent-change guard, surfaced by commitWrites).
 import path from 'node:path';
 import { componentName, typeToken } from '../core/selector.js';
-import { resolveTarget } from '../shared.js';
+import { resolveTarget } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
   nestedInstanceRoot, subtreeHasInstance, listNodes } from './editPrefab.js';

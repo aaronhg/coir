@@ -10,7 +10,7 @@
 //   edit <file> rename / set-active / set-pos / set-parent / add-node / rm-node / …
 import { mainUuid } from './core/uuid.js';
 import { componentName } from './core/selector.js';
-import { resolveAsset, edgeMaps, locText } from './shared.js';
+import { resolveAsset, edgeMaps, locText } from './seam/shared.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from './edit/ops.js';
 
 // CLI-only messages: usage + value-flag errors. Operation errors (bad selector,

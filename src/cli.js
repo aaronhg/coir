@@ -26,13 +26,14 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { scanProject } from './core/scan.js';
 import { closureReport } from './core/analyze.js';
-import { mainUuid } from './core/uuid.js';
+import { mainUuid, subOf, looksCompressed, decompressUuid } from './core/uuid.js';
 import { knownTypes } from './core/meta.js';
 import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
+import { collectPluginCommands, mapPositionals } from './seam/pluginCommands.js';
 import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
-import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './shared.js';
-import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './query.js';
+import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './seam/shared.js';
+import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -420,11 +421,43 @@ function cmdAnalyze(scan, section, flags) {
   console.log(lines.join('\n'));
 }
 
+// --- Plugin-contributed commands -------------------------------------------
+// A plugin adds `commands: [{ name, usage?, description?, inputSchema?, positional?,
+// run(ctx) }]`. Registration is ONCE: the same command also becomes an MCP tool
+// when it carries an `inputSchema` (see src/mcp/server.js). `run(ctx)` RETURNS a
+// result (never prints) so one definition serves both hosts — here the CLI prints
+// it (text, or JSON on -o json); MCP returns it. `collectPluginCommands` +
+// `mapPositionals` are shared with the MCP server (src/pluginCommands.js).
+function renderPluginCommandsHelp(cmds) {
+  if (!cmds.size) return '';
+  const lines = [...cmds.values()].map((c) => `  ${c.usage}`);
+  return `\n\nPlugin commands:\n${lines.join('\n')}`;
+}
+
+// The context a plugin command's run(ctx) gets in the CLI. `args` is the named
+// object (CLI positionals mapped via the command's `positional` names) — the same
+// shape the MCP host passes — so one `run` works in both. `env` lets a command
+// branch if it must; `flags` is the parsed CLI flags (CLI only).
+function makeCmdCtx({ cmd, pos, flags, projectDir, scan, fp }) {
+  return {
+    env: 'cli',
+    command: cmd.name,
+    args: mapPositionals(cmd, pos), // named args (matches the MCP JSON shape)
+    argv: pos,                      // raw positionals (escape hatch)
+    flags,
+    projectDir,
+    scan,
+    readText: (p) => fp.readText(p),            // read any source under assets/ (POSIX-relative)
+    resolveAsset: (q) => resolveAsset(scan, q), // path/basename/uuid[@sub] → uuid; prints candidates + exits 2 on miss
+    edgeMaps: () => edgeMaps(scan),
+    uuid: { mainUuid, subOf, looksCompressed, decompressUuid },
+    util: { base, kb },
+  };
+}
+
 async function main() {
   const { projectDir, command, target, pos, flags } = parseArgs(process.argv.slice(2));
-  if (flags.help) { console.log(USAGE); process.exit(0); }
   if (flags.version) { console.log(`coir ${VERSION}`); process.exit(0); }
-  if (!projectDir || !command) { console.error(USAGE); process.exit(1); }
 
   // Built-ins + coir-root global config + project-local config + --plugin files.
   // External plugins thus live outside the coir repo (most specific last).
@@ -435,13 +468,20 @@ async function main() {
     ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)), // this project only
     ...await loadPluginFiles(flags.plugins),                    // --plugin <file>
   ]);
+  // Plugin-contributed CLI commands (built-ins always win); also appended to --help.
+  const pluginCommands = collectPluginCommands(plugins);
+  const helpText = USAGE + renderPluginCommandsHelp(pluginCommands);
+
+  if (flags.help) { console.log(helpText); process.exit(0); }
+  if (!projectDir || !command) { console.error(helpText); process.exit(1); }
 
   // `coir mcp` is a long-lived MCP server (it manages its own scan + fs.watch),
   // not a one-shot query — hand off before the single scan below.
   if (command === 'mcp') { const { startMcpServer } = await import('./mcp/server.js'); await startMcpServer(projectDir, { plugins }); return; }
 
   let scan;
-  try { scan = await scanProject(makeFsProvider(path.join(projectDir, 'assets')), { plugins }); }
+  const fp = makeFsProvider(path.join(projectDir, 'assets'));
+  try { scan = await scanProject(fp, { plugins }); }
   catch (e) {
     console.error(M.scanFail(e.message));
     if (flags.project == null && /ENOENT/.test(e.message)) console.error(M.scanHint); // default cwd had no assets/ → likely meant -C
@@ -465,8 +505,23 @@ async function main() {
   if (command === 'analyze') { cmdAnalyze(scan, target, flags); return; } // project-wide; target = the section (or none)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
 
+  // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).
+  const pcmd = pluginCommands.get(command);
+  if (pcmd) {
+    const res = await pcmd.run(makeCmdCtx({ cmd: pcmd, pos, flags, projectDir, scan, fp }));
+    if (res && res.error) {
+      console.error(`✗ ${res.error}`);
+      if (Array.isArray(res.candidates) && res.candidates.length) console.error(res.candidates.join('\n'));
+      process.exit(2);
+    }
+    if (res && (res.data !== undefined || res.text !== undefined)) {
+      console.log(flags.json ? JSON.stringify(res.data ?? null) : (res.text ?? JSON.stringify(res.data ?? null, null, 2)));
+    }
+    return;
+  }
+
   if (!['deps', 'uses', 'closure', 'info'].includes(command)) {
-    console.error(`${M.unknownCmd(command)}\n\n${USAGE}`); process.exit(1);
+    console.error(`${M.unknownCmd(command)}\n\n${helpText}`); process.exit(1);
   }
   if (!target) { console.error(`${M.needTarget(command)}\n\n${USAGE}`); process.exit(1); }
 

@@ -2,8 +2,8 @@
 // commands (editCli.js): asset resolution, edge indexing, location text. Kept
 // framework-free and side-effect-free except resolveAsset (which exits on a bad
 // target, the universal CLI behaviour). Mirrors cli.js's unchecked JS style.
-import { looksCompressed, decompressUuid } from './core/uuid.js';
-import { componentName, locSelector } from './core/selector.js';
+import { looksCompressed, decompressUuid } from '../core/uuid.js';
+import { componentName, locSelector } from '../core/selector.js';
 
 export const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 export const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);

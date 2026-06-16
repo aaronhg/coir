@@ -184,9 +184,9 @@ src/edit/ops.js        ← 純「寫 seam」(@ts-check,無 print/exit;CLI 與 MC
   getData / treeData         // 讀某檔的 selector / 結構
   commitWrites(writes,{backup,force})   // 落地 + mtime guard
   resolveRawTypes            // 類名 __type__ → token(set/--json 共用)
-src/query.js       ← 純「讀 seam」:depsData / infoData / findData / closureData
+src/seam/query.js       ← 純「讀 seam」:depsData / infoData / findData / closureData
 
-src/shared.js       ← resolveTarget/resolveAsset、edgeMaps/orphansOf、locText/locJson、base/kb/edgeSort
+src/seam/shared.js       ← resolveTarget/resolveAsset、edgeMaps/orphansOf、locText/locJson、base/kb/edgeSort
 src/editCli.js         ← edit 的 CLI 層:arg/值旗標解析 + 文字呈現 + commit;mutate 全委派 ops.js
 src/cli.js             ← query 指令 + parseArgs + dispatch + USAGE + 攔 `coir mcp`
 src/mcp/server.js      ← 手刻 JSON-RPC/stdio + queue + fs.watch 失效 + scan 快取(見 docs/MCP.md)
@@ -242,7 +242,7 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 | Tier 3 | `add/rm-node`、`add/rm-component` + 索引壓縮 + template-by-example | ✅ |
 | 專案級 | `--all swap-uuid` + 巢狀實例護欄 | ✅ |
 | 探索 | `tree`(結構發現 + 現成 selector;`--with`/`--under`/`--depth`)| ✅ |
-| 共用 seam | 抽 `src/edit/ops.js`(`runEdit`…)+ `src/query.js`,CLI 與 MCP 同源;atomic+mtime 寫入護欄 | ✅ |
+| 共用 seam | 抽 `src/edit/ops.js`(`runEdit`…)+ `src/seam/query.js`,CLI 與 MCP 同源;atomic+mtime 寫入護欄 | ✅ |
 | MCP server | `coir mcp`:手刻零依賴 JSON-RPC/stdio,型別化工具(讀無前綴 / 寫 `edit_*`;host 裡 `coir__<工具>`)(見 [docs/MCP.md](MCP.md))| ✅ |
 | 強化 | `--json` 自訂型別、`[i]` 統一、顯示↔selector 統一、code-review 修復 | ✅ |
 
@@ -255,7 +255,7 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 
 ### MCP server(已實作 → [docs/MCP.md](MCP.md))
 
-MCP server **不是另一套實作**,而是共用 seam(`src/edit/ops.js` + `src/query.js`)之上的**薄型別化轉接層**(邏輯一份),跟 CLI 同層的另一個出口(`coir mcp`,手刻零依賴 JSON-RPC/stdio)。
+MCP server **不是另一套實作**,而是共用 seam(`src/edit/ops.js` + `src/seam/query.js`)之上的**薄型別化轉接層**(邏輯一份),跟 CLI 同層的另一個出口(`coir mcp`,手刻零依賴 JSON-RPC/stdio)。
 
 - **價值**:① 寫操作的**逐工具權限邊界**(每個 `edit_rm_node` 是具名、可單獨核准的呼叫;`dryRun` 參數做唯讀預覽);② 觸及沒有 shell 的 GUI host;③ 型別化 schema。
 - **生態定位**:少見的「headless、不開編輯器、既能深度讀分析又能就地編輯既有 prefab」的 Cocos MCP——現有的 Cocos MCP 工具多半要嘛只讀、要嘛要開編輯器、要嘛偏「從零生成」。

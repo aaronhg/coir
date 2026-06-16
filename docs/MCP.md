@@ -2,7 +2,7 @@
 
 把 coir 的查詢 + 就地編輯能力包成 **MCP server**(Model Context Protocol),讓 AI agent / 沒有 shell 的 GUI host(Claude Desktop 等)透過**型別化工具**呼叫。
 
-> 它**不是第二套實作** —— 是 `cmdDeps`/`runEdit` 那層共用邏輯(`src/query.js` + `src/edit/ops.js`)之上的薄轉接層,**邏輯一份**,跟 CLI 同層的另一個出口。`src/mcp/server.js` 只管傳輸 + scan 生命週期,`src/mcp/tools.js` 是工具表。
+> 它**不是第二套實作** —— 是 `cmdDeps`/`runEdit` 那層共用邏輯(`src/seam/query.js` + `src/edit/ops.js`)之上的薄轉接層,**邏輯一份**,跟 CLI 同層的另一個出口。`src/mcp/server.js` 只管傳輸 + scan 生命週期,`src/mcp/tools.js` 是工具表。
 
 ## 為什麼用 MCP(而不是直接 CLI)
 
@@ -26,7 +26,7 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 ```
 （已 `npm link`/全域安裝可直接 `coir`;在專案目錄內可省略 `-C`。手刻零依賴,不需 `@modelcontextprotocol/sdk`。）
 
-## 工具面(read 9 + write 12)
+## 工具面(內建 read 9 + write 12,外掛命令再加)
 
 工具名不帶 server 前綴(server 名 `coir` 已 namespace —— host 裡顯示為 `coir__<工具>`,如 `coir__tree`)。讀工具直接是 `find`/`deps`/…(host 可全放行),寫工具一律 `edit_*`(逐一把關)。
 
@@ -48,6 +48,8 @@ CLI 本來就 agent-friendly(stdout / `-o json` / exit code);有 shell 的 agent
 `set` · `set_uuid` · `swap_uuid`(`all?` 全專案)· `rename` · `set_active` · `set_layer` · `transform`(pos/scale/rot)· `set_parent` · `add_node` · `rm_node` · `add_component` · `rm_component`
 
 > agent 典型流程:**`tree` 探索 → `get` 細讀 → `edit_*` 改**,全程不必 parse 檔案。`set` 的 `value` 收完整 JSON(純量 / 包裝物件 / `{"__uuid__"}` / 類名 `__type__` 的自訂型別),`get` 的輸出可直接餵回。
+
+> **外掛命令也是工具**:任何 plugin 的 `commands`(見 README「外掛」)只要帶 `inputSchema`,啟動時就**自動登入 `tools/list`／`tools/call`**(內建工具名永遠優先,撞名忽略+警告)。同一個 `run(ctx)` 服務 `coir <name>` CLI 與這個 MCP 工具、回 `data`;`ctx` 給 `scan`／`readText`／`resolveAsset`(找不到/撞名 → throw 成乾淨 tool error)／`edgeMaps`／`uuid.*`／`util`。例:`coir mcp -C <proj> --plugin .../coir-plugin/index.mjs` 載入後,`timeline` 就出現在工具表。註冊表 `src/seam/pluginCommands.js`、契約 `types/index.d.ts`。
 
 ## 新鮮度 & 併發安全(零依賴)
 
@@ -75,7 +77,7 @@ Cocos Creator 同時在跑、會改檔,所以:
 src/mcp/server.js   手刻 JSON-RPC/stdio loop + initialize/tools.list/tools.call + 序列化 queue + fs.watch 失效 + scan 快取
 src/mcp/tools.js    工具 schema 表 + 各工具 → runEdit / query / ops(commitWrites 在這層落地,遵守 dryRun/backup/force)
 src/edit/ops.js     共用寫 seam runEdit/runSwapAll/getData/treeData(CLI 與 MCP 同源)
-src/query.js    共用讀 seam depsData/infoData/findData/closureData
+src/seam/query.js    共用讀 seam depsData/infoData/findData/closureData
 ```
 
 測試:`test/mcp.test.js`(node:test,真的 spawn server 講 JSON-RPC)涵蓋 initialize/tools.list、讀工具、`set` 的 dry-run vs 實寫(讀回驗證)、結構編輯(rename→新 selector 解析、add-component)、錯誤回成 `isError` 不崩。

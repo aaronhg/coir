@@ -12,6 +12,9 @@ import readline from 'node:readline';
 import { scanProject } from '../core/scan.js';
 import { makeFsProvider } from '../node/fsProvider.js';
 import { TOOLS, TOOLS_BY_NAME } from './tools.js';
+import { collectPluginCommands } from '../seam/pluginCommands.js';
+import { base, kb, resolveTarget, edgeMaps } from '../seam/shared.js';
+import { mainUuid, subOf, looksCompressed, decompressUuid } from '../core/uuid.js';
 
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version; } catch { return '?'; } })();
 const PROTOCOL_VERSION = '2025-06-18';
@@ -23,10 +26,12 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
   console.log = console.info = console.debug = (...a) => process.stderr.write(`${a.join(' ')}\n`);
 
   const assetsDir = path.join(projectDir, 'assets');
+  const fp = makeFsProvider(assetsDir);
   const state = { scan: null, dirty: false, projectDir };
-  async function rescan() { state.scan = await scanProject(makeFsProvider(assetsDir), { plugins }); state.dirty = false; }
+  async function rescan() { state.scan = await scanProject(fp, { plugins }); state.dirty = false; }
   state.markDirty = () => { state.dirty = true; };
   state.forceRescan = rescan;
+  state.readText = (p) => fp.readText(p); // plugin MCP tools read sources under assets/ via ctx.readText
   const ensureFresh = async () => { if (state.dirty || !state.scan) await rescan(); };
 
   await rescan(); // initial scan (throws loudly if the project dir is wrong)
@@ -44,6 +49,48 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
     });
     watcher.unref(); // the watcher alone shouldn't hold the event loop open
   } catch (e) { log(`recursive watch unavailable (${e instanceof Error ? e.message : e}) — call coir_rescan to refresh`); }
+
+  // Plugin commands that carry an `inputSchema` ALSO surface here as MCP tools —
+  // one registration (plugin.commands), two hosts. Same `run(ctx)` as the CLI: it
+  // RETURNS { data }/{ error } (never prints — stdout is the protocol channel), so
+  // we just adapt the ctx (env:'mcp', args = the JSON tool arguments) and pass the
+  // result through. Built-ins always win on a name collision.
+  const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
+  // In MCP there is no process to exit on a bad asset — resolveAsset throws, and
+  // tools/call's try/catch turns it into a clean { error } tool result.
+  const mcpResolveAsset = (scan, q) => {
+    const r = resolveTarget(scan, q);
+    if (r.notFound) throw new Error(`not found: "${q}"`);
+    if (r.candidates) throw new Error(`"${q}" matches ${r.candidates.length} assets — use the full path`);
+    return r.uuid;
+  };
+  for (const c of collectPluginCommands(plugins, log).values()) {
+    if (!c.inputSchema) continue; // CLI-only command (no schema) → not an MCP tool
+    if (TOOLS_BY_NAME.has(c.name)) { log(`plugin command '${c.name}' shadows a built-in MCP tool — ignored`); continue; }
+    toolMap.set(c.name, {
+      name: c.name,
+      description: c.description,
+      inputSchema: c.inputSchema,
+      run: async (st, a) => {
+        const res = await c.run({
+          env: 'mcp',
+          command: c.name,
+          args: a || {},
+          flags: {},
+          projectDir: st.projectDir,
+          scan: st.scan,
+          readText: st.readText,
+          resolveAsset: (q) => mcpResolveAsset(st.scan, q),
+          edgeMaps: () => edgeMaps(st.scan),
+          uuid: { mainUuid, subOf, looksCompressed, decompressUuid },
+          util: { base, kb },
+        });
+        if (res && res.error) return { error: res.error, candidates: res.candidates };
+        return { data: res ? res.data : undefined };
+      },
+    });
+  }
+  const allTools = [...toolMap.values()];
 
   // ---- JSON-RPC framing ----------------------------------------------------
   const send = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -63,10 +110,10 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
       case 'ping':
         return reply(msg.id, {});
       case 'tools/list':
-        return reply(msg.id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
+        return reply(msg.id, { tools: allTools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) });
       case 'tools/call': {
         const { name, arguments: args = {} } = msg.params || {};
-        const tool = TOOLS_BY_NAME.get(name);
+        const tool = toolMap.get(name);
         if (!tool) return fail(msg.id, -32602, `unknown tool: ${name}`);
         await ensureFresh();
         let res;
@@ -95,5 +142,5 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
   // only after all earlier responses have flushed to stdout — then exit (clean
   // for both a long-lived client disconnect and a piped batch of requests).
   rl.on('close', () => { chain.finally(() => process.stdout.write('', () => process.exit(0))); });
-  log(`ready — project ${projectDir}, ${state.scan.assets.size} assets, ${TOOLS.length} tools`);
+  log(`ready — project ${projectDir}, ${state.scan.assets.size} assets, ${allTools.length} tools`);
 }

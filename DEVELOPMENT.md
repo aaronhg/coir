@@ -263,15 +263,20 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - **選取鏈高亮**：選中一個節點時，`computeSelPath` 沿 `parentKeyOf` 走出**祖先鏈（root→選取）＋直接子節點**（`pathSet`/`childSet`），cell 標 `.onpath`/`.kid`、鏈上連線標 `.hot`，全用灰調；真正的「選取／中心」維持藍色。
 - **頂端 bar `#topobar`**（選定中心後才浮現）：左邊一個**篩選框**＝**真的隱藏非相符節點**（與型別篩選共用 `buildSide` 剪枝：型別 ∧ 路徑關鍵字、任一篩選啟用就建深樹 `DEEP`、輸入 debounce、清空或 `Esc` 即還原完整樹）；右邊一條**麵包屑**＝選取項到中心的整條鏈，**方向固定「被依賴 → 依賴」**（依帶號 `offsetOfKey` 排序，不論選取在哪一側都不翻轉），每一節可點即跳選，旁邊一顆固定**複製鈕**把整條鏈以**每行一個完整路徑**複製。原本 `Ctrl/⌘+F` 的**找尋**（高亮＋跳轉）則**還原**成樹區**右上角浮動框**——為此把 `#topo` 包進定位容器 `#topowrap`，找尋框是 `#topo` 的兄弟節點（`renderTopo` 重寫 `#topo.innerHTML` 不會清掉它）。分工清楚：**篩選縮小範圍、找尋在結果內定位**。
 
+### 11.14 外掛命令（CLI ＋ MCP 一份定義）+ `src/seam/` 整理
+再開一條外掛維度:plugin 除了型別／邊,還能貢獻**命令**(`commands: [{ name, usage?, description?, inputSchema?, positional?, run(ctx) }]`)。沿用 coir 既有的「一份邏輯、雙宿主」seam 哲學 —— `run(ctx)` **回傳 `{data,text}`／`{error}`、從不印**,CLI 印 text(`-o json` 印 data)、帶 `inputSchema` 者**自動也是 MCP 工具**回 data;**登記一次、兩個介面**。`ctx` 跨宿主一致(`env`／`args`(CLI positionals 經 `positional` 對映成跟 MCP JSON 同形)／`scan`／`readText`／`resolveAsset`(CLI 印候選+exit2、MCP throw→乾淨 tool error)／`edgeMaps`／`uuid.*`／`util`)。內建命令永遠優先(撞名忽略+警告);零執行期相依不變(`pluginCommands.js` 是純註冊表)。兩宿主各測一遍(`test/plugin-command.test.js` 走 CLI、`test/plugin-mcp.test.js` 走 MCP)。**證明者**:`timeline-viewer/coir-plugin` 用它加了 `coir timeline <prefab>`(也是 `timeline` MCP 工具),engine-free 解 Cocos prefab 的 TimeLineTool 結構——一個外掛就撐起一個有料的 headless 命令,不必 fork coir。
+
+順手把 headless 邏輯 seam **收進 `src/seam/`**:`query.js`(讀)、`shared.js`(resolve／edgeMaps／helpers)、`pluginCommands.js`(命令註冊)。頂層只剩 `cli.js`／`editCli.js`(CLI 呈現)+ 各功能目錄(`core`／`browser`／`node`／`edit`／`mcp`／`seam`);寫端 `edit/ops.js` 維持與 `editPrefab.js` 同住。純搬移:10 處 import 改完、全測試綠。
+
 ---
 
 ## 12. 最終狀態
 
-- **形式**：純前端（HTML+JS，無第三方執行期庫，~60KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT，由 **GitHub Actions** 自動 build＋部署，`dist/` 不進 repo）。
+- **形式**：純前端（HTML+JS，無第三方執行期庫，~60KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT，由 **GitHub Actions** 自動 build＋部署，`dist/` 不進 repo）；welcome／說明頁印 **build stamp**（webpack 注入的 commit·date,dev build 標 `dev`）。
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
 - **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**、灰色父子連線、選取鏈高亮、頂端 bar＝篩選框（隱藏非相符）＋麵包屑（被依賴→依賴）＋複製整條鏈，右上角浮動 `Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**106 個案例**：CLI 98 + MCP 6 + 外掛虛擬節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**112 個案例**：CLI 98 + MCP 6 + 外掛命令 CLI 4／MCP 2 + 虛擬節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
 - **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
 
 > 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。

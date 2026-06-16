@@ -5,8 +5,8 @@
 // of the MCP exit). Each tool's `run(ctx, args)` returns { data } on success or
 // { error, candidates? } on failure; ctx = the live server state (scan/projectDir
 // /markDirty/forceRescan). Writes commit here (respecting dryRun/backup/force).
-import { edgeMaps, resolveTarget } from '../shared.js';
-import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../query.js';
+import { edgeMaps, resolveTarget } from '../seam/shared.js';
+import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
