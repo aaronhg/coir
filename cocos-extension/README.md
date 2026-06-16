@@ -1,9 +1,11 @@
-# coir — Cocos Creator 3.8 extension
+# coir — Cocos Creator 3.5–3.8 extension
 
-Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲 ←used-by →uses`** →
-opens that asset's **dependency topology** in your browser. The label shows the
-asset's live direct degrees; the topology rides in the viewer's URL hash
-(`#topo=…`) — no server, no upload.
+Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲  ←a →b`** with a
+submenu listing its **dependents (←) and dependencies (→) by layer** — click an
+entry to **jump to that asset** in the editor, or **開啟拓撲圖** to open its
+dependency topology in your browser (the graph rides in the viewer's URL hash
+`#topo=…` — no server, no upload). An asset with no neighbours is a flat item that
+opens the topology directly.
 
 It runs [coir](https://github.com/aaronhg/coir)'s core **in-process** (cached
 scan), so the menu is instant and stays fresh as the project changes.
@@ -12,13 +14,16 @@ scan), so the menu is instant and stays fresh as the project changes.
 
 ```
 right-click asset → onAssetMenu(assetInfo)            (assets-menu.js, renderer)
-   └─ await degrees(uuid)  → label "←in →out"
-   click → open-topo(uuid)
+   SYNC: BFS the cached graph ±2 layers from assetInfo.uuid →
+     label  Coir 依賴拓撲 ←L1… →L1…   + submenu (開啟拓撲圖 · ←層N/→層N <name>)
+   click a dep/dependent → Editor.Selection.select('asset', uuid)
+   click 開啟拓撲圖       → open-topo(uuid)
                                                        (main.js, editor process)
-main: cached scanProject(<project>/assets) via coir-core
-   degrees(uuid)   → asset.in / asset.out
-   open-topo(uuid) → encodeTopo(scan, uuid) → shell.openExternal(VIEWER + '#topo=' + blob)
-   invalidate on asset-db changes (re-scan lazily)
+main: cached scanProject(<project>/assets) via coir-core (in-process)
+   all-graph  → compact out/inc graph (uuids/names + indices), pushed to the
+                menu (request to prime + `coir:graph` broadcast to refresh)
+   open-topo  → encodeTopo(scan, uuid) → shell.openExternal(VIEWER + '#topo=' + blob)
+   invalidate the scan on asset-db changes (re-scan lazily)
 ```
 
 `assetInfo.uuid` is coir's node key directly (coir reads the same `.meta`), so no
@@ -50,10 +55,10 @@ asset → **Coir 依賴拓撲**.
 
 ## Notes / to verify on your build
 
-- **Async menu label**: `onAssetMenu` is `async` and awaits the degree count.
-  Cocos contribution messages are Promise-based, so this should work; if your
-  build does NOT await async menu builders, switch to the **synchronous
-  degree-cache** variant commented at the bottom of `assets-menu.js`.
+- **Synchronous menu (important)**: `onAssetMenu` MUST return synchronously — the
+  editor does NOT await an async menu builder (it would silently render nothing).
+  So the graph is pushed to the renderer (`all-graph` request to prime + the
+  `coir:graph` broadcast to refresh) and the menu BFS's it locally.
 - **asset-db change events**: `main.js` invalidates the scan on
   `asset-db:asset-add/-change/-delete` — confirm those broadcast names against
   the 3.8 asset-db message reference for your editor version (the listeners are
@@ -63,3 +68,7 @@ asset → **Coir 依賴拓撲**.
 - **Snapshot size**: the neighborhood auto-shrinks its depth to keep the URL
   under coir's `MAX_BLOB_CHARS` cap; boundary nodes (trimmed neighbours) are
   marked `⋯` in the viewer.
+- **3.5–3.8**: `editor: ">=3.5.0"`. The editor APIs used (assets.menu / Message /
+  Selection / I18n / Project.path) exist since 3.0; the only Node-18 dependency
+  (`CompressionStream`, for the snapshot) has a `node:zlib` fallback in coir, so
+  3.5's older Electron works too.

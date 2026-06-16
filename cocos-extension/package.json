@@ -5,7 +5,7 @@
   "title": "i18n:coir.ext_title",
   "description": "i18n:coir.ext_desc",
   "author": "coir",
-  "editor": ">=3.8.0",
+  "editor": ">=3.5.0",
   "main": "./main.js",
   "contributions": {
     "assets": {

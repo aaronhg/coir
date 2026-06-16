@@ -9,7 +9,7 @@ import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
-import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
+import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, copyCrumbLink, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
@@ -74,6 +74,7 @@ export function initUI({ onPick }) {
   // Breadcrumb (right side of the topo bar): click a crumb to re-select that node.
   $('topoCrumb').onclick = (e) => { const cr = e.target.closest('.cr'); if (cr) selectTopoKey(cr.dataset.key); };
   $('topoCrumbCopy').onclick = copyCrumbChain; // copy the whole chain (被依賴 → 依賴)
+  $('topoCrumbLink').onclick = copyCrumbLink;   // copy a #topo= snapshot link for the current centre
   let resizeRaf = 0;
   window.addEventListener('resize', () => { // adaptive topo padding depends on viewport height → re-fit
     if (S.tab !== 'topo' || !S.treeRoot) return;

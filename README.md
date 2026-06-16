@@ -46,7 +46,7 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 
 ### 拓撲
 - **雙向、固定 5 欄滑動視窗、永遠全展**的依賴樹：被依賴往左展、依賴往右展、層0 置中；視窗以選中項的「距中心位移」滑動；偵測循環顯示 `↻`。只列資源。欄頭以符號表示方向＋層號（`←層2` `←層1` ◆ `→層1` `→層2`），層0 欄染色。父子之間以**灰色連線**相連（畫在 cell 底下的 SVG overlay）；選中一個節點時，它通往中心的**整條鏈（祖先）＋直接子節點**會以灰底淡入標示，連線一併加亮。
-- **拓撲 bar**（選定中心後浮現於分頁頂端）：左邊一個**篩選框**——輸入即**真的隱藏非相符節點**（只留相符節點＋通往中心的連接路徑，與類型篩選同一套剪枝；清空或 `Esc` 即還原完整樹）；右邊一條**麵包屑**顯示選中項到中心的整條鏈，**方向固定為「被依賴 → 依賴」**（不會反向），每一節可點選即跳選，旁邊一顆固定**複製鈕**把整條鏈以**每行一個完整路徑**複製到剪貼簿。
+- **拓撲 bar**（選定中心後浮現於分頁頂端）：左邊一個**篩選框**——輸入即**真的隱藏非相符節點**（只留相符節點＋通往中心的連接路徑，與類型篩選同一套剪枝；清空或 `Esc` 即還原完整樹）；右邊一條**麵包屑**顯示選中項到中心的整條鏈，**方向固定為「被依賴 → 依賴」**（不會反向），每一節可點選即跳選，旁邊一顆**複製鈕**把整條鏈以**每行一個完整路徑**複製到剪貼簿、再一顆**連結鈕**複製此中心的拓撲快照連結（`#topo=`，可分享、見下「嵌入 / 整合」）。
 - 選中一個節點會**自動浮出「用在哪」**：它與樹中相鄰父節點那條邊的使用位置（節點路徑 · 元件.屬性 · frame；按鈕 ClickEvent 顯示 `▶ 方法()`）。popup 右上角有**複製鈕**，把所有使用位置複製到剪貼簿。
 - **鍵盤／手勢**：`Tab` 切換分頁、`Esc` 清空類型篩選、`/` 或 `Ctrl/Cmd+P` 快速搜尋、`Ctrl/Cmd+R` 選擇專案目錄；拓撲內 `↑↓` 同欄、`←→`（或 Mac 兩指橫滑）跨欄並選「畫面垂直中央最近」者、`Enter` 設為新中心、`−` 上一動、`+` 下一動、`Delete` 回清單、`Ctrl/Cmd+C` 複製名稱、`Ctrl/Cmd+F` 在當前拓撲中找尋（見下）。
 - **虛擬化＋找尋**：拓撲與 `/` 清單都只繪製**可見列**（垂直虛擬化，hub 大圖／大量結果也不卡）。因為捲出畫面的節點不在 DOM、原生 `Ctrl+F` 找不到，拓撲內建 **`Ctrl/Cmd+F`** 找尋（樹區右上角浮動框）：直接搜 cell 資料、命中**琥珀色高亮**、`Enter`/`⇧Enter` 下／上一個、`Esc` 關閉（不改中心、只垂直捲到該節點）。與左側「篩選框」分工——**篩選**會隱藏非相符節點、**找尋**只高亮並捲動。
@@ -239,8 +239,8 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 ### 嵌入出口（`import('coir')`）
 `package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `makeFsProvider` / `PLUGINS`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。
 
-### Cocos Creator 3.8 擴充（`cocos-extension/`）
-資源**右鍵** → 子選單按層列出 **被依賴（←）／依賴（→）**，每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。詳見 `cocos-extension/README.md`。
+### Cocos Creator 3.5–3.8 擴充（`cocos-extension/`）
+資源**右鍵** → 子選單按層列出 **被依賴（←）／依賴（→）**，每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。**3.5–3.8 通吃**（`editor: >=3.5.0`；`topohash` 對舊版 Node／Electron 有 `node:zlib` fallback，所以 3.5 也能產快照）。詳見 `cocos-extension/README.md`。
 
 ## 架構
 
@@ -269,7 +269,7 @@ src/node/
 src/cli.js        # 無頭 CLI（deps/uses/closure/find/info/analyze/edit/mcp，bin: coir）
 src/seam/ edit/ mcp/  # 共用讀寫 seam + CLI/MCP 呈現（見 docs/EDITING.md、docs/MCP.md）
 src/index.js      # 嵌入出口 barrel：`import('coir')`（package.json exports 對應）
-cocos-extension/  # Cocos Creator 3.8 擴充（右鍵查依賴 + 開拓撲快照）+ install.sh
+cocos-extension/  # Cocos Creator 3.5–3.8 擴充（右鍵查依賴 + 開拓撲快照）+ install.sh
 test/node-run.js  # 整份報告的無頭驗證器
 test/cli.test.js  # node:test：對合成專案跑 cli.js 端對端
 index.html        # 應用外殼 + CSS（載入 dist/app.bundle.js）

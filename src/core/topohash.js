@@ -28,11 +28,19 @@ async function streamBytes(readable) {
   return out;
 }
 async function gzip(bytes) {
+  if (typeof CompressionStream === 'undefined') { // old Node (e.g. Cocos 3.5's Electron) → node:zlib
+    const { gzipSync } = await import(/* webpackIgnore: true */ 'node:zlib');
+    return new Uint8Array(gzipSync(bytes));
+  }
   const cs = new CompressionStream('gzip');
   const w = cs.writable.getWriter(); w.write(bytes); w.close();
   return streamBytes(cs.readable);
 }
 async function gunzip(bytes) {
+  if (typeof DecompressionStream === 'undefined') { // gzip is interoperable, so a zlib- or stream-made blob decodes either way
+    const { gunzipSync } = await import(/* webpackIgnore: true */ 'node:zlib');
+    return new Uint8Array(gunzipSync(bytes));
+  }
   const ds = new DecompressionStream('gzip');
   const w = ds.writable.getWriter(); w.write(bytes); w.close();
   return streamBytes(ds.readable);

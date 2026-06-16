@@ -173,7 +173,7 @@
   .tf-btn { background:transparent; border:0; color:var(--mut); cursor:pointer; font-size:12px; padding:2px 5px; border-radius:4px; line-height:1; }
   .tf-btn:hover { background:var(--panel); color:var(--fg); }
   .tf-btn.ok { color:#81c784; }
-  #topoCrumbCopy { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; }
+  #topoCrumbCopy, #topoCrumbLink { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; }
   .tree { position:relative; display:grid; grid-template-columns:repeat(5,1fr); grid-auto-rows:30px; align-content:start; padding-block:0; /* padding-block set adaptively in JS (renderTopo): viewport/2 − row/2 */
           background-image:linear-gradient(to right, var(--line) 1px, transparent 1px); background-size:20% 100%; }
   .tree .edges { position:absolute; top:0; left:0; width:100%; pointer-events:none; overflow:visible; z-index:0; } /* parent→child connectors, behind the cells */
@@ -264,6 +264,7 @@
       </div>
       <nav id="topoCrumb" class="crumb" aria-label="path"></nav>
       <button id="topoCrumbCopy" class="tf-btn" type="button" data-i18n-title="topo.copyChain" title="複製整條鏈"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button id="topoCrumbLink" class="tf-btn" type="button" data-i18n-title="topo.copyLink" title="複製此中心的拓撲連結"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
     </div>
     <div id="topowrap">
       <div id="topo"><div class="colhint" data-i18n="topo.hint">從「清單」選一個資產，或按 / 搜尋，作為中心。</div></div>

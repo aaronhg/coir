@@ -69,6 +69,18 @@ test('boundary nodes are flagged when real neighbours are trimmed', async () => 
   assert.equal(n1.length, 2, 'n1 is interior, not a boundary');
 });
 
+test('zlib fallback (no CompressionStream, e.g. Cocos 3.5 old Node) round-trips', async () => {
+  const C = globalThis.CompressionStream, D = globalThis.DecompressionStream;
+  globalThis.CompressionStream = undefined; globalThis.DecompressionStream = undefined; // force the node:zlib path
+  try {
+    const p = await decodeTopo((await encodeTopo(fixture(), 'n0', { title: 'Z' })).blob);
+    assert.equal(p.t, 'Z');
+    assert.ok(p.n.length > 1);
+  } finally {
+    globalThis.CompressionStream = C; globalThis.DecompressionStream = D;
+  }
+});
+
 test('auto-shrink: a tiny cap forces depth down and (last resort) drops usage detail', async () => {
   const scan = fixture();
   const tight = await encodeTopo(scan, 'n0', { cap: 10 }); // impossibly small → depth 1, no usage

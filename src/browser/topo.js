@@ -8,6 +8,7 @@ import { renderTable } from './list.js';
 import { setTab } from './ui.js';
 import { showUsage, positionUsage } from './usage.js';
 import { copyToClipboard } from './copy.js';
+import { encodeTopo } from '../core/topohash.js';
 
 // ---- in-topo find (Ctrl/⌘+F) state ----------------------------------------
 // Virtualization keeps off-screen cells out of the DOM, so the browser's native
@@ -313,6 +314,22 @@ function renderCrumb() {
   }
 }
 // Copy the whole chain (被依賴 → 依賴) as full asset paths — the fixed copy button beside the breadcrumb.
+// Copy a shareable #topo= link for the CURRENT centre (its neighbourhood snapshot,
+// encoded into this page's URL hash — opens with no File API, any browser).
+export async function copyCrumbLink() {
+  if (!S.scan || !S.treeRoot) return;
+  const btn = $('topoCrumbLink');
+  const icon = btn ? btn.innerHTML : '';
+  try {
+    const name = $('projectName') ? $('projectName').textContent : '';
+    const { blob } = await encodeTopo(S.scan, S.treeRoot, { title: name || undefined });
+    const url = `${location.origin}${location.pathname}#topo=${blob}`;
+    copyToClipboard(url, () => {
+      if (btn) { btn.innerHTML = CHECK_ICON; setTimeout(() => { btn.innerHTML = icon; }, 1200); }
+      setStatus(t('copy.link'));
+    });
+  } catch (e) { setStatus(t('status.error', { msg: (e && e.message) || e })); }
+}
 export function copyCrumbChain() {
   const keys = crumbKeys();
   if (!keys.length) return;
