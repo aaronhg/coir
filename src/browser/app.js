@@ -68,14 +68,31 @@ const ui = initUI({ onPick: handlePick });
 
 // Viewer mode: a `#topo=<blob>` URL carries a topology snapshot → render it
 // directly (no File System Access, no project pick). Otherwise the normal flow.
-const hashMatch = location.hash.match(/^#topo=(.+)$/);
-if (hashMatch) {
-  viewerFromHash(hashMatch[1]).catch((e) => { console.error(e); ui.setStatus(t('status.error', { msg: (e && e.message) || e })); });
-} else if (!fsApiSupported()) {
+function hashError(e) { // a bad #topo= blob → status line + (when it's still showing) the welcome card
+  console.error(e);
+  const msg = t('status.error', { msg: (e && e.message) || e });
+  ui.setStatus(msg);
+  const we = document.getElementById('welcomeErr'), w = document.getElementById('welcome');
+  if (we && w && !w.hidden) { we.textContent = msg; we.hidden = false; }
+}
+function showHashTopo() {
+  const m = location.hash.match(/^#topo=(.+)$/);
+  if (!m) return false;
+  const we = document.getElementById('welcomeErr'); if (we) we.hidden = true; // clear a previous error before retrying
+  viewerFromHash(m[1]).catch(hashError);
+  return true;
+}
+if (!showHashTopo() && !fsApiSupported()) {
   ui.setStatus(t('err.noFsApi'));
   document.getElementById('pickBtn').disabled = true;
   document.getElementById('welcomeBtn').disabled = true;
 }
+// Live: editing / pasting a new #topo= in the address bar re-renders without a
+// reload; clearing it while in the viewer returns to the normal app.
+window.addEventListener('hashchange', () => {
+  if (showHashTopo()) return;
+  if (document.body.classList.contains('viewer')) location.reload();
+});
 
 async function handlePick() {
   try {

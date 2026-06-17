@@ -91,6 +91,8 @@
   .welcome-box .wbtn:hover { filter:brightness(1.08); }
   .welcome-box .wbtn:disabled { opacity:.5; cursor:not-allowed; }
   .welcome-box .note { color:var(--mut); font-size:12px; margin:16px 0 0; }
+  .welcome-box .werr { color:#ef5350; font-size:13px; line-height:1.5; margin:16px 0 0; }
+  .welcome-box .werr[hidden] { display:none; }
   .welcome-box .ver { margin:12px 0 0; opacity:.75; }
   .tab { position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
   .tab[hidden] { display:none; }
@@ -248,6 +250,7 @@
       <h1>🥥 Coir</h1>
       <p class="tagline" data-i18n-html="welcome.tagline"></p>
       <button id="welcomeBtn" class="wbtn" data-i18n="btn.pick">選擇 Cocos 專案目錄</button>
+      <p class="werr" id="welcomeErr" hidden></p>
       <p class="note" data-i18n="welcome.note">需 Chrome / Edge（File System Access API）</p>
       <p class="ver" id="buildInfo"></p>
     </div>
