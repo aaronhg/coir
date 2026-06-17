@@ -1,6 +1,6 @@
 # coir — Cocos Creator 3.5–3.8 extension
 
-Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲  →b→c ←a`** with a
+Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲  ←L2 ←L1 →L1 →L2`** with a
 submenu listing its **dependencies (→) then dependents (←) as indented trees** —
 depth is shown by **indentation** (each deeper layer nested one tab under its
 parent; no per-node cap, no "層N" labels). Click an entry to **jump to that asset**
@@ -20,7 +20,7 @@ plugins are logged as `source.name` (`global.audio-call`, `project.…`).
 ```
 right-click asset → onAssetMenu(assetInfo)            (assets-menu.js, renderer)
    SYNC: BFS the cached graph ±2 layers from assetInfo.uuid → a pre-order tree
-     label  Coir 依賴拓撲 →…→… ←…   + submenu (開啟拓撲圖 · → / ← <name>, indented by depth)
+     label  Coir 依賴拓撲 ←…←… →…→…  + submenu (開啟拓撲圖 · → / ← <name>, indented by depth)
    click a dep/dependent → Editor.Selection.select('asset', uuid)
    click 開啟拓撲圖       → open-topo(uuid)
                                                        (main.js, editor process)

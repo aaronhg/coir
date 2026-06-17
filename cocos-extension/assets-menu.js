@@ -2,7 +2,7 @@
 // Asset right-click menu (Assets panel, renderer). MUST return synchronously, so
 // it BFS's a cached graph (pushed by main: primed via request, kept fresh via the
 // `coir:graph` broadcast). Builds:
-//   Coir 依賴拓撲  →b→c ←a          (→ dependencies layers · ← dependents layers)
+//   Coir 依賴拓撲  ←L2 ←L1 →L1 →L2  (centre-spread: dependents fan left, deps right)
 //     開啟拓撲圖                      → open the topology viewer (URL hash)
 //     → <name>                       → a dependency; depth shown by INDENT (not "層N"):
 //         → <name>                     L1 flush, each deeper layer one tab in (L2 under L1)
@@ -64,15 +64,17 @@ exports.onAssetMenu = function (assetInfo) {
   // Nothing to list (no neighbours, or cold cache) → flat item, click opens the topology.
   if (!dependents.length && !deps.length) return [{ label: title, click: openTopo }];
 
-  // Header: per-depth counts at a glance, e.g. "←1←2 →5→3".
-  const counts = (tree) => {
+  // Header spreads around the (unshown) centre, one token per layer: dependents fan
+  // LEFT deepest→shallowest, dependencies fan RIGHT shallowest→deepest — e.g.
+  // "←L2 ←L1 →L1 →L2" (each Ln = that layer's count).
+  const counts = (tree) => { // → [L1 count, L2 count, …]
     const m = new Map();
-    for (const n of tree) if (n.v != null) m.set(n.depth, (m.get(n.depth) || 0) + 1);
+    for (const n of tree) m.set(n.depth, (m.get(n.depth) || 0) + 1);
     return [...m.keys()].sort((a, b) => a - b).map((d) => m.get(d));
   };
-  const parts = [];
-  if (deps.length) parts.push(`→${counts(deps).join('→')}`);
-  if (dependents.length) parts.push(`←${counts(dependents).join('←')}`);
+  const tokens = [];
+  counts(dependents).reverse().forEach((c) => tokens.push(`←${c}`));
+  counts(deps).forEach((c) => tokens.push(`→${c}`));
 
   // Depth shown by INDENT (not "層N"): both directions are a normal tree — L1 flush,
   // each deeper layer one tab further in, an L2 nested under its L1 parent.
@@ -87,5 +89,5 @@ exports.onAssetMenu = function (assetInfo) {
   emit(deps, '→');
   emit(dependents, '←');
 
-  return [{ label: `${title}  ${parts.join(' ')}`, submenu }];
+  return [{ label: `${title}  ${tokens.join(' ')}`, submenu }];
 };
