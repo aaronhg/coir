@@ -7,8 +7,8 @@
 const path = require('path');
 const { shell } = require('electron'); // open the OS browser
 
-// coir's embedder API (package.json "exports" → src/index.js). After the cp.sh
-// symlink / `npm link coir`, 'coir' resolves. Override with COIR_CORE.
+// coir's embedder API (package.json "exports" → src/index.js). After the
+// install.sh symlink / `npm link coir`, 'coir' resolves. Override with COIR_CORE.
 const COIR = process.env.COIR_CORE || 'coir';
 // Viewer — data rides in the URL hash → hosted build works with no server/upload.
 // Point at http://localhost:8080/ for local dev (npm run dev in coir).
@@ -25,7 +25,22 @@ async function getScan() {
   if (!scanP) {
     scanP = (async () => {
       const fp = coir.makeFsProvider(path.join(Editor.Project.path, 'assets'));
-      const scan = await coir.scanProject(fp);
+      // Honour coir.plugins.mjs the same way the CLI/browser do: the coir repo-root
+      // GLOBAL config (cross-project — e.g. audio-call) + the PROJECT's own, most
+      // specific last. Absent → built-ins only. Node caches the import, so edits to
+      // either apply on an extension reload, not on a mere re-scan.
+      const warn = (m) => console.warn('[coir]', m);
+      const globalPlugins = coir.COIR_ROOT ? await coir.loadConfigPlugins(coir.COIR_ROOT, warn) : [];
+      const projectPlugins = await coir.loadConfigPlugins(Editor.Project.path, warn);
+      const srcOf = new Map(); // plugin object → source tag (project set last, so it wins on dedupe)
+      for (const p of globalPlugins) srcOf.set(p, 'global');
+      for (const p of projectPlugins) srcOf.set(p, 'project');
+      const plugins = coir.dedupePlugins([...coir.PLUGINS, ...globalPlugins, ...projectPlugins]);
+      // Log only the plugins that actually took effect (non-built-in, post-dedupe),
+      // each tagged `source.name` — same as the browser UI's status line.
+      const active = plugins.filter((p) => !coir.PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
+      if (active.length) console.log(`[coir] plugins: ${active.join(', ')}`);
+      const scan = await coir.scanProject(fp, { plugins });
       scan.adjacency = coir.buildAdjacency(scan.edges);
       return scan;
     })().catch((e) => { scanP = null; throw e; }); // don't cache a failed scan

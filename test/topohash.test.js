@@ -69,15 +69,15 @@ test('boundary nodes are flagged when real neighbours are trimmed', async () => 
   assert.equal(n1.length, 2, 'n1 is interior, not a boundary');
 });
 
-test('zlib fallback (no CompressionStream, e.g. Cocos 3.5 old Node) round-trips', async () => {
-  const C = globalThis.CompressionStream, D = globalThis.DecompressionStream;
-  globalThis.CompressionStream = undefined; globalThis.DecompressionStream = undefined; // force the node:zlib path
+test('old-Node fallback (no CompressionStream/btoa, e.g. Cocos 3.5) round-trips via zlib + Buffer', async () => {
+  const saved = ['CompressionStream', 'DecompressionStream', 'btoa', 'atob'].map((k) => [k, globalThis[k]]);
+  for (const [k] of saved) globalThis[k] = undefined; // force the zlib + Buffer paths
   try {
     const p = await decodeTopo((await encodeTopo(fixture(), 'n0', { title: 'Z' })).blob);
     assert.equal(p.t, 'Z');
     assert.ok(p.n.length > 1);
   } finally {
-    globalThis.CompressionStream = C; globalThis.DecompressionStream = D;
+    for (const [k, v] of saved) globalThis[k] = v;
   }
 });
 

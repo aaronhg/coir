@@ -185,6 +185,8 @@ audio/lobby_bgm.mp3 (audio)
 
 限制（刻意）：只看得到 **component 腳本**（純 util 模組已被剪枝）；只解**字串字面值**（`audioPlay(this.bgm)` 無法）；參數要對得上音檔 basename（撞名會連到全部同名音檔）。
 
+> 🧩 更多現成範例外掛（`audio-call`、`i18n-label`、`resources-sprite`，一檔一個、可 `--plugin` 載入）見 **[aaronhg/coir-plugins](https://github.com/aaronhg/coir-plugins)**。
+
 ## 無頭工具（Node）
 
 核心解析與瀏覽器解耦，可在 Node 下直接跑。
@@ -234,13 +236,13 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 核心 DOM-free、零相依，所以能把「指著一個資源直接看它的拓撲」嵌進別的工具。
 
 ### URL 快照 viewer（`#topo=`）
-把某資源的**鄰域子圖**壓進網址 hash —— `https://aaronhg.github.io/coir/#topo=<blob>` —— 開連結就**直接進拓撲**、聚焦那個資源。資料全在 hash（節點整數索引 + gzip + base64url），所以**不需 File System Access、不需 server**：連非 Chromium（Firefox / Safari / 手機）都看得了（只有「選目錄掃描」那條才需 FSA）。可分享、可加書籤。`encodeTopo`/`decodeTopo` 在 `src/core/topohash.js`（Node 也能跑），會自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`（預設 256KB、可調）、永遠回連結；鄰域外緣節點標 `⋯`、超出範圍的使用處給「未載入」提示。
+把某資源的**鄰域子圖**壓進網址 hash —— `https://aaronhg.github.io/coir/#topo=<blob>` —— 開連結就**直接進拓撲**、聚焦那個資源（viewer 保留 **清單＋拓撲** 兩個分頁可切，只藏報告與選目錄鈕；清單列出快照節點、點列重設中心）。資料全在 hash（節點整數索引 + gzip + base64url），所以**不需 File System Access、不需 server**：連非 Chromium（Firefox / Safari / 手機）都看得了（只有「選目錄掃描」那條才需 FSA）。可分享、可加書籤。`encodeTopo`/`decodeTopo` 在 `src/core/topohash.js`（Node 也能跑），會自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`（預設 256KB、可調）、永遠回連結；鄰域外緣節點標 `⋯`、超出範圍的使用處給「未載入」提示。
 
 ### 嵌入出口（`import('coir')`）
-`package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `makeFsProvider` / `PLUGINS`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。
+`package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `decodeTopo` / `makeFsProvider` / `PLUGINS` / `dedupePlugins` / `loadConfigPlugins` / `COIR_ROOT`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。`COIR_ROOT` 是 repo 根，host 可用它載 repo 根的全域 `coir.plugins.mjs`。
 
 ### Cocos Creator 3.5–3.8 擴充（`cocos-extension/`）
-資源**右鍵** → 子選單按層列出 **被依賴（←）／依賴（→）**，每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。**3.5–3.8 通吃**（`editor: >=3.5.0`；`topohash` 對舊版 Node／Electron 有 `node:zlib` fallback，所以 3.5 也能產快照）。詳見 `cocos-extension/README.md`。
+資源**右鍵** → 子選單列出 **依賴（→）／被依賴（←）**，用**縮排**呈現層次（每深一層往右一格、子節點 nested 在父節點底下，不再用「層N」字樣、不設上限），每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），**會載入 repo 根＋專案的 `coir.plugins.mjs`**（與 CLI／瀏覽器同套，所以右鍵看得到 audio-call 之類的自訂邊；生效外掛以 `來源.名稱` 印出），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。**3.5–3.8 通吃**（`editor: >=3.5.0`；`topohash` 對舊版 Node／Electron 有 `zlib`＋`Buffer` fallback，所以連缺 `CompressionStream`／`btoa` 的 3.5 也能產快照）。詳見 `cocos-extension/README.md`。
 
 ## 架構
 

@@ -2,15 +2,16 @@
 // Asset right-click menu (Assets panel, renderer). MUST return synchronously, so
 // it BFS's a cached graph (pushed by main: primed via request, kept fresh via the
 // `coir:graph` broadcast). Builds:
-//   Coir 依賴拓撲  ←a →b→c          (← dependents layers · → dependencies layers)
+//   Coir 依賴拓撲  →b→c ←a          (→ dependencies layers · ← dependents layers)
 //     開啟拓撲圖                      → open the topology viewer (URL hash)
-//     ←層1 <name> …                  → select/reveal that dependent in the Assets panel
-//     →層1 <name> …                  → … that dependency
+//     → <name>                       → a dependency; depth shown by INDENT (not "層N"):
+//         → <name>                     L1 flush, each deeper layer one tab in (L2 under L1)
+//     ← <name>                       → a dependent, listed the same way
 // If the asset has no dependents AND no dependencies, it's a FLAT item (no ▸) that
 // opens the topology directly on click. (A submenu item can't also fire on click,
 // so when there IS a submenu, "open" is its first entry.)
 const DEPTH = 2;  // layers to list per direction
-const CAP = 25;   // max items per layer (keep the menu sane)
+const PAD = '    '; // one indent level — NBSP×4 so the editor doesn't collapse leading whitespace
 
 // i18n via the editor (follows its language); falls back to zh-Hant if the
 // extension's i18n/ isn't loaded.
@@ -23,21 +24,32 @@ try {
   Editor.Message.addBroadcastListener('coir:graph', setGraph);                 // refresh
 } catch (e) { /* messaging unavailable → menu still opens the topology */ }
 
-// BFS from node index `i` over G[dir] ('out' = dependencies, 'inc' = dependents)
-// → [layer1 indices, layer2 indices, …] up to DEPTH.
-function layersOf(i, dir) {
+// Depth-limited (≤ DEPTH) tree from node `i` over G[dir] ('out' = dependencies,
+// 'inc' = dependents). BFS first → each node's SHALLOWEST depth + its parent; then
+// a pre-order walk emits {v, depth} with a node's deeper children listed right
+// after it (so an L2 sits under its L1 parent). No cap — every neighbour is listed.
+function treeOf(i, dir) {
   const adj = (G && G[dir]) || [];
-  const seen = new Set([i]);
-  const layers = [];
+  const depth = new Map([[i, 0]]);
+  const kids = new Map(); // parent index → [child index] (BFS discovery order)
   let frontier = [i];
   for (let d = 1; d <= DEPTH; d++) {
     const next = [];
-    for (const u of frontier) for (const v of adj[u] || []) if (!seen.has(v)) { seen.add(v); next.push(v); }
+    for (const u of frontier) for (const v of adj[u] || []) {
+      if (depth.has(v)) continue; // first (shallowest) parent wins
+      depth.set(v, d);
+      let arr = kids.get(u); if (!arr) kids.set(u, arr = []);
+      arr.push(v);
+      next.push(v);
+    }
     if (!next.length) break;
-    layers.push(next);
     frontier = next;
   }
-  return layers;
+  const out = [];
+  (function walk(u) {
+    for (const v of kids.get(u) || []) { out.push({ v, depth: depth.get(v) }); walk(v); }
+  })(i);
+  return out;
 }
 
 exports.onAssetMenu = function (assetInfo) {
@@ -45,28 +57,35 @@ exports.onAssetMenu = function (assetInfo) {
   const openTopo = () => Editor.Message.request('coir', 'open-topo', assetInfo.uuid);
 
   const i = G ? G.idx.get(assetInfo.uuid) : undefined;
-  const dependents = i === undefined ? [] : layersOf(i, 'inc');   // ← used-by
-  const deps = i === undefined ? [] : layersOf(i, 'out');         // → uses
+  const dependents = i === undefined ? [] : treeOf(i, 'inc');   // ← used-by
+  const deps = i === undefined ? [] : treeOf(i, 'out');         // → uses
 
   const title = T('menu_title', 'Coir 依賴拓撲');
   // Nothing to list (no neighbours, or cold cache) → flat item, click opens the topology.
   if (!dependents.length && !deps.length) return [{ label: title, click: openTopo }];
 
+  // Header: per-depth counts at a glance, e.g. "←1←2 →5→3".
+  const counts = (tree) => {
+    const m = new Map();
+    for (const n of tree) if (n.v != null) m.set(n.depth, (m.get(n.depth) || 0) + 1);
+    return [...m.keys()].sort((a, b) => a - b).map((d) => m.get(d));
+  };
   const parts = [];
-  if (dependents.length) parts.push(`←${dependents.map((l) => l.length).join('←')}`);
-  if (deps.length) parts.push(`→${deps.map((l) => l.length).join('→')}`);
+  if (deps.length) parts.push(`→${counts(deps).join('→')}`);
+  if (dependents.length) parts.push(`←${counts(dependents).join('←')}`);
 
-  const layer = T('layer', '層');
+  // Depth shown by INDENT (not "層N"): both directions are a normal tree — L1 flush,
+  // each deeper layer one tab further in, an L2 nested under its L1 parent.
   const submenu = [{ label: T('open', '開啟拓撲圖'), click: openTopo }];
-  const addLayers = (layers, arrow) => layers.forEach((lyr, li) => {
-    for (const v of lyr.slice(0, CAP)) {
-      const uuid = G.uuids[v];
-      submenu.push({ label: `${arrow}${layer}${li + 1} ${G.names[v]}`, click() { Editor.Selection.select('asset', uuid); } });
+  const emit = (tree, arrow) => {
+    for (const n of tree) {
+      const pad = PAD.repeat(n.depth - 1);
+      const uuid = G.uuids[n.v];
+      submenu.push({ label: `${pad}${arrow} ${G.names[n.v]}`, click() { Editor.Selection.select('asset', uuid); } });
     }
-    if (lyr.length > CAP) submenu.push({ label: `${arrow}${layer}${li + 1}  …+${lyr.length - CAP}`, enabled: false });
-  });
-  addLayers(dependents, '←');
-  addLayers(deps, '→');
+  };
+  emit(deps, '→');
+  emit(dependents, '←');
 
   return [{ label: `${title}  ${parts.join(' ')}`, submenu }];
 };

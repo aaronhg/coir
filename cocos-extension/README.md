@@ -1,25 +1,31 @@
 # coir — Cocos Creator 3.5–3.8 extension
 
-Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲  ←a →b`** with a
-submenu listing its **dependents (←) and dependencies (→) by layer** — click an
-entry to **jump to that asset** in the editor, or **開啟拓撲圖** to open its
-dependency topology in your browser (the graph rides in the viewer's URL hash
-`#topo=…` — no server, no upload). An asset with no neighbours is a flat item that
-opens the topology directly.
+Right-click an asset in the **Assets** panel → **`Coir 依賴拓撲  →b→c ←a`** with a
+submenu listing its **dependencies (→) then dependents (←) as indented trees** —
+depth is shown by **indentation** (each deeper layer nested one tab under its
+parent; no per-node cap, no "層N" labels). Click an entry to **jump to that asset**
+in the editor, or **開啟拓撲圖** to open its dependency topology in your browser (the
+graph rides in the viewer's URL hash `#topo=…` — no server, no upload). An asset
+with no neighbours is a flat item that opens the topology directly.
 
 It runs [coir](https://github.com/aaronhg/coir)'s core **in-process** (cached
-scan), so the menu is instant and stays fresh as the project changes.
+scan), so the menu is instant and stays fresh as the project changes. The scan
+also loads `coir.plugins.mjs` from the **coir repo root** (global) and the
+**project root** — exactly like the CLI/browser — so editor-side edges include
+custom plugin edges (e.g. audio-call `audioPlay('x')` → `x.mp3`); the active
+plugins are logged as `source.name` (`global.audio-call`, `project.…`).
 
 ## How it works
 
 ```
 right-click asset → onAssetMenu(assetInfo)            (assets-menu.js, renderer)
-   SYNC: BFS the cached graph ±2 layers from assetInfo.uuid →
-     label  Coir 依賴拓撲 ←L1… →L1…   + submenu (開啟拓撲圖 · ←層N/→層N <name>)
+   SYNC: BFS the cached graph ±2 layers from assetInfo.uuid → a pre-order tree
+     label  Coir 依賴拓撲 →…→… ←…   + submenu (開啟拓撲圖 · → / ← <name>, indented by depth)
    click a dep/dependent → Editor.Selection.select('asset', uuid)
    click 開啟拓撲圖       → open-topo(uuid)
                                                        (main.js, editor process)
-main: cached scanProject(<project>/assets) via coir-core (in-process)
+main: cached scanProject(<project>/assets, { plugins }) via coir-core (in-process),
+      plugins = built-ins + coir-root + project coir.plugins.mjs (deduped)
    all-graph  → compact out/inc graph (uuids/names + indices), pushed to the
                 menu (request to prime + `coir:graph` broadcast to refresh)
    open-topo  → encodeTopo(scan, uuid) → shell.openExternal(VIEWER + '#topo=' + blob)
@@ -68,7 +74,10 @@ asset → **Coir 依賴拓撲**.
 - **Snapshot size**: the neighborhood auto-shrinks its depth to keep the URL
   under coir's `MAX_BLOB_CHARS` cap; boundary nodes (trimmed neighbours) are
   marked `⋯` in the viewer.
+- **Plugins**: the scan loads `coir.plugins.mjs` from the coir repo root (global)
+  and the project root, like the CLI/browser, and logs the active ones. Node
+  caches the import — edit the config, then RELOAD the extension to re-read it.
 - **3.5–3.8**: `editor: ">=3.5.0"`. The editor APIs used (assets.menu / Message /
-  Selection / I18n / Project.path) exist since 3.0; the only Node-18 dependency
-  (`CompressionStream`, for the snapshot) has a `node:zlib` fallback in coir, so
-  3.5's older Electron works too.
+  Selection / I18n / Project.path) exist since 3.0; the Node-18 deps the snapshot
+  needs (`CompressionStream` + `btoa`) have `zlib` + `globalThis.Buffer` fallbacks
+  in coir, so 3.5's older Electron works too.

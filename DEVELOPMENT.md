@@ -271,9 +271,17 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 ### 11.15 URL 快照 viewer + 嵌入出口 + Cocos 擴充
 為了能「指著一個資源直接看它的拓撲」嵌進別的工具(尤其 Cocos 編輯器):
 
-- **URL 快照 viewer**(`src/core/topohash.js`):把某資源的**鄰域子圖**壓進網址 hash `#topo=<blob>`(節點整數索引 + intern 型別/種類 + gzip + base64url;`CompressionStream` Node/瀏覽器皆有，舊 Node（如 Cocos 3.5 的 Electron）退回 `node:zlib`（gzip 互通）→ 零依賴、兩端共用)。瀏覽器看到 `#topo=` 就 decode → 畫拓撲,**完全不碰 File System Access** → 非 Chromium(Firefox/Safari/手機)也能看,只有「選目錄掃描」那條才需 FSA。`encodeTopo` 自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`(預設 256KB、可調),連 depth 1 都爆就丟使用處、**永遠回連結**;邊界節點標 `⋯`、使用處只放最近 ±2 層、更外層給「未載入」提示。round-trip／縮小／邊界有 `test/topohash.test.js`。
-- **嵌入出口**:`package.json` 加 `exports`(`.` → `src/index.js` barrel),host 一行 `import('coir')` 就拿到 `scanProject`／`buildAdjacency`／`encodeTopo`／`makeFsProvider`／`PLUGINS`…(Node 端;瀏覽器仍走 `app.js`)。
-- **Cocos Creator 3.5–3.8 擴充**(`cocos-extension/`,`editor: >=3.5.0`;3.5 靠上面的 zlib fallback):資源**右鍵** → 子選單按層列出**被依賴(←)／依賴(→)**,每筆點了跳到該資源(`Editor.Selection.select`),頂層開拓撲快照(`encodeTopo` → `shell.openExternal('…#topo=')`)。擴充主行程 **in-process 跑 coir-core**(快取 scan、asset-db 變動失效),選單必須同步建構 → 靠 main 推來的圖快取(`request` 暖機 + `coir:graph` broadcast 更新);en/zh i18n(`Editor.I18n.t`);`install.sh` 一鍵複製 + symlink coir(免 npm link)。坑:`onAssetMenu` **不能 async**(編輯器不 await → 整個選單消失),所以改同步 + 快取。
+- **URL 快照 viewer**(`src/core/topohash.js`):把某資源的**鄰域子圖**壓進網址 hash `#topo=<blob>`(節點整數索引 + intern 型別/種類 + gzip + base64url;`CompressionStream`／`btoa` Node/瀏覽器皆有，舊 Node（如 Cocos 3.5 的 Electron）連這兩個都沒有，退回 bare `zlib`＋`globalThis.Buffer`（gzip 互通、base64 等價）→ 零依賴、兩端共用)。瀏覽器看到 `#topo=` 就 decode → 畫拓撲,**完全不碰 File System Access** → 非 Chromium(Firefox/Safari/手機)也能看,只有「選目錄掃描」那條才需 FSA。`encodeTopo` 自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`(預設 256KB、可調),連 depth 1 都爆就丟使用處、**永遠回連結**;邊界節點標 `⋯`、使用處只放最近 ±2 層、更外層給「未載入」提示。round-trip／縮小／邊界／舊-Node fallback 有 `test/topohash.test.js`。
+- **嵌入出口**:`package.json` 加 `exports`(`.` → `src/index.js` barrel),host 一行 `import('coir')` 就拿到 `scanProject`／`buildAdjacency`／`encodeTopo`／`decodeTopo`／`makeFsProvider`／`PLUGINS`／`dedupePlugins`／`loadConfigPlugins`／`COIR_ROOT`…(Node 端;瀏覽器仍走 `app.js`)。
+- **Cocos Creator 3.5–3.8 擴充**(`cocos-extension/`,`editor: >=3.5.0`;3.5 靠上面的 zlib／Buffer fallback):資源**右鍵** → 子選單列出**依賴(→)／被依賴(←)**,每筆點了跳到該資源(`Editor.Selection.select`),頂層開拓撲快照(`encodeTopo` → `shell.openExternal('…#topo=')`)。擴充主行程 **in-process 跑 coir-core**(快取 scan、asset-db 變動失效),選單必須同步建構 → 靠 main 推來的圖快取(`request` 暖機 + `coir:graph` broadcast 更新);en/zh i18n(`Editor.I18n.t`);`install.sh` 一鍵複製 + symlink coir(免 npm link)。坑:`onAssetMenu` **不能 async**(編輯器不 await → 整個選單消失),所以改同步 + 快取。
+
+### 11.16 viewer 分頁 + 擴充載專案外掛 + 選單縮排樹
+§11.15 出貨後的幾筆打磨(都未動 `src/core/` 測試,117 仍綠):
+
+- **viewer 保留 清單＋拓撲 分頁**:原本 `#topo=` viewer 只給拓撲;改成 `body.viewer` 只藏**報告**＋選目錄鈕、`cycleTab` 在 viewer 也跳過報告,**清單留著**——清單列出快照節點、點列重設中心(快照沒有專案級報告,故報告續藏)。
+- **擴充載入 `coir.plugins.mjs`**:barrel 加匯出 `loadConfigPlugins`／`loadPluginFiles`／`COIR_ROOT`(= repo 根,由 `import.meta.url` 推);`main.js` 的 `getScan` 比照 CLI/瀏覽器組 `dedupePlugins([...PLUGINS, ...loadConfigPlugins(COIR_ROOT), ...loadConfigPlugins(projectPath)])` 再餵 `scanProject`——所以擴充右鍵也吃得到 audio-call 之類自訂邊(先前只跑內建外掛,所以漏了)。**生效外掛以 `來源.名稱` 印出**(`global.audio-call`／`project.…`,與瀏覽器 status line 同款:dedupe 後非內建者+來源標籤)。Node 會快取 import,改設定要 **reload 擴充**才重讀。
+- **右鍵選單改縮排樹**(`assets-menu.js`):`L1/L2` 文字標籤 → **縮排**(`PAD` = NBSP×4,選 NBSP 免被編輯器折疊),`treeOf` 先 BFS 配最短深度+父節點、再 pre-order 走訪 → 每個 L2 nested 在它的 L1 底下;兩個方向都是「L1 齊左、每深一層往右一格」(`depth-1`);區塊序 `→` 先 `←` 後;**移除 per-node 上限**(列出全部鄰居)。
+- **3.5 安裝驗證**:`install.sh` 重裝 gc3083(3.8)/NewProject_352(3.5.2),`import('coir')` 從各專案 `node_modules/coir` symlink 解析回 repo(15 個匯出、`COIR_ROOT` 正確),audio-call 邊(`BonusEventUI.ts → S999705_add_red_envelope.mp3`)在擴充完整路徑下確實生成。
 
 ---
 

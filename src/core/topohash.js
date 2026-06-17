@@ -28,8 +28,8 @@ async function streamBytes(readable) {
   return out;
 }
 async function gzip(bytes) {
-  if (typeof CompressionStream === 'undefined') { // old Node (e.g. Cocos 3.5's Electron) → node:zlib
-    const { gzipSync } = await import(/* webpackIgnore: true */ 'node:zlib');
+  if (typeof CompressionStream === 'undefined') { // old Node (e.g. Cocos 3.5's Electron) → core zlib
+    const { gzipSync } = await import(/* webpackIgnore: true */ 'zlib'); // bare 'zlib' (no node: prefix) for Node 14.x
     return new Uint8Array(gzipSync(bytes));
   }
   const cs = new CompressionStream('gzip');
@@ -38,7 +38,7 @@ async function gzip(bytes) {
 }
 async function gunzip(bytes) {
   if (typeof DecompressionStream === 'undefined') { // gzip is interoperable, so a zlib- or stream-made blob decodes either way
-    const { gunzipSync } = await import(/* webpackIgnore: true */ 'node:zlib');
+    const { gunzipSync } = await import(/* webpackIgnore: true */ 'zlib');
     return new Uint8Array(gunzipSync(bytes));
   }
   const ds = new DecompressionStream('gzip');
@@ -46,15 +46,23 @@ async function gunzip(bytes) {
   return streamBytes(ds.readable);
 }
 function toB64url(bytes) {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  let b64;
+  if (typeof btoa === 'function') {
+    let s = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    b64 = btoa(s);
+  } else b64 = globalThis.Buffer.from(bytes).toString('base64'); // old Node (no btoa, e.g. Cocos 3.5)
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function fromB64url(str) {
-  const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  if (typeof atob === 'function') {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return new Uint8Array(globalThis.Buffer.from(b64, 'base64')); // old Node (no atob)
 }
 
 // Asset-typed neighbours of a node (mirrors the topo view: only keys present in

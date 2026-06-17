@@ -96,7 +96,7 @@ export function setTab(name) {
   else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
 }
 function cycleTab(delta) {
-  const tabs = ['list', 'topo', 'reports'];
+  const tabs = document.body.classList.contains('viewer') ? ['list', 'topo'] : ['list', 'topo', 'reports']; // 報告 in viewer is hidden (snapshot)
   const i = tabs.indexOf(S.tab);
   setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
 }
