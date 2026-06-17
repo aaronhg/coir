@@ -4,13 +4,13 @@
 # extension's `import('coir')` resolves to src/index.js via package.json
 # "exports" — no npm link / env var needed).
 #
-#   ./install.sh                       # → ../../NewProject_386 (default)
-#   ./install.sh /path/to/CocosProject # → that project
+#   ./install.sh /path/to/CocosProject # install into that project
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # this extension's folder
 COIR_ROOT="$(cd "$SRC/.." && pwd)"                  # the coir repo (the package to link)
-PROJECT="${1:-$COIR_ROOT/../NewProject_386}"
+PROJECT="${1:-}"
+[ -n "$PROJECT" ] || { echo "usage: ./install.sh <path-to-cocos-project>" >&2; exit 1; }
 DEST="$PROJECT/extensions/coir"
 
 [ -d "$PROJECT/assets" ] || { echo "✗ not a Cocos project (no assets/): $PROJECT" >&2; exit 1; }

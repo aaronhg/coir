@@ -131,12 +131,14 @@ plugin 除了型別／邊，還能加**命令**：`commands: [{ name, usage?, de
 
 例如一個外部 plugin 可以這樣加 `coir timeline <prefab>`（也是 `timeline` MCP 工具），用一個 `run` 同時服務 CLI 與 agent，而不必 fork coir。註冊表在 `src/seam/pluginCommands.js`，契約見 `types/index.d.ts`（`PluginCommand`/`CommandContext`/`CommandResult`）。
 
-### 範例：`audio-call`（把 `audioPlay('x')` 連到音檔）
+plugin 還能加一個與命令**獨立**的 **`assetMenus`**（`[{ ext?, types?, label?, rows(ctx) }]`）把自己掛進**編輯器資源右鍵選單**——只給 `assetMenus`、不給 `commands` 的 plugin 就是一個純「asset-menu plugin」。符合 `ext`/`type` 的資源會多一個子選單，內容由 `rows(ctx)` 直接從該資源算出（`ctx` 給到 `asset`／`scan`／`projectDir`／`readText`）。CLI／MCP 會忽略此欄位；Cocos 擴充端（選單必須同步）會在背景**預先算好** `rows` 再推給選單（mtime 快取避免重算），且**單列自動收合成扁平項、多列才保留子選單**。例如 [`anim`／`skel` 外掛](https://github.com/aaronhg/coir-plugins)：右鍵 `.anim` → 扁平 `Coir anim  0.33s`（單一 clip 一列）、右鍵 `.skel` → `Coir skel ▸` 子選單逐一列出 `動畫名 / 時長`。契約見 `types/index.d.ts`（`AssetMenu`／`AssetMenuContext`）。
 
-「以字串名稱於執行期載入」的呼叫（如 `audioPlay('lobby_bgm')`）靜態看不出依賴。這個 plugin 掃 component 原始碼、把呼叫的名字對到同名音檔，連出 `Lobby.ts → lobby_bgm.mp3/.ogg`，補上「已知限制」裡動態載入灰區的一隅。完整可用、零相依：
+### 範例：`audio-call`（把 `playAudio('x')` 連到音檔）
+
+「以字串名稱於執行期載入」的呼叫（如 `playAudio('bgm_title')`）靜態看不出依賴。這個 plugin 掃 component 原始碼、把呼叫的名字對到同名音檔，連出 `Menu.ts → bgm_title.mp3/.ogg`，補上「已知限制」裡動態載入灰區的一隅。完整可用、零相依：
 
 ```js
-const FUNCS = ['audioPlay'];                       // 你專案的播放函式名（可多個）
+const FUNCS = ['playAudio'];                       // 你專案的播放函式名（可多個）
 const CALL_RE = new RegExp(String.raw`\b(?:${FUNCS.join('|')})\s*\(\s*['"\`]([^'"\`]+)['"\`]`, 'g');
 
 /** @type {import('coir').Plugin} */
@@ -161,9 +163,9 @@ export default {
       if (!text) continue;
       for (const m of text.matchAll(CALL_RE)) {
         const arg = m[1];
-        const name = arg.slice(arg.lastIndexOf('/') + 1); // 'audio/lobby_bgm' → 'lobby_bgm'
+        const name = arg.slice(arg.lastIndexOf('/') + 1); // 'audio/bgm_title' → 'bgm_title'
         for (const audio of byName.get(name) || []) {
-          addEdge(a.uuid, audio.uuid, 'audio', { nodePath: null, component: null, property: `audioPlay("${arg}")` });
+          addEdge(a.uuid, audio.uuid, 'audio', { nodePath: null, component: null, property: `playAudio("${arg}")` });
         }
       }
     }
@@ -174,14 +176,14 @@ export default {
 放進 `<你的專案>/coir.plugins.mjs`（或 coir 根的全域檔）後，CLI 就查得到 —— 哪支腳本播某個音檔：
 
 ```text
-$ coir ./MyGame uses audio/lobby_bgm.mp3 --where
-audio/lobby_bgm.mp3 (audio)
+$ coir ./MyGame uses audio/bgm_title.mp3 --where
+audio/bgm_title.mp3 (audio)
   used-by 1:
-    audio        ← script/Lobby.ts  (2×)
-        —  audioPlay("lobby_bgm")
+    audio        ← script/Menu.ts  (2×)
+        —  playAudio("bgm_title")
 ```
 
-反向（某腳本播了哪些音）：`coir ./MyGame deps script/Lobby.ts --out --type audio --where`。
+反向（某腳本播了哪些音）：`coir ./MyGame deps script/Menu.ts --out --type audio --where`。
 
 限制（刻意）：只看得到 **component 腳本**（純 util 模組已被剪枝）；只解**字串字面值**（`audioPlay(this.bgm)` 無法）；參數要對得上音檔 basename（撞名會連到全部同名音檔）。
 
@@ -242,7 +244,7 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 `package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `decodeTopo` / `makeFsProvider` / `PLUGINS` / `dedupePlugins` / `loadConfigPlugins` / `COIR_ROOT`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。`COIR_ROOT` 是 repo 根，host 可用它載 repo 根的全域 `coir.plugins.mjs`。
 
 ### Cocos Creator 3.5–3.8 擴充（`cocos-extension/`）
-資源**右鍵** → 子選單列出 **依賴（→）／被依賴（←）**，用**縮排**呈現層次（每深一層往右一格、子節點 nested 在父節點底下，不再用「層N」字樣、不設上限），每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），**會載入 repo 根＋專案的 `coir.plugins.mjs`**（與 CLI／瀏覽器同套，所以右鍵看得到 audio-call 之類的自訂邊；生效外掛以 `來源.名稱` 印出），繁中／English i18n；`./cocos-extension/install.sh [專案路徑]` 一鍵安裝（複製 + symlink coir，免 npm link，預設裝到 `../NewProject_386`）。**3.5–3.8 通吃**（`editor: >=3.5.0`；`topohash` 對舊版 Node／Electron 有 `zlib`＋`Buffer` fallback，所以連缺 `CompressionStream`／`btoa` 的 3.5 也能產快照）。詳見 `cocos-extension/README.md`。
+資源**右鍵** → 子選單列出 **依賴（→）／被依賴（←）**，用**縮排**呈現層次（每深一層往右一格、子節點 nested 在父節點底下，不再用「層N」字樣、不設上限），每筆點了**跳到該資源**（`Editor.Selection.select`），頂層**開拓撲快照**。擴充主行程 in-process 跑 coir-core（快取 scan、隨 asset-db 變動失效），**會載入 repo 根＋專案的 `coir.plugins.mjs`**（與 CLI／瀏覽器同套，所以右鍵看得到 audio-call 之類的自訂邊；生效外掛以 `來源.名稱` 印出），繁中／English i18n；`./cocos-extension/install.sh <專案路徑>` 一鍵安裝（複製 + symlink coir，免 npm link）。**3.5–3.8 通吃**（`editor: >=3.5.0`；`topohash` 對舊版 Node／Electron 有 `zlib`＋`Buffer` fallback，所以連缺 `CompressionStream`／`btoa` 的 3.5 也能產快照）。詳見 `cocos-extension/README.md`。
 
 ## 架構
 

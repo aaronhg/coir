@@ -293,8 +293,8 @@ before(async () => {
   ]);
   await write('TreeDup.prefab.meta', { importer: 'prefab', uuid: U.treeDup });
 
-  // CROSS-VERSION fixtures, modelled on real NewProject_352 (3.5.2) and
-  // NewProject_386 (3.8.6) prefabs: a 3.5.2 cc.Node carries `_level` (no
+  // CROSS-VERSION fixtures, modelled on real 3.5.2 and 3.8.6 prefabs:
+  // a 3.5.2 cc.Node carries `_level` (no
   // `_mobility`/`__editorExtras__`); a 3.8.x cc.Node carries `_mobility` +
   // `__editorExtras__` (no `_level`). add-node clones the same-file skeleton, so
   // the SAME code must reproduce each version's field set — no version branches.

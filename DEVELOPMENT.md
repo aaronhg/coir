@@ -279,9 +279,25 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 §11.15 出貨後的幾筆打磨(都未動 `src/core/` 測試,117 仍綠):
 
 - **viewer 保留 清單＋拓撲 分頁**:原本 `#topo=` viewer 只給拓撲;改成 `body.viewer` 只藏**報告**＋選目錄鈕、`cycleTab` 在 viewer 也跳過報告,**清單留著**——清單列出快照節點、點列重設中心(快照沒有專案級報告,故報告續藏)。
-- **擴充載入 `coir.plugins.mjs`**:barrel 加匯出 `loadConfigPlugins`／`loadPluginFiles`／`COIR_ROOT`(= repo 根,由 `import.meta.url` 推);`main.js` 的 `getScan` 比照 CLI/瀏覽器組 `dedupePlugins([...PLUGINS, ...loadConfigPlugins(COIR_ROOT), ...loadConfigPlugins(projectPath)])` 再餵 `scanProject`——所以擴充右鍵也吃得到 audio-call 之類自訂邊(先前只跑內建外掛,所以漏了)。**生效外掛以 `來源.名稱` 印出**(`global.audio-call`／`project.…`,與瀏覽器 status line 同款:dedupe 後非內建者+來源標籤)。Node 會快取 import,改設定要 **reload 擴充**才重讀。
+- **擴充載入 `coir.plugins.mjs`**:barrel 加匯出 `loadConfigPlugins`／`loadPluginFiles`／`COIR_ROOT`(= repo 根,由 `import.meta.url` 推);`main.js` 的 `getScan` 比照 CLI/瀏覽器組 `dedupePlugins([...PLUGINS, ...loadConfigPlugins(COIR_ROOT), ...loadConfigPlugins(projectPath)])` 再餵 `scanProject`——所以擴充右鍵也吃得到 audio-call 之類自訂邊(先前只跑內建外掛,所以漏了)。**生效外掛以 `來源.名稱` 印出**(`global.audio-call`／`project.…`,與瀏覽器 status line 同款:dedupe 後非內建者+來源標籤)。Node 會快取 import(ESM module 快取是**行程級**、reload 擴充不會清),改設定要 **重啟編輯器**才重讀(§11.17 踩到)。
 - **右鍵選單改縮排樹**(`assets-menu.js`):`L1/L2` 文字標籤 → **縮排**(`PAD` = NBSP×4,選 NBSP 免被編輯器折疊),`treeOf` 先 BFS 配最短深度+父節點、再 pre-order 走訪 → 每個 L2 nested 在它的 L1 底下;兩個方向都是「L1 齊左、每深一層往右一格」(`depth-1`);區塊序 `→` 先 `←` 後;**移除 per-node 上限**(列出全部鄰居)。
-- **3.5 安裝驗證**:`install.sh` 重裝 gc3083(3.8)/NewProject_352(3.5.2),`import('coir')` 從各專案 `node_modules/coir` symlink 解析回 repo(15 個匯出、`COIR_ROOT` 正確),audio-call 邊(`BonusEventUI.ts → S999705_add_red_envelope.mp3`)在擴充完整路徑下確實生成。
+- **3.5 安裝驗證**:`install.sh` 重裝到 3.8 與 3.5.2 測試專案,`import('coir')` 從各專案 `node_modules/coir` symlink 解析回 repo(15 個匯出、`COIR_ROOT` 正確),audio-call 邊(某 component 腳本 → 同名音檔)在擴充完整路徑下確實生成。
+
+### 11.17 anim/skel 外掛 + plugin `assetMenus`(資源右鍵看動畫時長)
+
+把外部 [coir-plugins](https://github.com/aaronhg/coir-plugins) 的 `anim`/`skel` 兩個命令外掛(讀 `.anim` clip、讀 Spine 二進位 `.skel` + vendored spine 3.8 runtime)接進編輯器右鍵,需求:右鍵 `.anim` 看到 `Coir anim 0.33s`、`.skel` 列出各動畫名/時長。
+
+- **新增 `assetMenus` plugin 貢獻點**(與 `commands` **獨立** —— 一開始我把它掛在 command 上,依回饋拆成 plugin 層自有欄位,純 asset-menu plugin 不必有 command):`{ ext?, types?, label?, rows(ctx) }`,`rows(ctx)` 由資源自身算出(`ctx = { asset, scan, projectDir, readText }`)。契約進 `types/index.d.ts`(`AssetMenu`/`AssetMenuContext`)。CLI/MCP 忽略它。
+- **擴充端預算 + 推送**(同 graph 那套,因選單必須同步):`main.js` `assetMenuSnapshot()` 對符合 `ext`/`type` 的資源在背景跑 `rows(ctx)`、`mapLimit(8)` + **`uuid:mtime` 快取**(不重 parse 沒變的 `.skel`),經 `coir:asset-menus` broadcast + `all-asset-menus` prime;`assets-menu.js` 同步查表渲染。**單列收合成扁平項**(`Coir anim  0.33s`)、**多列保留子選單**(`Coir skel ▸ idle / 2s · …`) —— 依回饋從「一律子選單」改來。
+- **踩到的兩個坑**:① 加進全域 `coir.plugins.mjs` 後右鍵沒反應 —— `loadConfigPlugins` 用 `import(fileURL)` 無 cache-bust,editor 行程的 **ESM 快取**讓它一直用舊設定(log 有 `global.resources-sprite` 卻沒 `global.anim/skel`);**reload 擴充不會清快取,要完整重啟編輯器**。② `install.sh` 是**複製**擴充進專案(只有 `node_modules/coir` 是 symlink),所以改 `main.js`/`assets-menu.js` 要**重裝**才生效。③ glTF/FBX 模型的 `.animation` 是 **sub-asset**(`uuid@sub`,非頂層資源、非 `cc.AnimationClip` JSON)→ 目前不支援(僅手做 `.anim`)。
+
+### 11.18 跳轉(goto)面板
+
+可停靠的 **`Coir 跳轉`** 面板(`panels/goto.js`;選單 面板→Coir→跳轉到節點… 或 `Ctrl+Alt+G`),把 coir 定位字串⇄編輯器選取打通,**雙向**:
+
+- **打字/貼上 → 選取**:① **節點路徑**(`nodePath`(+`[i]`))→ 對**活場景樹**(`scene` `query-node-tree`,不讀檔)走訪並選取該節點;② 結尾是 `.副檔名`(`xxx.prefab`/`ui/foo.png`)→ 走 `asset-db` 選取 Assets 面板裡的**資源**(basename 或路徑後綴比對,撞名要求更完整路徑)。
+- **反向回填**:在編輯器選取節點/資源 → 輸入框自動填回它的 coir `nodePath`(含 `[i]` 消歧)/檔名 —— 但你正在輸入框打字時不覆蓋(`document.activeElement` 判斷)。
+- **語法**:比照 coir 印出的(`--where`、瀏覽器用在哪、麵包屑);剝掉結尾 `:Comp`/`.prop`(編輯器無單獨高亮元件卡的 API);同名兄弟沒給 `[i]` → 取 `[0]`;不支援 `#N`(活場景沒有序列化絕對 index)。Enter 用原生 `keydown` 抓(`ui-input` 的 `confirm` 只在值有變才觸發 → 之前第二次 Enter 沒反應)。
 
 ---
 
@@ -291,8 +307,8 @@ CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `
 - **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
 - **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**、灰色父子連線、選取鏈高亮、頂端 bar＝篩選框（隱藏非相符）＋麵包屑（被依賴→依賴）＋複製整條鏈，右上角浮動 `Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
 - **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**117 個案例**：CLI 98 + MCP 6 + 外掛命令 6 + topohash 5 + 外掛節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
-- **嵌入 / 分享**：`#topo=<blob>` **URL 快照 viewer**（鄰域子圖塞進 hash → 開連結直接看拓撲，**不需 File API、跨瀏覽器**；`src/core/topohash.js` 的 `encodeTopo`/`decodeTopo`，自動縮深度塞進 256KB）；`import('coir')` **嵌入出口**（`exports` → `src/index.js`）；**Cocos Creator 3.5–3.8 擴充**（`cocos-extension/`：資源右鍵看 被依賴/依賴 分層 + 跳轉 + 開拓撲快照，in-process 跑 coir-core，`install.sh` 部署）。
+- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）**與資源右鍵 asset menu**（`assetMenus`，與命令獨立；見 §11.17）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**117 個案例**：CLI 98 + MCP 6 + 外掛命令 6 + topohash 5 + 外掛節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
+- **嵌入 / 分享**：`#topo=<blob>` **URL 快照 viewer**（鄰域子圖塞進 hash → 開連結直接看拓撲，**不需 File API、跨瀏覽器**；`src/core/topohash.js` 的 `encodeTopo`/`decodeTopo`，自動縮深度塞進 256KB）；`import('coir')` **嵌入出口**（`exports` → `src/index.js`）；**Cocos Creator 3.5–3.8 擴充**（`cocos-extension/`：資源右鍵看 被依賴/依賴 分層 + 跳轉 + 開拓撲快照 + 外掛 asset menu（如 anim/skel 顯示動畫時長），in-process 跑 coir-core，`install.sh` 部署）。
 - **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
 
 > 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。

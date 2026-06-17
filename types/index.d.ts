@@ -151,6 +151,16 @@ export interface Plugin {
    * warning. CLI commands are listed in `coir --help`.
    */
   commands?: PluginCommand[];
+  /**
+   * Asset right-click menus this plugin contributes to an editor (e.g. the Cocos
+   * Creator extension). Independent of `commands` — a plugin can ship only
+   * `assetMenus` (a pure "asset-menu plugin"). Each matching asset (by `ext`
+   * and/or `type`) gets a submenu titled `label` whose rows are returned by
+   * `rows(ctx)`. The host runs `rows` in the background and caches the result
+   * (the menu render must be synchronous); CLI/MCP ignore this field. See
+   * cocos-extension/.
+   */
+  assetMenus?: AssetMenu[];
 }
 
 /**
@@ -168,6 +178,27 @@ export interface PluginCommand {
   /** Names mapping CLI positionals → `ctx.args` keys (so it matches the MCP JSON shape). Defaults to the inputSchema property order. A trailing `?` marks optional. */
   positional?: string[];
   run(ctx: CommandContext): CommandResult | void | Promise<CommandResult | void>;
+}
+
+/**
+ * A plugin's contribution to an editor's asset right-click menu — its own thing,
+ * NOT tied to a command. A matching asset gets a submenu titled `label`; `rows`
+ * computes the entries from the asset itself (read its source via `ctx.readText`,
+ * resolve siblings via `ctx.scan`). Return [] for "nothing to show".
+ */
+export interface AssetMenu {
+  ext?: string[]; // source extensions that get this menu (lowercased, with dot), e.g. ['.anim']
+  types?: string[]; // coir asset types that get this menu, e.g. ['anim'] (matched in addition to ext)
+  label?: string; // submenu title
+  rows(ctx: AssetMenuContext): { label: string }[] | Promise<{ label: string }[]>;
+}
+
+/** What an `AssetMenu.rows(ctx)` receives — the matched asset plus scan/IO helpers. */
+export interface AssetMenuContext {
+  asset: Asset; // the matched asset (path / uuid / type / ext)
+  scan: ScanResult; // the finished scan (e.g. to find a sibling .atlas of a .skel)
+  projectDir: string; // project root (for reading a binary source directly, e.g. a .skel)
+  readText(path: string): Promise<string>; // read any source under assets/ (POSIX-relative)
 }
 
 /** What a command's `run` returns: `data` (structured, for `-o json` / MCP) and/or `text` (human CLI output); or an `error`. */

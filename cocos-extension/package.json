@@ -7,6 +7,14 @@
   "author": "coir",
   "editor": ">=3.5.0",
   "main": "./main.js",
+  "panels": {
+    "goto": {
+      "title": "i18n:coir.goto_title",
+      "type": "dockable",
+      "main": "./panels/goto.js",
+      "size": { "min-width": 240, "min-height": 80, "width": 360, "height": 120 }
+    }
+  },
   "contributions": {
     "assets": {
       "menu": {
@@ -14,9 +22,17 @@
         "assetMenu": "onAssetMenu"
       }
     },
+    "menu": [
+      { "path": "i18n:menu.panel/Coir", "label": "i18n:coir.goto_open", "message": "open-goto" }
+    ],
+    "shortcuts": [
+      { "message": "open-goto", "win": "ctrl+alt+g", "mac": "ctrl+alt+g" }
+    ],
     "messages": {
       "open-topo": { "methods": ["openTopo"] },
-      "all-graph": { "methods": ["allGraph"] }
+      "all-graph": { "methods": ["allGraph"] },
+      "all-asset-menus": { "methods": ["allAssetMenus"] },
+      "open-goto": { "methods": ["openGoto"] }
     }
   }
 }

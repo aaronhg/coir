@@ -5,6 +5,7 @@
 // names) to it (request + broadcast); it BFS's the clicked asset's dependency
 // layers locally. `open-topo` encodes the neighborhood into the viewer URL hash.
 const path = require('path');
+const fs = require('fs');
 const { shell } = require('electron'); // open the OS browser
 
 // coir's embedder API (package.json "exports" → src/index.js). After the
@@ -42,10 +43,11 @@ async function getScan() {
       if (active.length) console.log(`[coir] plugins: ${active.join(', ')}`);
       const scan = await coir.scanProject(fp, { plugins });
       scan.adjacency = coir.buildAdjacency(scan.edges);
-      return scan;
+      return { scan, plugins };
     })().catch((e) => { scanP = null; throw e; }); // don't cache a failed scan
   }
-  return { coir, scan: await scanP };
+  const { scan, plugins } = await scanP;
+  return { coir, scan, plugins };
 }
 
 // Compact, integer-indexed out-graph for the (sync) menu: parallel arrays
@@ -71,12 +73,75 @@ async function broadcastGraph() {
   try { Editor.Message.broadcast('coir:graph', await graphSnapshot()); }
   catch (e) { console.error('[coir] graph broadcast failed:', e); }
 }
+
+// ── plugin asset-menu contributions (anim/skel/…) ────────────────────────────
+// A plugin contributes asset right-click menus via `plugin.assetMenus` — its own
+// thing, independent of `commands`: each is { ext?, types?, label?, rows(ctx) }.
+// The menu render is SYNC, so — exactly like the graph — we precompute every
+// matching asset's rows here (eagerly, in the background) and push them;
+// assets-menu.js just looks the clicked uuid up. `rows(ctx)` gets the matched
+// asset + scan/IO and returns the submenu rows directly.
+const rowsCache = new Map(); // `${uuid}:${mtimeMs}` → rows[]  (skips re-parsing unchanged heavy assets, e.g. .skel)
+
+async function mapLimit(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx]); }
+  });
+  await Promise.all(workers);
+}
+
+// uuid → [{ label, rows:[{label}] }]  (one entry per matching asset-menu).
+async function assetMenuSnapshot() {
+  const { coir, scan, plugins } = await getScan();
+  const menus = [];
+  for (const p of plugins || []) for (const m of (p.assetMenus || [])) {
+    if (m && typeof m.rows === 'function') menus.push(m);
+  }
+  const out = {};
+  if (!menus.length) return out;
+
+  const assetsDir = path.join(Editor.Project.path, 'assets');
+  const fp = coir.makeFsProvider(assetsDir);
+  const makeCtx = (asset) => ({ asset, scan, projectDir: Editor.Project.path, readText: (rp) => fp.readText(rp) });
+
+  // Flatten (asset-menu × matching asset) into one work list, then run with a cap.
+  const jobs = [];
+  for (const menu of menus) {
+    const exts = (menu.ext || []).map((e) => String(e).toLowerCase());
+    const types = new Set(menu.types || []);
+    for (const a of scan.assets.values()) {
+      if (!a.path) continue;
+      const ext = (a.ext || a.path.slice(a.path.lastIndexOf('.'))).toLowerCase();
+      if (exts.includes(ext) || types.has(a.type)) jobs.push({ menu, a });
+    }
+  }
+
+  await mapLimit(jobs, 8, async ({ menu, a }) => {
+    let key = `${a.uuid}|${menu.label || ''}`;
+    try { key = `${key}:${fs.statSync(path.join(assetsDir, a.path)).mtimeMs}`; } catch (e) { /* mtime unknown → key without it */ }
+    let rows = rowsCache.get(key);
+    if (!rows) {
+      try { rows = (await menu.rows(makeCtx(a))) || []; } catch (e) { rows = []; }
+      rowsCache.set(key, rows);
+    }
+    if (rows.length) (out[a.uuid] || (out[a.uuid] = [])).push({ label: menu.label || 'Coir', rows });
+  });
+  return out;
+}
+async function broadcastAssetMenus() {
+  try { Editor.Message.broadcast('coir:asset-menus', await assetMenuSnapshot()); }
+  catch (e) { console.error('[coir] asset-menus broadcast failed:', e); }
+}
+
 let invT = null;
-function invalidate() { scanP = null; clearTimeout(invT); invT = setTimeout(broadcastGraph, 300); } // debounce a burst of changes
+function invalidate() { scanP = null; clearTimeout(invT); invT = setTimeout(() => { broadcastGraph(); broadcastAssetMenus(); }, 300); } // debounce a burst of changes
 
 exports.methods = {
   // The (sync) asset menu primes its graph cache from this on load.
   async allGraph() { try { return await graphSnapshot(); } catch (e) { console.error('[coir] allGraph failed:', e); return { uuids: [], names: [], out: [], inc: [] }; } },
+  // …and its plugin asset-menu cache (anim/skel/…) from this.
+  async allAssetMenus() { try { return await assetMenuSnapshot(); } catch (e) { console.error('[coir] allAssetMenus failed:', e); return {}; } },
   // Encode this asset's neighborhood → open the topology viewer at #topo=<blob>.
   async openTopo(uuid) {
     try {
@@ -87,10 +152,17 @@ exports.methods = {
       await shell.openExternal(`${VIEWER}#topo=${r.blob}`);
     } catch (e) { console.error('[coir] openTopo failed:', e); }
   },
+  // Open the "跳轉到節點" panel (menu item / shortcut → here). The panel itself
+  // does the scene-tree walk + selection; main just opens it.
+  async openGoto() {
+    try { await Editor.Panel.open('coir.goto'); }
+    catch (e) { console.error('[coir] openGoto failed:', e); }
+  },
 };
 
 exports.load = function () {
   broadcastGraph(); // warm the scan + push the graph so the first right-click has it
+  broadcastAssetMenus(); // …and the anim/skel/… submenu rows
   // Invalidate on project changes so the menu stays live.
   // NOTE: confirm these broadcast names against the 3.8 asset-db message docs.
   for (const ev of ['asset-add', 'asset-change', 'asset-delete']) {

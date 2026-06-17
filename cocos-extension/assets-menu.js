@@ -19,9 +19,14 @@ const T = (k, fb) => { try { const s = Editor.I18n.t(`coir.${k}`); return s && s
 
 let G = null;     // { uuids, names, out, inc, idx }
 const setGraph = (g) => { if (g && g.uuids) { g.idx = new Map(g.uuids.map((u, i) => [u, i])); G = g; } };
+// Plugin asset-menu rows (anim/skel/…), precomputed by main: uuid → [{ label, rows:[{label}] }].
+let M = {};
+const setMenus = (m) => { if (m && typeof m === 'object') M = m; };
 try {
   Editor.Message.request('coir', 'all-graph').then(setGraph).catch(() => {}); // prime
   Editor.Message.addBroadcastListener('coir:graph', setGraph);                 // refresh
+  Editor.Message.request('coir', 'all-asset-menus').then(setMenus).catch(() => {});
+  Editor.Message.addBroadcastListener('coir:asset-menus', setMenus);
 } catch (e) { /* messaging unavailable → menu still opens the topology */ }
 
 // Depth-limited (≤ DEPTH) tree from node `i` over G[dir] ('out' = dependencies,
@@ -61,33 +66,50 @@ exports.onAssetMenu = function (assetInfo) {
   const deps = i === undefined ? [] : treeOf(i, 'out');         // → uses
 
   const title = T('menu_title', 'Coir 依賴拓撲');
-  // Nothing to list (no neighbours, or cold cache) → flat item, click opens the topology.
-  if (!dependents.length && !deps.length) return [{ label: title, click: openTopo }];
+  const out = [];
 
-  // Header spreads around the (unshown) centre, one token per layer: dependents fan
-  // LEFT deepest→shallowest, dependencies fan RIGHT shallowest→deepest — e.g.
-  // "←L2 ←L1 →L1 →L2" (each Ln = that layer's count).
-  const counts = (tree) => { // → [L1 count, L2 count, …]
-    const m = new Map();
-    for (const n of tree) m.set(n.depth, (m.get(n.depth) || 0) + 1);
-    return [...m.keys()].sort((a, b) => a - b).map((d) => m.get(d));
-  };
-  const tokens = [];
-  counts(dependents).reverse().forEach((c) => tokens.push(`←${c}`));
-  counts(deps).forEach((c) => tokens.push(`→${c}`));
+  if (!dependents.length && !deps.length) {
+    // Nothing to list (no neighbours, or cold cache) → flat item, click opens the topology.
+    out.push({ label: title, click: openTopo });
+  } else {
+    // Header spreads around the (unshown) centre, one token per layer: dependents fan
+    // LEFT deepest→shallowest, dependencies fan RIGHT shallowest→deepest — e.g.
+    // "←L2 ←L1 →L1 →L2" (each Ln = that layer's count).
+    const counts = (tree) => { // → [L1 count, L2 count, …]
+      const m = new Map();
+      for (const n of tree) m.set(n.depth, (m.get(n.depth) || 0) + 1);
+      return [...m.keys()].sort((a, b) => a - b).map((d) => m.get(d));
+    };
+    const tokens = [];
+    counts(dependents).reverse().forEach((c) => tokens.push(`←${c}`));
+    counts(deps).forEach((c) => tokens.push(`→${c}`));
 
-  // Depth shown by INDENT (not "層N"): both directions are a normal tree — L1 flush,
-  // each deeper layer one tab further in, an L2 nested under its L1 parent.
-  const submenu = [{ label: T('open', '開啟拓撲圖'), click: openTopo }];
-  const emit = (tree, arrow) => {
-    for (const n of tree) {
-      const pad = PAD.repeat(n.depth - 1);
-      const uuid = G.uuids[n.v];
-      submenu.push({ label: `${pad}${arrow} ${G.names[n.v]}`, click() { Editor.Selection.select('asset', uuid); } });
+    // Depth shown by INDENT (not "層N"): both directions are a normal tree — L1 flush,
+    // each deeper layer one tab further in, an L2 nested under its L1 parent.
+    const submenu = [{ label: T('open', '開啟拓撲圖'), click: openTopo }];
+    const emit = (tree, arrow) => {
+      for (const n of tree) {
+        const pad = PAD.repeat(n.depth - 1);
+        const uuid = G.uuids[n.v];
+        submenu.push({ label: `${pad}${arrow} ${G.names[n.v]}`, click() { Editor.Selection.select('asset', uuid); } });
+      }
+    };
+    emit(deps, '→');
+    emit(dependents, '←');
+    out.push({ label: `${title}  ${tokens.join(' ')}`, submenu });
+  }
+
+  // Plugin asset-menu contributions (anim/skel/…) — rows precomputed by main.
+  // A SINGLE row collapses to a flat item ("Coir anim  0.33s"); multiple rows
+  // stay a submenu ("Coir skel ▸ idle / 2s · walk / 0.8s · …").
+  for (const entry of M[assetInfo.uuid] || []) {
+    if (!entry || !entry.rows || !entry.rows.length) continue;
+    if (entry.rows.length === 1) {
+      out.push({ label: `${entry.label}  ${entry.rows[0].label}`, click() {} });
+    } else {
+      out.push({ label: entry.label, submenu: entry.rows.map((r) => ({ label: r.label, click() {} })) });
     }
-  };
-  emit(deps, '→');
-  emit(dependents, '←');
+  }
 
-  return [{ label: `${title}  ${tokens.join(' ')}`, submenu }];
+  return out;
 };
