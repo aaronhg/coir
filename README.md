@@ -33,11 +33,11 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 
 瀏覽器開 `http://localhost:8080` → 點「選擇 Cocos 專案目錄」→ 選遊戲專案根目錄（含 `assets/` 的那層；直接選 `assets/` 亦可）。
 
-> 純前端，**無第三方執行期相依**（先前的 cytoscape 力導向圖檢視已移除，只剩純 DOM）。由 **webpack** 打包（production bundle ~60KB）；開發用 `npm run dev`（webpack-dev-server，改 `src/` 即時重載），設定在 `webpack.config.cjs`（`.cjs` 因為 `package.json` 是 `type:module`）。線上 demo 由 **GitHub Actions** 自動 build＋部署到 GitHub Pages，因此 **`dist/` 不進 repo**（純建置產物，`.github/workflows/deploy.yml`）。
+> 純前端，**無第三方執行期相依**（先前的 cytoscape 力導向圖檢視已移除，只剩純 DOM）。由 **webpack** 打包（production bundle ~95KB）；開發用 `npm run dev`（webpack-dev-server，改 `src/` 即時重載），設定在 `webpack.config.cjs`（`.cjs` 因為 `package.json` 是 `type:module`）。線上 demo 由 **GitHub Actions** 自動 build＋部署到 GitHub Pages，因此 **`dist/` 不進 repo**（純建置產物，`.github/workflows/deploy.yml`）。
 
 ## 功能
 
-介面是 **banner 上三個分頁（清單 / 拓撲 / 報告）共用一個內容區**，banner 下方一條**全域「類型篩選」bar**（同時作用於三個分頁）。
+介面是 **banner 上四個分頁（清單 / 拓撲 / 體積圖 / 報告）共用一個內容區**，banner 下方一條**全域「類型篩選」bar**（同時作用於各分頁）。
 
 ### 清單（＝層0）
 - 可排序資源表：名稱／目錄／類型／大小／**被依賴**／**被依賴∑**／**依賴**／**依賴∑**。「目錄」欄只顯示資料夾（`a/b/c.prefab` → `a/b/`）。
@@ -53,15 +53,23 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 - **`/` 快速搜尋**：模糊比對（`mscn` 也能找到 `MainScene`），**命中字會高亮**；跨多種來源——檔名／路徑、**uuid**（貼上即跳）、**sprite-frame 名**（找某一格在哪張圖集）、**使用位置**（節點路徑·元件.屬性·ClickEvent）、**邊**（meta/慣例/外掛推導的邊，如 atlas→texture、`extends`、外掛的 audio-call）。範圍前綴：`@` frame、`#` 型別、`>` 用途、`~` 邊種類（單打 `~` 列出可選種類；`#`／`~` 為兩段式 `#型別 關鍵字`／`~種類 關鍵字`）；每一筆右側顯示 `←被依賴∑ →依賴∑`，選任何一筆都會跳到對應的資源。
 
 ### 全域類型篩選（bar）
-- 型別徽章「首次點選＝單獨，之後＝累加」，三個分頁共用。
-- 對**清單／報告**＝只顯示該型別；對**拓撲**＝**保留通往該型別的路徑**：符合型別的節點與通往它的中間節點留著、死枝剪掉，層0 永遠保留。拓撲 bar 的**文字篩選**走同一套 `buildSide` 剪枝（型別 ∧ 路徑關鍵字），兩者可疊加。
+- 型別徽章「首次點選＝單獨，之後＝累加」，各分頁共用。
+- 對**清單／報告／體積圖**＝只顯示該型別（體積圖徽章上的數量還會跟著當前**範圍**——整個專案或中心 closure——變動）；對**拓撲**＝**保留通往該型別的路徑**：符合型別的節點與通往它的中間節點留著、死枝剪掉，層0 永遠保留。拓撲 bar 的**文字篩選**走同一套 `buildSide` 剪枝（型別 ∧ 路徑關鍵字），兩者可疊加。
+
+### 體積圖（Size map）
+- **Squarified treemap**：每個方塊面積 ∝ 資源 bytes、外層按型別分群、顏色用型別色——**最肥的資源一眼看出**。`image` 型別的方塊直接貼上**實際貼圖縮圖**（範圍內圖少時用原圖、整個專案時降採樣），方塊夠大就疊上檔名。
+- **範圍 = 拓撲中心**：在清單／拓撲挑一個資源當中心，體積圖就只看它的**依賴 closure**（對標 Unreal 的 Size Map：「這東西多重」）；沒中心則看整個專案。bar 顯示「選中項 體積 · 中心名 總體積 · 項數」，可複製中心路徑、一鍵回最上層。
+- **互動**：**單擊**方塊鑽入它的依賴體積（重設中心、留在體積圖）、**雙擊**跳到拓撲；hover 即時顯示名稱＋體積；**兩指 pinch 縮放**＋拖曳／滾動平移、`←→↑↓` 移動方塊游標、`Enter` 鑽入、`−`/`+` 走中心歷史。
 
 ### 報告
+> 報告分成**子分頁**（未使用／孤兒參照／圖集利用率／資源體積／缺來源檔 meta），外加每個外掛貢獻的報告頁（如下「跨圖集重複圖」）。
+
 - **未使用 / 孤兒資源**：`resources/` 以外、零參照的資源（`resources/` 一律略過，視為執行期動態載入）。
 - **孤兒參照**：指向不存在 uuid 的失效參照；若那個 uuid 來自一個「來源被刪、只剩 `.meta`」的資源，會以**檔名 + 「缺來源檔」**標示（而非裸 uuid）。
 - **圖集利用率**：每個 plist 有多少 sprite-frame 實際被個別引用；整圖被當 `SpriteAtlas` 動態取用者另標「整圖動態取用」（無法靜態判定）。
 - **資源體積**：各類型總量與最大檔案排行（含目錄欄）。
-- **缺來源檔的 meta（已略過）**：摺疊清單，列出所有「只剩 `.meta`、來源檔已刪」而被忽略的項目，標示「仍被引用」（斷掉的依賴要修）或「無人引用」（殘留可刪）。
+- **缺來源檔的 meta（已略過）**：列出所有「只剩 `.meta`、來源檔已刪」而被忽略的項目，標示「仍被引用」（斷掉的依賴要修）或「無人引用」（殘留可刪）。
+- **跨圖集重複圖（外掛貢獻）**：同一張美術被打進多個 **Spine `.atlas`**（spine-dup）或 **Cocos `.plist`**（atlas-dup）圖集——這種「各自打包同一張圖」的浪費，整檔比對抓不到。報告頁以**並排縮圖**呈現、並用旋轉不變的感知雜湊**逐像素確認**（升級為「已確認／實際不同」）。同樣的查詢也有 CLI／MCP 版（`coir spine-dup` / `coir atlas-dup`）。
 
 ### 介面雜項
 - **多語系**：繁體中文 / English，banner 右上角下拉切換（自動偵測瀏覽器語言、記在 `localStorage`）。所有可見字串集中在 `src/browser/i18n.js`，零相依的 `t()`。
@@ -203,6 +211,12 @@ node test/node-run.js <專案目錄> [中心uuid或路徑]
 
 **CLI**（`src/cli.js`，輸出到 stdout、可 pipe/解析；`bin` 註冊為 `coir`）：在 Cocos 專案目錄內直接跑，或用 `-C <專案目錄>` 指向別處（git 風格，預設當前目錄）。`coir --help` 印含範例與 exit code 的說明。
 
+> **一鍵安裝**（CLI 零執行期相依，免 npm install／build——下載原始碼 + symlink bin 到 PATH 即可）：
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install.sh | sh
+> ```
+> Cocos 擴充的自包含安裝：`curl -fsSL …/install-extension.sh | sh -s -- <Cocos 專案路徑>`（把擴充 + coir-core 一起複製進 `<專案>/extensions/coir`）。
+
 **依賴查詢（唯讀）：**
 
 ```bash
@@ -213,6 +227,8 @@ coir find    <查詢> [--type T]                       # 依名稱找候選
 coir info    <資源>                                  # 印單一資源的 record（型別/uuid/度數/子資源/userData）
 coir analyze [section] [-o json]                     # 專案級稽核（= node-run.js 報告的 CLI 版）
 #   section = stats（總覽/邊種類/健康）| unused（未使用）| orphans [--dropped] | atlas（圖集利用率）| size [--type T][--list]；無 section = 全部
+coir duplicates [files|configs] [--type T] [-o json] # 重複資源：位元組相同的檔 / 結構相同的 prefab·material·anim
+#   每組附建議的正本 + 冗餘清單 + 可省空間，接 `coir edit --all swap-uuid <冗餘> <正本>` 一鍵合併
 ```
 
 `<資源>` 可用完整路徑／basename／uuid／`uuid@sub`（撞名印候選並 `exit 2`）。`--where` 把每條邊的使用位置印成**可直接貼回 `edit` 的 selector**（`nodePath:Comp.prop`，與瀏覽器「用在哪」彈窗共用一套）。`--type` 只保留指定型別：`deps`/`uses` 樹保留通往該型別的中間路徑，`closure`/`find` 過濾平面清單。輸出預設 text，`-o json` 給機器讀。
@@ -278,7 +294,7 @@ test/node-run.js  # 整份報告的無頭驗證器
 test/cli.test.js  # node:test：對合成專案跑 cli.js 端對端
 index.html        # 應用外殼 + CSS（載入 dist/app.bundle.js）
 webpack.config.cjs # webpack 設定（entry=src/browser/app.js、dev server）
-dist/app.bundle.js # webpack 打包輸出（純 DOM，~60KB）；gitignored — 由 CI build，不進 repo
+dist/app.bundle.js # webpack 打包輸出（純 DOM，~95KB）；gitignored — 由 CI build，不進 repo
 .github/workflows/deploy.yml # GitHub Actions：build + 部署到 GitHub Pages
 types/index.d.ts   # 型別宣告（資料模型 + Plugin/PluginContext 契約；隨套件 ship）
 tsconfig.json      # 型別檢查設定（allowJs/checkJs，tsc --noEmit）

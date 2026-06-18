@@ -61,7 +61,7 @@
   .help-foot { flex:0 0 auto; padding:10px 16px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .ver { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
   /* viewer mode (URL-hash topology snapshot): topology only — hide picker + list/reports tabs */
-  body.viewer #pickBtn, body.viewer .btabs button[data-tab="reports"] { display:none; } /* viewer keeps 清單 + 拓撲, hides reports + the picker */
+  body.viewer #pickBtn, body.viewer .btabs button[data-tab="reports"], body.viewer .btabs button[data-tab="sizemap"] { display:none; } /* viewer keeps 清單 + 拓撲, hides 體積圖/reports + the picker */
   .cell.bnd .cnm::after { content:' ⋯'; opacity:.45; } /* boundary node: real neighbours trimmed from the snapshot */
   .up-more { color:var(--mut); font-style:italic; }
   .help-foot a { color:var(--acc); text-decoration:none; font-size:12px; }
@@ -152,7 +152,14 @@
   .rbody-head { padding:2px 2px 8px; font-weight:600; color:#fff; }
   .rbody-head .sub { color:var(--mut); font-weight:400; font-size:12px; }
   /* size map (treemap) — thin gaps via cell inset, no thick borders */
-  .sizemap { width:100%; height:auto; display:block; border-radius:6px; overflow:hidden; cursor:grab; touch-action:none; }
+  .smscope { display:flex; align-items:center; gap:10px; padding:4px 2px 10px; flex-wrap:wrap; }
+  .smcrumb { display:flex; align-items:center; gap:4px; flex-wrap:wrap; min-width:0; }
+  .smcrumb .smc { background:none; border:0; color:var(--link,#4fc3f7); font-size:12px; cursor:pointer; padding:2px 4px; border-radius:4px; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .smcrumb .smc:hover { background:var(--panel2); }
+  .smcrumb .smc.cur { color:var(--fg); font-weight:600; cursor:default; }
+  .smcrumb .smsep { color:var(--mut); font-size:12px; }
+  .smscope .smtotal { color:var(--mut); font-size:12px; font-variant-numeric:tabular-nums; }
+  .sizemap { width:100%; height:100%; display:block; overflow:hidden; cursor:grab; touch-action:none; }
   .sizemap:active { cursor:grabbing; }
   .sizemap .tmrect, .sizemap .tmimg { cursor:pointer; }
   .sizemap .tmimg { clip-path:inset(0 round 2px); }
@@ -200,6 +207,16 @@
   #topoCrumb .cr:hover { color:var(--fg); background:var(--panel2); }
   #topoCrumb .cr.cur { color:var(--fg); font-weight:600; }
   #topoCrumb .crsep { flex:0 0 auto; color:var(--mut); opacity:.55; font-size:11px; }
+  /* 體積圖 tab + its bar (mirrors the topo bar, plus a 體積 total after the filter) */
+  #smbar { flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:5px 10px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #smFilter { flex:0 0 auto; display:flex; align-items:center; gap:4px; }
+  #smFilterInput { background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--fg); font-size:12px; padding:4px 8px; width:220px; outline:none; }
+  #smFilterInput:focus { border-color:var(--acc); }
+  #smSel { margin-left:auto; flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--acc); font-size:12px; font-variant-numeric:tabular-nums; }
+  #smScope { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg); font-weight:600; font-size:12px; font-variant-numeric:tabular-nums; }
+  #sizemapView { flex:1; min-height:0; overflow:hidden; } /* the SVG fills it; zoom is viewBox-internal */
+  #sizemapView .colhint { padding:24px; }
+  .sizemap .tmsel { stroke:#fff; stroke-width:1.6; stroke-opacity:.95; }
   .topohead { flex:0 0 auto; display:grid; grid-template-columns:repeat(5,1fr); border-bottom:1px solid var(--line); background:var(--panel); }
   .th { display:flex; align-items:center; gap:6px; padding:6px 10px; font-size:11px; color:var(--mut); border-right:1px solid var(--line); }
   .th i { color:var(--acc); font-style:normal; font-weight:700; }
@@ -276,6 +293,7 @@
   <nav class="btabs">
     <button data-tab="list" class="active" data-i18n="tab.list">清單</button>
     <button data-tab="topo" data-i18n="tab.topo">拓撲</button>
+    <button data-tab="sizemap" data-i18n="tab.sizemap">體積圖</button>
     <button data-tab="reports" data-i18n="tab.reports">報告</button>
   </nav>
   <span id="status"></span>
@@ -319,6 +337,19 @@
         <button id="topoFindClose" class="tf-btn" type="button" data-i18n-title="topo.findClose" title="關閉 (Esc)">✕</button>
       </div>
     </div>
+  </section>
+  <section id="tab-sizemap" class="tab" hidden>
+    <div id="smbar">
+      <div id="smFilter">
+        <input id="smFilterInput" type="text" data-i18n-ph="topo.filterPh" placeholder="篩選節點（隱藏非相符）…" spellcheck="false" autocomplete="off">
+        <button id="smFilterClear" class="tf-btn" type="button" data-i18n-title="topo.filterClear" title="清除篩選">✕</button>
+      </div>
+      <span id="smSel"></span>
+      <span id="smScope"></span>
+      <button id="smCopy" class="tf-btn" type="button" data-i18n-title="sizemap.copyName" title="複製中心路徑" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button id="smHome" class="tf-btn" type="button" data-i18n-title="sizemap.home" title="回到整個專案" hidden><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9"/></svg></button>
+    </div>
+    <div id="sizemapView"><div class="colhint" data-i18n="sizemap.hint">點方塊鑽入它的依賴體積；雙擊跳到拓撲。兩指縮放、方向鍵移動、Enter 鑽入。</div></div>
   </section>
   <section id="tab-reports" class="tab" hidden>
     <div id="reports"><div class="empty" data-i18n="empty.pickFirst">先選擇專案目錄</div></div>

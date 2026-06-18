@@ -3,18 +3,19 @@
 //   list.js  topo.js  usage.js  palette.js  reports.js  filterbar.js  copy.js
 // and the shared state + helpers in state.js. Three banner tabs (清單 / 拓撲 /
 // 報告) over one content area; "/" opens quick-open.
-import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus } from './state.js';
+import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus, CHECK_ICON } from './state.js';
 import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
 import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
-import { renderTopo, reflowTopo, focus, goBack, goForward, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, copyCrumbLink, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
+import { renderTopo, reflowTopo, focus, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, copyCrumbLink, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
 import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filterbar.js';
 import { renderReports } from './reports.js';
-import { copyName } from './copy.js';
+import { renderSizemap, sizemapMove, sizemapEnter, sizemapClearCenter } from './sizemap.js';
+import { copyName, copyToClipboard } from './copy.js';
 
 export function initUI({ onPick }) {
   applyStaticI18n(); // localize the static shell for the detected/saved locale
@@ -79,10 +80,21 @@ export function initUI({ onPick }) {
   $('topoCrumb').onclick = (e) => { const cr = e.target.closest('.cr'); if (cr) selectTopoKey(cr.dataset.key); };
   $('topoCrumbCopy').onclick = copyCrumbChain; // copy the whole chain (被依賴 → 依賴)
   $('topoCrumbLink').onclick = copyCrumbLink;   // copy a #topo= snapshot link for the current centre
-  let resizeRaf = 0;
-  window.addEventListener('resize', () => { // adaptive topo padding depends on viewport height → re-fit
-    if (S.tab !== 'topo' || !S.treeRoot) return;
-    cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(reflowTopo);
+  // 體積圖 bar: node filter (left) + crumb (整個專案 ‹ centre) + copy/link (right).
+  const smf = $('smFilterInput');
+  let smfRaf = 0;
+  smf.oninput = () => { clearTimeout(smfRaf); smfRaf = setTimeout(renderSizemap, 150); }; // debounce the treemap rebuild
+  $('smFilterClear').onclick = () => { smf.value = ''; renderSizemap(); smf.focus(); };
+  $('smCopy').onclick = () => {
+    const a = S.scan && S.treeRoot && S.scan.assets.get(S.treeRoot); if (!a) return;
+    const btn = $('smCopy'); const orig = btn.innerHTML;
+    copyToClipboard(a.path, () => { btn.innerHTML = CHECK_ICON; btn.classList.add('ok'); setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('ok'); }, 1200); setStatus(t('copy.named', { name: base(a.path) })); });
+  };
+  $('smHome').onclick = sizemapClearCenter; // 回到整個專案
+  let resizeRaf = 0, smResizeT = 0;
+  window.addEventListener('resize', () => { // topo padding + size-map viewBox depend on viewport size → re-fit
+    if (S.tab === 'topo' && S.treeRoot) { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(reflowTopo); }
+    else if (S.tab === 'sizemap') { clearTimeout(smResizeT); smResizeT = setTimeout(renderSizemap, 200); } // debounce (re-decodes thumbs)
   });
   return { setScan, onProgress, setStatus };
 }
@@ -92,13 +104,34 @@ export function setTab(name) {
   for (const b of document.querySelectorAll('.btabs button')) b.classList.toggle('active', b.dataset.tab === name);
   $('tab-list').hidden = name !== 'list';
   $('tab-topo').hidden = name !== 'topo';
+  $('tab-sizemap').hidden = name !== 'sizemap';
   $('tab-reports').hidden = name !== 'reports';
   renderTypeFilters(); // badge 母體隨分頁切換(拓撲→層0鄰域)
   if (name !== 'topo') { closeUsage(); closeTopoFind(); } // the text filter persists (its bar is inside the now-hidden topo tab)
   if (name === 'topo') renderTopo();
+  else if (name === 'sizemap') renderSizemap();      // 體積圖：中心的依賴 closure
   else if (name === 'reports') renderReports(); // reflect the current global filter
   else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
   updateToTop();
+}
+// Step the shared centre history (− / +) and re-render whichever view is active.
+function applyNavState(s) {
+  S.treeRoot = s.treeRoot; S.selectedKey = s.selectedKey;
+  renderTable();
+  if (S.tab === 'topo') renderTopo();
+  else if (S.tab === 'sizemap') renderSizemap();
+  const a = S.scan && S.scan.assets.get(selectedUuid());
+  if (a) setStatus(a.path);
+}
+function navBack() {
+  if (!S.navHistory.length) return;
+  S.navForward.push({ treeRoot: S.treeRoot, selectedKey: S.selectedKey });
+  applyNavState(S.navHistory.pop());
+}
+function navForward() {
+  if (!S.navForward.length) return;
+  S.navHistory.push({ treeRoot: S.treeRoot, selectedKey: S.selectedKey });
+  applyNavState(S.navForward.pop());
 }
 // The active tab's scroll container (清單 / 報告 only — 拓撲 has its own nav).
 function scrollContainer() {
@@ -125,7 +158,7 @@ function smoothScrollTop(el, duration = 180) {
   requestAnimationFrame(step);
 }
 function cycleTab(delta) {
-  const tabs = document.body.classList.contains('viewer') ? ['list', 'topo'] : ['list', 'topo', 'reports']; // 報告 in viewer is hidden (snapshot)
+  const tabs = document.body.classList.contains('viewer') ? ['list', 'topo'] : ['list', 'topo', 'sizemap', 'reports']; // 體積圖/報告 hidden in viewer (snapshot has no sizes/files)
   const i = tabs.indexOf(S.tab);
   setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
 }
@@ -159,6 +192,7 @@ function setScan(s, name, opts = {}) {
   S.provider = provider;          // live FileProvider for report thumbnails (null in viewer/snapshot)
   S.pluginReportCache = null;     // a new scan invalidates any built plugin-report data
   S.reportTab = null;             // a new project starts on the first report tab (體積圖)
+  S.sizemapSel = null;            // clear the 體積圖 keyboard cursor for the new project
   S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;
   S.searchIndex = null;
   $('topoFilterInput').value = ''; // a new project resets the topo text filter
@@ -211,16 +245,24 @@ function onKey(e) {
   if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
   if (typing) return;
   if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; } // Tab 切分頁
+  // − / + step the shared centre history in any centred view (清單/拓撲/體積圖; not 報告).
+  if (e.key === '-' && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navBack(); return; }
+  if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navForward(); return; }
   if (S.tab === 'list') {                                 // 清單：↑↓ 切換項目、Enter 設為中心
     if (e.key === 'ArrowDown') { e.preventDefault(); moveListSel(1); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); moveListSel(-1); return; }
     if (e.key === 'Enter' && S.listSel) { e.preventDefault(); focus(S.listSel); return; }
     return;
   }
+  if (S.tab === 'sizemap') {                              // 體積圖：←→↑↓ 移動方塊游標、Enter 鑽入、Del 回整個專案
+    const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
+    if (d) { e.preventDefault(); sizemapMove(d); return; }
+    if (e.key === 'Enter') { e.preventDefault(); sizemapEnter(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); sizemapClearCenter(); return; }
+    return;
+  }
   if (S.tab !== 'topo' || !S.treeRoot) return;
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); setTab('list'); return; }  // 回清單
-  if (e.key === '-' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goBack(); return; }                        // − 上一動（不攔 Cmd/Ctrl±縮放）
-  if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey) { e.preventDefault(); goForward(); return; }  // + 下一動
   if (e.key === 'Enter') { const u = selectedUuid(); if (u) { e.preventDefault(); focus(u); } return; }
   const dir = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
   if (!dir) return;

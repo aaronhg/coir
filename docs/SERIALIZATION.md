@@ -1,122 +1,122 @@
-# Cocos scene/prefab 序列化契約
+# Cocos scene/prefab serialization contract
 
-> coir 讀這個格式,coir 的編輯功能(見 [EDITING.md](EDITING.md))也寫這個格式。這頁記下那份契約的細節:**哪些欄位 coir 真正依賴、哪些可以無視**,以及「就地寫這個格式」的兩種做法各自的取捨。改 `scan`、寫 plugin、或維護 edit 功能前,先看這頁。
+> coir reads this format, and coir's edit feature (see [EDITING.md](EDITING.md)) also writes it. This page records the details of that contract: **which fields coir actually relies on, and which it can ignore**, plus the respective trade-offs of the two approaches to "writing this format in place". Read this page before changing `scan`, writing a plugin, or maintaining the edit feature.
 
-適用 **Cocos Creator 3.5.2 / 3.8.x**(meta `ver` 多為 `1.1.50`)。3.5.2 與 3.8.x 在這份契約上一致;差異是「加欄位」而非「改表示法」。
+Applies to **Cocos Creator 3.5.2 / 3.8.x** (meta `ver` is usually `1.1.50`). 3.5.2 and 3.8.x agree on this contract; the difference is "adding fields", not "changing the representation".
 
 ---
 
-## 1. 基本契約
+## 1. Basic contract
 
-scene(`.scene`)與 prefab(`.prefab`)都是**一個 JSON 陣列**,每個元素是一個序列化物件。物件間用三種引用互指:
+Both scene (`.scene`) and prefab (`.prefab`) are **a single JSON array**, where each element is a serialized object. Objects cross-reference each other through three kinds of references:
 
-| 寫法 | 意義 | coir 怎麼處理 |
+| Form | Meaning | How coir handles it |
 |---|---|---|
-| `{"__id__": N}` | **同檔內部**引用 = 陣列下標 N | 走 prefab/scene 樹建立 `edge.locations`(nodePath · component.property · frame) |
-| `{"__uuid__": "<full-uuid>[@sub]"}` | **外部資源**引用(SpriteFrame / Prefab / AudioClip / 腳本…) | 抓出 → 解析成依賴 **edge** |
-| `"__type__": "<23 字壓縮 token>"` | **自訂腳本 / 自訂序列化類別**的型別 | `decompressUuid` 還原成腳本路徑 → `script` edge(見 §3) |
+| `{"__id__": N}` | **Same-file internal** reference = array index N | Walks the prefab/scene tree to build `edge.locations` (nodePath · component.property · frame) |
+| `{"__uuid__": "<full-uuid>[@sub]"}` | **External asset** reference (SpriteFrame / Prefab / AudioClip / script…) | Extracts → resolves into a dependency **edge** |
+| `"__type__": "<23-char compressed token>"` | The type of a **custom script / custom serialized class** | `decompressUuid` restores it to a script path → `script` edge (see §3) |
 
-> 內建元件/型別的 `__type__` 是明文類名(`cc.Sprite`、`cc.Label`、`cc.Vec3`…);只有自訂類別(腳本、`@ccclass` 序列化物件)的 `__type__` 是壓縮 uuid。
+> The `__type__` of built-in components/types is a plaintext class name (`cc.Sprite`, `cc.Label`, `cc.Vec3`…); only the `__type__` of custom classes (scripts, `@ccclass` serialized objects) is a compressed uuid.
 
-陣列下標即身分,衍生一條鐵律:**只能 append,不能重排或實刪**——否則所有 `__id__` 全錯。唯一能安全刪的方法是「移除後全域 remap」(coir 的編輯器就這麼做,見 §6;不這麼做的工具只能軟刪,見 §5)。
+The array index is the identity, which yields an iron rule: **you may only append, never reorder or hard-delete** — otherwise every `__id__` is wrong. The only way to delete safely is "remove then globally remap" (this is exactly what coir's editor does, see §6; tools that don't do this can only soft-delete, see §5).
 
 ---
 
-## 2. coir 依賴哪些欄位 / 可以無視哪些
+## 2. Which fields coir relies on / which it can ignore
 
-coir 的依賴拓撲**只**從少數欄位長出來;其餘大量欄位是引擎/編輯器的內部簿記,coir 完全不看。
+coir's dependency topology grows from **only** a few fields; the large remainder are internal bookkeeping for the engine/editor, which coir does not look at at all.
 
-### coir **依賴**(動到會改變拓撲)
+### coir **relies on** (touching these changes the topology)
 
-| 欄位 / 來源 | 用途 |
+| Field / source | Purpose |
 |---|---|
-| 任意層級的 `{"__uuid__": …}` | 依賴邊的主要來源 |
-| 腳本/自訂類別的 `"__type__"`(壓縮) | 解壓 → `script` edge;也用於 component-script pruning |
-| `.meta` 的 `importer` | → 正規化 `type`(meta.js 查表) |
-| `.meta` 的 `uuid` / `subMetas[*].uuid` | 資源索引的鍵;`uuid@subId` 子資源定址 |
-| `subMetas[*].userData.imageUuidOrDatabaseUri` | atlas→texture 邊(plugin) |
-| `.meta` `userData.textureUuid` / `spriteFrameUuid` 等 | font→texture、particle→texture 邊(plugin) |
-| 是否有 source 檔(`hasSource`) | 無 source 的 meta 會被丟棄,但記進 `scan.missing` 供具名 orphan 解析 |
+| `{"__uuid__": …}` at any level | The primary source of dependency edges |
+| The `"__type__"` (compressed) of a script/custom class | Decompress → `script` edge; also used for component-script pruning |
+| The `importer` of `.meta` | → normalized `type` (meta.js lookup table) |
+| The `uuid` / `subMetas[*].uuid` of `.meta` | Keys of the asset index; `uuid@subId` sub-asset addressing |
+| `subMetas[*].userData.imageUuidOrDatabaseUri` | atlas→texture edge (plugin) |
+| `.meta` `userData.textureUuid` / `spriteFrameUuid` etc. | font→texture, particle→texture edges (plugin) |
+| Whether a source file exists (`hasSource`) | A meta with no source is dropped, but recorded in `scan.missing` for named orphan resolution |
 
-### coir **無視**(怎麼填都不影響拓撲)
+### coir **ignores** (however you fill these, the topology is unaffected)
 
-| 欄位 | 屬於 |
+| Field | Belongs to |
 |---|---|
-| `cc.PrefabInfo`(`root` / `asset` / `instance` / `targetOverrides` / `nestedPrefabInstanceRoots`) | prefab 實例化簿記 |
-| `cc.CompPrefabInfo`、元件的 `__prefab` | 同上(每元件一個) |
-| `fileId` | prefab 內部 id |
-| `__editorExtras__`、`_mobility`、`_id`、`_objFlags` | 編輯器/節點內部欄位 |
-| `_lpos` / `_lrot` / `_lscale` / `_euler` / `_layer` / `_active` | 變換與旗標 |
-| `_name`、`asyncLoadAssets`、`optimizationPolicy`、`persistent` | 資源雜項 |
+| `cc.PrefabInfo` (`root` / `asset` / `instance` / `targetOverrides` / `nestedPrefabInstanceRoots`) | prefab instantiation bookkeeping |
+| `cc.CompPrefabInfo`, a component's `__prefab` | Same as above (one per component) |
+| `fileId` | prefab internal id |
+| `__editorExtras__`, `_mobility`, `_id`, `_objFlags` | editor/node internal fields |
+| `_lpos` / `_lrot` / `_lscale` / `_euler` / `_layer` / `_active` | transform and flags |
+| `_name`, `asyncLoadAssets`, `optimizationPolicy`, `persistent` | asset miscellany |
 
-**推論:** 兩份 prefab 只要 `__uuid__` 與壓縮 `__type__` 相同,coir 算出的依賴拓撲就**完全一致**,不管 PrefabInfo/CompPrefabInfo/fileId 寫得多完整或多殘缺。這也是為什麼 coir 的編輯器能就地改檔而不打亂拓撲(§6)。
-
----
-
-## 3. UUID 壓縮(`__type__`)
-
-自訂類別的 `__type__` 用 **Cocos v2.0.10 base64 壓縮**:前 5 個 hex 字元保持不變,其餘 27 字壓成 18 字(總長 23;`min` 模式 22)。
-
-- coir:`src/core/uuid.js` 的 `compressUuid` / `decompressUuid` / `looksCompressed`。`looksCompressed` 只是啟發式閘門,解壓後仍會對資源索引驗證才建邊。
-- coir 的 edit 功能也用這套:讀 selector 時 `decompressUuid`(壓縮 `__type__` → 類名),`--json` 寫自訂值時 `compressUuid`(類名 → 壓縮 token)。
-
-> ⚠️ 易錯:`__uuid__` 資源引用是**完整**帶連字號 uuid(可加 `@subId`),**永不壓縮**;只有 `__type__` 才壓縮。別把兩者搞混。
+**Corollary:** as long as two prefabs have the same `__uuid__` and compressed `__type__`, the dependency topology coir computes is **exactly identical**, no matter how complete or incomplete PrefabInfo/CompPrefabInfo/fileId are written. This is also why coir's editor can edit files in place without disturbing the topology (§6).
 
 ---
 
-## 4. 「就地寫這個格式」的兩種做法
+## 3. UUID compression (`__type__`)
 
-業界寫這個格式的工具大致分兩派,取捨剛好相反——理解它們有助於維護 coir 的編輯器:
+The `__type__` of custom classes uses **Cocos v2.0.10 base64 compression**: the first 5 hex characters stay unchanged, and the remaining 27 are compressed to 18 (total length 23; 22 in `min` mode).
 
-- **編輯器內(editor-API)**:在 Cocos 進程內透過 editor 訊息 API 操作,但 prefab 那塊仍會**手刻 JSON 再 reimport** 讓編輯器收尾。產物接近官方:完整 `PrefabInfo`/`CompPrefabInfo`、`__editorExtras__`/`_mobility`,但留半成品(`_id:""`、隨機 `fileId`)靠 reimport 校正。前提:必須開編輯器。
-- **headless(直寫 JSON)**:不開編輯器,直接讀寫陣列。產物是**最小骨架**,缺的欄位賭引擎載入時補預設。快、不用編輯器,但結構殘缺、且(若不做索引壓縮)只能軟刪。
+- coir: `compressUuid` / `decompressUuid` / `looksCompressed` in `src/core/uuid.js`. `looksCompressed` is only a heuristic gate; after decompression the value is still validated against the asset index before an edge is created.
+- coir's edit feature also uses this: when reading a selector it calls `decompressUuid` (compressed `__type__` → class name), and when `--json` writes a custom value it calls `compressUuid` (class name → compressed token).
 
-逐欄位差異(同一個 prefab):
+> ⚠️ Easy mistake: a `__uuid__` asset reference is a **full** hyphenated uuid (optionally with `@subId`), and is **never compressed**; only `__type__` is compressed. Don't confuse the two.
 
-| 欄位 | editor-API | headless |
+---
+
+## 4. Two approaches to "writing this format in place"
+
+The tools in the wild that write this format roughly split into two camps, with exactly opposite trade-offs — understanding them helps maintain coir's editor:
+
+- **In-editor (editor-API)**: operate within the Cocos process via the editor message API, but the prefab part still **hand-crafts the JSON then reimports** to let the editor finish it off. The output is close to official: complete `PrefabInfo`/`CompPrefabInfo`, `__editorExtras__`/`_mobility`, but leaves half-finished bits (`_id:""`, random `fileId`) for the reimport to correct. Prerequisite: the editor must be open.
+- **headless (write the JSON directly)**: don't open the editor, read and write the array directly. The output is a **minimal skeleton**, betting that the engine fills in defaults for the missing fields at load time. Fast, no editor needed, but the structure is incomplete and (without index compaction) can only soft-delete.
+
+Field-by-field differences (the same prefab):
+
+| Field | editor-API | headless |
 |---|---|---|
-| `cc.Prefab` `__editorExtras__:{}` / `asyncLoadAssets` | 前者有、後者有(常各漏一個) | — |
-| `cc.Node` `__editorExtras__` / `_mobility` | ✓ | **缺** |
-| `cc.Node` `_id` | `""`(靠 reimport 補) | 22 字隨機 |
-| `cc.PrefabInfo` | 完整(`root`/`asset`/`instance`/`targetOverrides`/`nestedPrefabInstanceRoots`) | 常只有 `{__type__, fileId}` |
-| per-component `cc.CompPrefabInfo` | ✓ | 常**完全沒有** |
-| `fileId` 形狀 | 22 字(對),但隨機 | 有的直接塞完整 uuid(**錯形狀**) |
-| `.meta` | `ver:1.1.50` / `importer:prefab` / `files:[".json"]`… | 幾乎逐字相同 |
+| `cc.Prefab` `__editorExtras__:{}` / `asyncLoadAssets` | the former has it, the latter has it (each often misses one) | — |
+| `cc.Node` `__editorExtras__` / `_mobility` | ✓ | **missing** |
+| `cc.Node` `_id` | `""` (filled in by reimport) | 22-char random |
+| `cc.PrefabInfo` | complete (`root`/`asset`/`instance`/`targetOverrides`/`nestedPrefabInstanceRoots`) | often only `{__type__, fileId}` |
+| per-component `cc.CompPrefabInfo` | ✓ | often **absent entirely** |
+| `fileId` shape | 22 chars (correct), but random | some stuff in a full uuid directly (**wrong shape**) |
+| `.meta` | `ver:1.1.50` / `importer:prefab` / `files:[".json"]`… | nearly word-for-word identical |
 
-**對 coir 的意義:** 上表的差異**全都在 coir 無視的欄位裡**(§2)。所以 coir 掃哪一派產出的 prefab,拓撲結果都一致。差別只在「實例覆寫/revert/apply 連動」——headless 的最小骨架缺 per-node/per-component 簿記,當靜態模板用沒事,要像編輯器那樣改實例再 apply 回去會出問題。coir 的編輯器走 template-by-example(§6),避開這個坑。
+**What this means for coir:** all the differences in the table above are **within fields coir ignores** (§2). So whichever camp's prefab coir scans, the topology result is consistent. The only difference is in "instance override / revert / apply linkage" — the headless minimal skeleton lacks the per-node/per-component bookkeeping, which is fine when used as a static template, but causes problems if you try to edit an instance and apply it back the way the editor does. coir's editor takes the template-by-example route (§6), sidestepping this pit.
 
 ---
 
-## 5. Interop 陷阱(會影響 coir 的分析)
+## 5. Interop traps (affecting coir's analysis)
 
-### 軟刪殘留(污染未使用偵測)
+### Soft-delete residue (pollutes unused detection)
 
-因為陣列下標即身分(§1),不做索引壓縮的工具只能**軟刪**:把節點從父的 `_children` 拔掉、`_active=false`、清 `_parent`,但**物件仍留在陣列裡**。若該死節點身上還有 `__uuid__` 資源引用,coir 掃描時會把那些資源算成**仍被使用**。
+Because the array index is the identity (§1), tools without index compaction can only **soft-delete**: pull the node out of the parent's `_children`, set `_active=false`, clear `_parent`, but **the object still remains in the array**. If that dead node still carries `__uuid__` asset references, coir will count those assets as **still in use** when it scans.
 
-> **後果:** 用軟刪工具大量編輯過的專案,coir 的「未使用」報告會偏少(被幽靈節點撐住)。**coir 自己的編輯器走真刪+壓縮(§6),不會留這種垃圾。**
+> **Consequence:** in a project heavily edited with a soft-delete tool, coir's "unused" report will undercount (propped up by ghost nodes). **coir's own editor uses hard-delete + compaction (§6), so it leaves no such garbage.**
 
-### prefab 簿記不影響拓撲
+### prefab bookkeeping doesn't affect the topology
 
-`PrefabInfo` / `CompPrefabInfo` / `fileId` / `__editorExtras__` 全走 `__id__`/`fileId` 內部引用,**不產生資源依賴邊**(§2 推論)。
+`PrefabInfo` / `CompPrefabInfo` / `fileId` / `__editorExtras__` all go through `__id__`/`fileId` internal references and **produce no asset dependency edges** (the corollary in §2).
 
 ### source-less meta
 
-刪了 source 卻留下 `.meta` 時,coir 會把該 meta 丟出索引,但記進 `scan.missing`,讓仍指向它的 prefab/scene 解析成**具名的 missing-source orphan**(而非裸 uuid)。健康掃描 `metaErrors=0`。
+When the source is deleted but the `.meta` is left behind, coir drops that meta from the index but records it in `scan.missing`, so that prefabs/scenes still pointing at it resolve to a **named missing-source orphan** (rather than a bare uuid). A healthy scan reports `metaErrors=0`.
 
 ---
 
-## 6. coir 自己怎麼寫這個格式
+## 6. How coir itself writes this format
 
-edit 功能(見 [EDITING.md](EDITING.md))就地改既有檔時,刻意避開 §4/§5 的坑:
+When the edit feature (see [EDITING.md](EDITING.md)) modifies an existing file in place, it deliberately avoids the pits of §4/§5:
 
-- **真刪 + 索引壓縮**:刪節點/元件後從陣列移除,再全域 remap 所有 `{__id__}`,並把指向被刪集合的跨引用 null 掉、把該被刪卻只被刪集合引用的 sub-object(ClickEvent / PrefabInstance)一併移除。→ 不留軟刪垃圾、無懸空 `__id__`。
-- **Template-by-example**:新增節點/元件/PrefabInfo 時**複製同檔既有同類物件的骨架**,只重設身分欄位(`fileId`/`root`/`asset`/`instance`/`nestedPrefabInstanceRoots`/`_id`)。→ 該檔(該版本)所有欄位自動正確,零版本分支。
-- **最小 diff**:純資源重指(`swap-uuid`)走引號定錨文字替換,不重排不重序列化。
+- **Hard-delete + index compaction**: after deleting a node/component, remove it from the array, then globally remap all `{__id__}`, null out cross-references pointing into the deleted set, and remove sub-objects (ClickEvent / PrefabInstance) that should have been deleted but are only referenced by the deleted set. → No soft-delete garbage, no dangling `__id__`.
+- **Template-by-example**: when adding a node/component/PrefabInfo, **clone the skeleton of an existing same-kind object in the same file**, only resetting the identity fields (`fileId`/`root`/`asset`/`instance`/`nestedPrefabInstanceRoots`/`_id`). → All fields for that file (that version) are automatically correct, with zero version branches.
+- **Minimal diff**: pure asset repointing (`swap-uuid`) goes through a quote-anchored text replacement, with no reordering and no re-serialization.
 
-換句話說,coir 的編輯器在「結構完整度」上靠 template-by-example 貼近官方,在「真刪」上勝過軟刪派——而這一切只依賴本頁 §1 的契約,不依賴任何 §2 的無視欄位。
+In other words, coir's editor approaches official quality on "structural completeness" via template-by-example, and beats the soft-delete camp on "hard-delete" — and all of this depends only on the §1 contract of this page, not on any of the ignored fields in §2.
 
 ---
 
-## 參考
+## References
 
-- coir 內部:`src/core/scan.js`(掃描管線)、`src/core/meta.js`(importer→type)、`src/core/uuid.js`(壓縮)、`src/core/selector.js`(`__type__` ↔ 類名)、`src/edit/editPrefab.js`(寫入引擎)、`CLAUDE.md`(架構總覽)。
+- coir internals: `src/core/scan.js` (scan pipeline), `src/core/meta.js` (importer→type), `src/core/uuid.js` (compression), `src/core/selector.js` (`__type__` ↔ class name), `src/edit/editPrefab.js` (write engine), `CLAUDE.md` (architecture overview).

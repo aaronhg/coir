@@ -5,7 +5,6 @@ import { t } from './i18n.js';
 import { unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, droppedMetaReport } from '../core/analyze.js';
 import { typeAllowed } from './filterbar.js';
 import { visualSectionHTML, hydrateVisualSection } from './visualreport.js';
-import { sizeMapBody, hydrateSizeMap, attachSizemapZoom } from './sizemap.js';
 
 function refRow(uuid, path, type, right) {
   return `<div class="ref" data-uuid="${uuid}"><span class="dot" style="background:${typeColor(type)}"></span>` +
@@ -77,7 +76,7 @@ export function renderReports() {
     ? (S.plugins || []).flatMap((p) => (Array.isArray(p.reports) ? p.reports.map((r) => ({ id: r.id, title: t(r.title || r.id), plugin: true })) : []))
     : [];
   // 體積圖 is the FIRST tab — rendered lazily (treemap SVG + async thumbnails) on open.
-  const tabs = [{ id: 'sizemap', title: t('rep.sizemap') }, ...core.map((s) => ({ id: s.id, title: s.title })), ...pluginTabs];
+  const tabs = [...core.map((s) => ({ id: s.id, title: s.title })), ...pluginTabs];
   if (!tabs.some((tb) => tb.id === S.reportTab)) S.reportTab = tabs.length ? tabs[0].id : null;
 
   $('reports').innerHTML =
@@ -102,13 +101,6 @@ function renderReportBody(gen) {
   if (!host) return;
   const sec = S.reportBodies && S.reportBodies[S.reportTab];
   if (sec) { host.innerHTML = `<div class="rbody-head">${sec.title} <span class="sub">${sec.sub}</span></div><div class="rbody">${sec.body}</div>`; return; }
-  if (S.reportTab === 'sizemap') { // treemap SVG (sync) + pinch-zoom + async texture thumbnails
-    host.innerHTML = `<div class="rbody">${sizeMapBody(S.scan)}</div>`;
-    const svg = host.querySelector('svg.sizemap');
-    if (svg) attachSizemapZoom(svg);
-    if (S.provider && S.tab === 'reports') hydrateSizeMap(host, S.provider, () => S.reportGen === gen && S.reportTab === 'sizemap');
-    return;
-  }
   renderPluginReportBody(S.reportTab, gen); // a plugin tab → async build + thumbnails
 }
 

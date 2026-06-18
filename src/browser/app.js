@@ -37,7 +37,7 @@ function loadGlobalPlugins() {
       const arr = (exp == null ? [] : (Array.isArray(exp) ? exp : [exp])).filter((p) => p && typeof p === 'object');
       console.info(`coir: global coir.plugins.mjs loaded (${arr.length} plugin${arr.length === 1 ? '' : 's'})`);
       return arr;
-    } catch (e) { console.error('coir: global coir.plugins.mjs failed to parse —', e); return []; }
+    } catch (e) { console.info('coir: global coir.plugins.mjs skipped —', (e && e.message) || e); return []; } // non-fatal: fall back to built-ins
     finally { URL.revokeObjectURL(blob); }
   })();
   return globalPluginsP;
@@ -58,7 +58,7 @@ async function loadProjectPlugins(root) {
       const exp = mod.default ?? mod.plugins;
       const arr = exp == null ? [] : (Array.isArray(exp) ? exp : [exp]);
       return arr.filter((p) => p && typeof p === 'object');
-    } catch (e) { console.error(`${name} failed to load:`, e); return []; }
+    } catch (e) { console.info(`coir: ${name} skipped —`, (e && e.message) || e); return []; } // non-fatal: fall back to built-ins
     finally { URL.revokeObjectURL(url); }
   }
   return [];

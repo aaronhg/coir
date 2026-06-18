@@ -75,30 +75,19 @@ function pushNav() {
   if (S.navHistory.length > 200) S.navHistory.shift();
   S.navForward = []; // a new navigation invalidates the forward stack
 }
-function applyNav(s) {
-  S.treeRoot = s.treeRoot; S.selectedKey = s.selectedKey;
-  renderTable(); renderTopo();
-  const a = S.scan.assets.get(selectedUuid());
-  if (a) setStatus(a.path);
-}
-export function goBack() {    // − 上一動
-  if (S.tab !== 'topo' || !S.navHistory.length) return;
-  S.navForward.push({ treeRoot: S.treeRoot, selectedKey: S.selectedKey });
-  applyNav(S.navHistory.pop());
-}
-export function goForward() { // + 下一動
-  if (S.tab !== 'topo' || !S.navForward.length) return;
-  S.navHistory.push({ treeRoot: S.treeRoot, selectedKey: S.selectedKey });
-  applyNav(S.navForward.pop());
-}
-export function focus(uuid) {
+// (goBack/goForward live in ui.js now — they re-render whichever view is active.)
+export { pushNav };
+
+// Set the shared centre (with history) WITHOUT switching tab, so 清單/體積圖 can
+// re-centre in place; `focus` then also jumps to 拓撲. uuid=null clears the centre.
+export function setCenter(uuid) {
   pushNav();            // remember the current centre/selection before re-centring
-  S.treeRoot = uuid; S.selectedKey = uuid;
+  S.treeRoot = uuid || null; S.selectedKey = uuid || null;
   renderTable();        // highlight the chosen row in 清單
-  setTab('topo');       // switch to the tree and render (centres the root)
-  const a = S.scan.assets.get(uuid); // 提示中心節點的完整路徑
-  if (a) setStatus(a.path);
+  const a = uuid && S.scan.assets.get(uuid);
+  setStatus(a ? a.path : '');
 }
+export function focus(uuid) { setCenter(uuid); setTab('topo'); } // re-centre + jump to the tree
 
 // ---- build one side of the tree (filtered to branches reaching a type) ----
 function buildSide(rootUuid, dir, side, maxDepth) {

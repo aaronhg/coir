@@ -7,15 +7,26 @@ import { dependentClosure, dependencyClosure } from '../core/graph.js';
 import { renderTable } from './list.js';
 import { renderTopo } from './topo.js';
 import { renderReports } from './reports.js';
+import { renderSizemap } from './sizemap.js';
 
 export function typeAllowed(ty) { return S.selectedTypes.size === 0 || S.selectedTypes.has(ty); }
 
 function currentTypeCounts() {
-  if (S.tab !== 'topo' || !S.treeRoot) return S.byTypeCache;
-  const counts = {};
-  const nbhd = new Set([S.treeRoot, ...dependentClosure(S.adj, S.treeRoot), ...dependencyClosure(S.adj, S.treeRoot)]);
-  for (const u of nbhd) { const a = S.scan.assets.get(u); if (a) counts[a.type] = (counts[a.type] || 0) + 1; }
-  return counts;
+  // 拓撲: 層0's neighbourhood. 體積圖: the centre's closure (or whole project) so
+  // the badges match what the map shows. Everything else: the whole project.
+  if (S.tab === 'topo' && S.treeRoot) {
+    const counts = {};
+    const nbhd = new Set([S.treeRoot, ...dependentClosure(S.adj, S.treeRoot), ...dependencyClosure(S.adj, S.treeRoot)]);
+    for (const u of nbhd) { const a = S.scan.assets.get(u); if (a) counts[a.type] = (counts[a.type] || 0) + 1; }
+    return counts;
+  }
+  if (S.tab === 'sizemap' && S.treeRoot && S.scan.assets.has(S.treeRoot)) {
+    const counts = {};
+    const set = new Set([S.treeRoot, ...dependencyClosure(S.adj, S.treeRoot)]);
+    for (const u of set) { const a = S.scan.assets.get(u); if (a && a.hasSource && !a.virtual && (a.size || 0) > 0) counts[a.type] = (counts[a.type] || 0) + 1; }
+    return counts;
+  }
+  return S.byTypeCache;
 }
 export function renderTypeFilters() {
   const counts = currentTypeCounts();
@@ -39,6 +50,7 @@ export function toggleType(ty) {
   renderTypeFilters();
   renderTable();
   if (S.tab === 'topo') { S.selectedKey = S.treeRoot; renderTopo(); } // re-centre; old selection may be pruned
+  else if (S.tab === 'sizemap') renderSizemap();
   else if (S.tab === 'reports') renderReports();
 }
 export function saveFilter() {

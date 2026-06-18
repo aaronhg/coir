@@ -1,315 +1,314 @@
-# 開發過程 — Cocos 資源依賴拓撲工具
+# Development History — Cocos Asset Dependency Topology Tool
 
-這份文件記錄 **Coir**（開發期暫名 `assets-graph`）的開發歷程：需求如何演進、做了哪些技術決策、踩過哪些坑、以及最後落腳的設計。
-
----
-
-## 0. 一句話目標
-
-載入一個 **Cocos Creator 3.8.x** 專案，在瀏覽器端做出**資源使用情形**與**依賴拓撲**，涵蓋圖檔、圖集（TexturePacker plist / Spine）、點陣字、prefab、scene、component 腳本。實際案例用本機的 Cocos 專案驗證（不放進 repo）。
+This document records the development history of **Coir** (working name `assets-graph` during development): how the requirements evolved, what technical decisions were made, what pitfalls we hit, and where the design eventually landed.
 
 ---
 
-## 1. 研究與範圍鎖定
+## 0. The Goal in One Sentence
 
-### 1.1 先勘查再動手
-一開始用實際專案（本機的 Cocos 專案）摸清格式，而不是憑記憶。重要發現：
-
-- 手邊不少舊專案是 **2.4.6**（`.fire` 場景、舊 meta），但目標其實是 **3.8.6**（之後相容 3.5.2）。本機剛好有數個 **3.8.x** 樣本（其中有些 `project.json` 寫 3.8.5，格式同 3.8.6）。
-- **2.x 與 3.x 格式差很多**，必須以 3.x 為準重新驗證。
-
-### 1.2 3.x 格式關鍵（用一個 3.8.x 樣本驗證）
-- png `.meta` importer `image`；子資源用短 id → `uuid@6c48a`(texture)、`uuid@f9941`(spriteFrame)。
-- plist `.meta` importer `sprite-atlas`；每張 frame `uuid@<id>`，`userData.imageUuidOrDatabaseUri` 連回底圖。
-- fnt `.meta` importer `bitmap-font`，`userData.textureUuid` 連 png。
-- Spine：skeleton `.json`(spine-data) + `.atlas`(importer `*`、可多頁) + png。
-- prefab/scene 的 `__uuid__` 是**完整 uuid**（可帶 `@subid`，不壓縮）；custom 腳本元件以**壓縮 uuid** 出現在 `__type__`。
-
-### 1.3 唯一的未知：uuid 壓縮
-3.x 把腳本 uuid 壓成 23 字放進 `__type__`。使用者提供了 `compressUuid`/`decompressUuid`（Cocos v2.0.10 演算法的參考實作）。**端對端驗證**：scene 裡的 `__type__` 解壓後正好對回真實 `.ts.meta` 的 uuid（對得上專案裡的 component 腳本）。可行性確認。
+Load a **Cocos Creator 3.8.x** project and, entirely in the browser, build out a view of **asset usage** and **dependency topology** covering images, atlases (TexturePacker plist / Spine), bitmap fonts, prefabs, scenes, and component scripts. Real cases are validated against local Cocos projects (not committed to the repo).
 
 ---
 
-## 2. 架構決策
+## 1. Research and Scoping
 
-### 2.1 核心與瀏覽器解耦
-刻意把解析邏輯做成 **DOM-free 的 `src/core/`**，瀏覽器與 Node 共用。好處：最難的解析能**無頭驗證**——`test/node-run.js` 用 `fs` FileProvider 跑同一套核心對真實專案測試。
+### 1.1 Survey First, Then Build
+We started by using real projects (local Cocos projects) to nail down the format rather than relying on memory. Key findings:
+
+- A fair number of the older projects on hand are **2.4.6** (`.fire` scenes, old meta), but the actual target is **3.8.6** (later also compatible with 3.5.2). The local machine happened to have several **3.8.x** samples (some `project.json` files say 3.8.5, which is format-identical to 3.8.6).
+- **The 2.x and 3.x formats differ substantially**, so everything had to be re-validated against 3.x.
+
+### 1.2 Key 3.x Format Facts (validated against a 3.8.x sample)
+- png `.meta` importer `image`; sub-assets use short ids → `uuid@6c48a` (texture), `uuid@f9941` (spriteFrame).
+- plist `.meta` importer `sprite-atlas`; each frame is `uuid@<id>`, and `userData.imageUuidOrDatabaseUri` links back to the source image.
+- fnt `.meta` importer `bitmap-font`, with `userData.textureUuid` linking to the png.
+- Spine: skeleton `.json` (spine-data) + `.atlas` (importer `*`, can be multi-page) + png.
+- The `__uuid__` in prefabs/scenes is a **full uuid** (optionally with `@subid`, never compressed); custom script components appear as a **compressed uuid** in `__type__`.
+
+### 1.3 The Only Unknown: uuid Compression
+3.x compresses the script uuid into a 23-char token placed in `__type__`. The user provided `compressUuid`/`decompressUuid` (a reference implementation of the Cocos v2.0.10 algorithm). **End-to-end validation**: a `__type__` in a scene, once decompressed, maps exactly back to the real `.ts.meta` uuid (matching a component script in the project). Feasibility confirmed.
+
+---
+
+## 2. Architecture Decisions
+
+### 2.1 Decoupling the Core from the Browser
+We deliberately built the parsing logic as a **DOM-free `src/core/`** shared by both the browser and Node. The benefit: the hardest part — parsing — can be **validated headless**. `test/node-run.js` uses an `fs` FileProvider to run the same core against real projects.
 
 ```
-src/core/   uuid / meta / refs / scan / graph / analyze   ← 純邏輯，無 DOM
-src/browser/ fsapi（File System Access）/ ui              ← 介面
-src/node/   fsProvider                                    ← Node 端 FileProvider
-test/node-run.js                                          ← 無頭驗證器
+src/core/   uuid / meta / refs / scan / graph / analyze   ← pure logic, no DOM
+src/browser/ fsapi (File System Access) / ui              ← interface
+src/node/   fsProvider                                    ← Node-side FileProvider
+test/node-run.js                                          ← headless validator
 ```
 
-`FileProvider` 介面：`listFiles() / readText(path) / size(path)`，路徑相對 `assets/`。
+The `FileProvider` interface: `listFiles() / readText(path) / size(path)`, with paths relative to `assets/`.
 
-### 2.2 解析模型
-- 掃所有 `.meta` → uuid 索引（含 `uuid@sub` 子資源）。
-- 走 prefab/scene/anim/mtl 的 JSON 找 `__uuid__`（資源邊）與 `__type__`（壓縮腳本 uuid）。
-- 從 meta 推導 atlas→png、font→png、spine 三件組。
-- 邊去重為 `(from, to, kind)`。
+### 2.2 The Parsing Model
+- Scan every `.meta` → a uuid index (including `uuid@sub` sub-assets).
+- Walk the JSON of prefabs/scenes/anims/mtls to find `__uuid__` (asset edges) and `__type__` (compressed script uuids).
+- Derive atlas→png, font→png, and the Spine triple from meta.
+- Deduplicate edges by `(from, to, kind)`.
 
 ---
 
-## 3. 技術棧演進（CDN → esbuild → webpack；cytoscape 進場又退場）
+## 3. Tech-Stack Evolution (CDN → esbuild → webpack; cytoscape arrives and departs)
 
-| 階段 | 做法 | 為何改 |
+| Stage | Approach | Why it changed |
 |---|---|---|
-| 1 | 圖視覺化用 **cytoscape + fcose（CDN）** | 起步快 |
-| 2 | 使用者要求**離線/打包** → 改 npm 裝 + **esbuild** bundle | 不依賴 CDN |
-| 3 | 使用者要求改 **webpack + dev server** | 熱重載開發 |
-| 4 | 使用者說「圖的功能刪掉」→ **移除 cytoscape/fcose 全家桶** | 改純 DOM 樹狀，bundle 565KB→~20KB |
+| 1 | Graph visualization via **cytoscape + fcose (CDN)** | Quick to get started |
+| 2 | User wanted **offline/bundled** → switched to npm install + **esbuild** bundle | Drop the CDN dependency |
+| 3 | User wanted **webpack + dev server** | Hot reload during development |
+| 4 | User said "drop the graph feature" → **removed the whole cytoscape/fcose family** | Switched to a pure-DOM tree, bundle 565KB→~20KB |
 
-教訓：第三方執行期庫最後**全部移除**，UI 變成純 DOM。webpack 仍保留（`webpack.config.cjs`，CommonJS 因為 package 是 type:module）。
-
----
-
-## 4. 視覺化的多次大改
-
-這是迭代最多的部分，依使用者回饋一路演進：
-
-1. **力導向圖（cytoscape）**：任意節點當中心、單擊展開、雙擊設中心、展開/縮回一層。
-2. → **Finder 欄位式（Miller columns）**：單路徑、逐欄往右鑽。
-3. → **樹狀 × 欄位**：每層一欄、同層多分支可同時展開、子節點對齊父節點所在列（first-child-shares-row 演算法，用使用者畫的 ASCII 圖做單元測試驗證）。
-4. → **固定 5 欄滑動視窗**：永遠 5 欄，以選中項的「距中心位移」為中心滑動（`被依賴2|被依賴1|層0|依賴1|依賴2` → 往右 → `被依賴1|層0|依賴1|依賴2|依賴3`）。
-5. → **雙向、全展、5 欄等寬填滿**：被依賴往左展、依賴往右展、層0 置中；不再折疊（視窗內全展，cycle 防護）；欄寬 `1fr` 填滿；選中項上下左右置中（sticky 標頭 + `padding-block:45vh` + scrollIntoView center）。
-6. → **左右鍵改空間式**：移到相鄰欄、選「畫面垂直中央最近的項目」。
-
-最終定案：**三個 banner 分頁（清單 / 拓撲 / 報告）**，拓撲是上述雙向樹。
+The lesson: third-party runtime libraries were ultimately **all removed**, and the UI became pure DOM. webpack is kept (`webpack.config.cjs`, CommonJS because the package is type:module).
 
 ---
 
-## 5. 核心解析踩過的坑（與修法）
+## 4. The Many Big Reworks of the Visualization
 
-| 坑 | 症狀 | 修法 |
+This is the part that iterated the most, evolving along with user feedback:
+
+1. **Force-directed graph (cytoscape)**: any node can be the center, single-click to expand, double-click to set as center, expand/collapse one level.
+2. → **Finder-style columns (Miller columns)**: a single path, drilling right column by column.
+3. → **Tree × columns**: one column per level, multiple branches on the same level can be expanded simultaneously, and a child aligns to the row of its parent (the first-child-shares-row algorithm, unit-tested against an ASCII diagram the user drew).
+4. → **Fixed 5-column sliding window**: always 5 columns, centered on the selected item's "offset from center", sliding accordingly (`dependent2|dependent1|layer0|dependency1|dependency2` → slide right → `dependent1|layer0|dependency1|dependency2|dependency3`).
+5. → **Bidirectional, fully expanded, 5 equal-width columns filling the space**: dependents fan left, dependencies fan right, layer 0 centered; no more collapsing (everything in the window is expanded, with cycle guards); column width `1fr` to fill; the selected item centered both horizontally and vertically (sticky header + `padding-block:45vh` + scrollIntoView center).
+6. → **Left/right keys go spatial**: move to the adjacent column and select "the item nearest the vertical center of the viewport".
+
+The final form: **three banner tabs (List / Topology / Reports)**, with Topology being the bidirectional tree described above.
+
+---
+
+## 5. Pitfalls in Core Parsing (and Their Fixes)
+
+| Pitfall | Symptom | Fix |
 |---|---|---|
-| 資料夾 meta | `importer:"directory"` 被當節點 | 掃描時略過 `importer==='directory'`（驗證 10 個專案皆 0 個目錄節點）|
-| Spine 多頁 atlas | `spine_bg2..40.png` 被誤判未使用 | 解析 `.atlas` 文字取所有頁面 png（basename 比對會漏）|
-| 圖集整圖動態取用 | 全部圖集顯示 0% 利用率 | 區分「整圖被當 SpriteAtlas 動態取用（無法靜態判定）」vs 個別 frame 引用 |
-| **component 偵測誤判** | `Utils.ts` 被當 component | `extends Component` 正則誤中**泛型約束** `getCacheObj<T extends Component>`。改成必須是**類別繼承** `class Name<…> extends Component`；同時也讓泛型基底/子類別正確被偵測 |
-| 巢狀 prefab 節點路徑 | `PrefabInfo.asset` 的 nodePath 是空 | `PrefabInfo`/`KeyAtlas` 沒有 `node` 欄位 → 用**反向 `{__id__}` 往上爬**找擁有它的節點；並略過空 `_name` |
+| Directory metas | `importer:"directory"` was treated as a node | Skip `importer==='directory'` during scanning (validated across 10 projects: 0 directory nodes) |
+| Spine multi-page atlas | `spine_bg2..40.png` was wrongly flagged as unused | Parse the `.atlas` text to get all page pngs (basename matching would miss some) |
+| Whole-atlas dynamic use | All atlases showed 0% utilization | Distinguish "whole atlas used dynamically as a SpriteAtlas (cannot be statically determined)" vs. individual frame references |
+| **Component detection misfire** | `Utils.ts` was treated as a component | The `extends Component` regex misfired on the **generic constraint** `getCacheObj<T extends Component>`. Changed it to require actual **class inheritance** `class Name<…> extends Component`; at the same time, generic bases/subclasses are now detected correctly |
+| Nested prefab node path | The nodePath of `PrefabInfo.asset` was empty | `PrefabInfo`/`KeyAtlas` have no `node` field → use the **reverse `{__id__}` walk upward** to find the node that owns it; also skip empty `_name` |
 
-component 偵測最終用三個訊號：直接 `extends Component`、被 `__type__` 引用、以及 **extends 鏈傳遞閉包（fixpoint）**。純 util/enum/config 從索引移除。
-
----
-
-## 6. 互動功能（逐步加上）
-
-- **鍵盤導覽**（拓撲）：`↑↓` 同欄、`←→` 跨欄、`Enter` 設為中心。導覽完全用 `selectedKey` 字串推導父/子，避免「找不到 cell 就跳到第一項」的 bug。
-- **`/` 快速開啟**：VSCode Ctrl+P 風格、依檔名過濾。
-- **`r` 還原**：選中路徑 + 方向存進 `localStorage`，按 `r` 重建並聚焦。
-- **Ctrl/Cmd+C**：複製選中節點名稱（有文字選取時讓瀏覽器正常複製）。
-- **Mac 兩指滑動**：攔截橫向 `wheel`、`preventDefault` 擋掉「上一頁」手勢，換算成 ←/→（再加 `overscroll-behavior:none` 保險）。
+Component detection ultimately uses three signals: a direct `extends Component`, being referenced by `__type__`, and the **transitive closure over the extends chain (fixpoint)**. Plain util/enum/config modules are removed from the index.
 
 ---
 
-## 7. 依賴上下文擴充（「用在哪、怎麼用」）
+## 6. Interactive Features (Added Incrementally)
 
-### 7.1 先用多 agent 研究可行性
-使用者要求前先做**可行性研究**（ultracode → 多 agent workflow，跑真實樣本專案）：
-- 核心鑰匙：scene/prefab 是扁平陣列、`{__id__:N}===arr[N]`；走訪 `__uuid__` 時順手記下 **(元件, 屬性路徑)**，元件的 `node.__id__` 沿 `_parent/_name` 走到根 → **節點路徑**。
-- 量化：239 個資源參照中 ~86% 是乾淨的 `元件.屬性`，~14% 是難解（prefab 實例 override 等），恰好 1 個無解（失效 fileId）。
-
-### 7.2 Phase 1 實作
-- `refs.js extractContextRefs()` 擷取每個邊的 `locations:[{nodePath, component, property, subName}]`。
-- 實證：`animation.anim → Canvas/UIRoot/InfoBar/Node · cc.Animation._clips.0`。
-
-### 7.3 依回饋重設計 popup
-使用者覺得「全域使用清單」太雜。改成：
-- **只顯示拓撲當下這條關係**：選中項 ↔ 它在樹中的父項目那條邊的位置（由 `selectedKey` 切出父）。
-- 內容只留**位置細節**（樹上已看得到的資源名不重複）；元件本身的參照（property 為空）只顯示節點路徑。
-- 根/結構邊（如 plist→png 無節點位置）**自動隱藏**。
-- 拿掉 ⓘ 按鈕與 `i` 鍵 → **選中即自動出現**，位置算在選中格下方（不夠就翻上方）。
-- 修了巢狀 prefab：某 `Item.prefab` 在 `CommonPanel/bottom/node/control/node · cc.PrefabInfo.asset`。
+- **Keyboard navigation** (Topology): `↑↓` within a column, `←→` across columns, `Enter` to set as center. Navigation is derived entirely from the `selectedKey` string to compute parent/child, avoiding the "jump to the first item when the cell can't be found" bug.
+- **`/` quick open**: VSCode Ctrl+P style, filtering by filename.
+- **`r` restore**: the selected path + direction is saved to `localStorage`; pressing `r` rebuilds and focuses it.
+- **Ctrl/Cmd+C**: copy the selected node's name (when there is a text selection, let the browser copy normally).
+- **Mac two-finger swipe**: intercept horizontal `wheel`, `preventDefault` to block the "back" gesture, and translate it into ←/→ (plus `overscroll-behavior:none` as a safeguard).
 
 ---
 
-## 8. `extends` 取代 `import`
+## 7. Dependency-Context Expansion ("where it's used, how it's used")
 
-「顯示腳本 import 邊」開關被認為沒用 → 移除開關 + 移除 import 邊（多又雜），改成有意義的**類別繼承邊**：每個 component 連到它的基底類別（`Widget.ts → WidgetBase.ts`，重用 component 偵測的 `baseName`/`definers`）。樣本專案：import 0、extends 64。
+### 7.1 Multi-Agent Feasibility Research First
+The user asked us to do a **feasibility study** before implementing (ultracode → multi-agent workflow, run against a real sample project):
+- The core key: scenes/prefabs are flat arrays, `{__id__:N}===arr[N]`; while walking `__uuid__` we can also record the **(component, property path)**, and follow the component's `node.__id__` along `_parent/_name` up to the root → the **node path**.
+- Quantified: of 239 asset references, ~86% are clean `component.property`, ~14% are hard cases (prefab instance overrides, etc.), and exactly 1 is unsolvable (a dead fileId).
+
+### 7.2 Phase 1 Implementation
+- `refs.js extractContextRefs()` captures each edge's `locations:[{nodePath, component, property, subName}]`.
+- Empirically: `animation.anim → Canvas/UIRoot/InfoBar/Node · cc.Animation._clips.0`.
+
+### 7.3 Redesigning the popup based on feedback
+The user found the "global usage list" too noisy. Changed to:
+- **Show only the current relationship in the topology**: the location of the edge between the selected item and its tree parent (the parent is sliced out via `selectedKey`).
+- Keep only the **location details** (don't repeat the asset name already visible in the tree); a component's own reference (empty property) shows only the node path.
+- **Auto-hide** root/structural edges (e.g. plist→png with no node location).
+- Removed the ⓘ button and the `i` key → **it appears automatically on selection**, positioned below the selected cell (flipping above if there isn't room).
+- Fixed nested prefabs: a certain `Item.prefab` at `CommonPanel/bottom/node/control/node · cc.PrefabInfo.asset`.
 
 ---
 
-## 9. 驗證方法（貫穿全程）
+## 8. `extends` Replaces `import`
 
-- **核心無頭驗證**：每次改 `src/core/` 都用 `node test/node-run.js <專案>` 或臨時 node 腳本對真實樣本專案跑，確認解析、邊、location 正確（例如逐項驗證使用者給的三個案例）。
-- **演算法單元測試**：樹狀佈局用使用者畫的圖驗證 row/depth；鍵盤導覽用模擬序列驗證「← 回到正確父節點」。
-- **建置/服務**：`node --check`、`npm run build`、檢查 `$('id')` 都存在於 HTML、`webpack serve` 回 200。
-- **跨專案穩健度**：對全部 10 個 3.8.x 專案掃描，確認 `metaErrors=0`。
+The "show script import edges" toggle was deemed useless → removed the toggle and the import edges (too many, too noisy), replacing them with meaningful **class-inheritance edges**: each component links to its base class (`Widget.ts → WidgetBase.ts`, reusing the `baseName`/`definers` from component detection). On the sample project: import 0, extends 64.
 
 ---
 
-## 10. 無頭 CLI（依賴查詢）
+## 9. Validation Methodology (Throughout)
 
-核心既然 DOM-free 又能無頭跑,自然再包一層「能指名查詢、輸出可解析」的 CLI,讓人或 agent 直接問「某資源依賴誰 / 被誰依賴」,不必開瀏覽器。
+- **Headless core validation**: every change to `src/core/` is run against a real sample project via `node test/node-run.js <project>` or a throwaway node script, confirming that parsing, edges, and locations are correct (e.g. validating the three cases the user gave, item by item).
+- **Algorithm unit tests**: the tree layout's row/depth is validated against a diagram the user drew; keyboard navigation is validated against simulated sequences to confirm "← returns to the correct parent node".
+- **Build/serve**: `node --check`, `npm run build`, checking that every `$('id')` exists in the HTML, and that `webpack serve` returns 200.
+- **Cross-project robustness**: scan all 10 of the 3.8.x projects and confirm `metaErrors=0`.
 
-### 10.1 設計探索（依回饋收斂）
+---
 
-- **從「依賴」開始,以 png 舉例**：很快發現查詢應**型別無關**——葉節點（png）是「被誰用」(`in`)有料,prefab/scene 是「依賴誰」(`out`)有料,atlas/spine 兩邊都有。結論：主命令 `deps` **預設兩方向一起印**,`uses` = `deps --in` 的別名,不為型別特例化。
-- **精簡輸出**：以 **path 當識別**（不印 uuid）,`via` = 邊種類;`→` 依賴 / `←` 被依賴、`(N×)` weight、`↻` 循環、`⚠` 未被參照、`↯` orphan。
-- **接上「用在哪」**：另一 session 的 `extractContextRefs` 已讓每條邊帶 `locations:[{nodePath, component, property, subName}]`。CLI 的 `--where` 直接展開它（不另算）;自訂腳本元件的壓縮 `__type__` 用 `decompressUuid` 還原成腳本路徑;meta/spine/font 等推導邊沒有 location,標 `(meta-derived)`。這成為 CLI 與 `refs.js` 之間的**契約**。
+## 10. Headless CLI (Dependency Query)
 
-### 10.2 決策與理由
+Since the core is DOM-free and runs headless, it was natural to wrap it in a CLI that "can query by name and emit parseable output", letting a person or an agent directly ask "what does asset X depend on / who depends on X" without opening a browser.
 
-| 決策 | 理由 |
+### 10.1 Design Exploration (Converging on Feedback)
+
+- **Starting from "dependencies", using png as the example**: we quickly found the query should be **type-agnostic** — for a leaf node (png) the interesting direction is "who uses it" (`in`), for a prefab/scene it's "what it depends on" (`out`), and atlas/spine have content in both directions. Conclusion: the main command `deps` **prints both directions by default**, `uses` = an alias for `deps --in`, with no special-casing by type.
+- **Lean output**: use **path as the identifier** (don't print the uuid); `via` = the edge kind; `→` dependency / `←` dependent, `(N×)` weight, `↻` cycle, `⚠` unreferenced, `↯` orphan.
+- **Hooking up "where it's used"**: `extractContextRefs` from another session already made each edge carry `locations:[{nodePath, component, property, subName}]`. The CLI's `--where` simply expands it (no recomputation); the compressed `__type__` of custom script components is restored to a script path via `decompressUuid`; meta/spine/font and other derived edges have no location and are marked `(meta-derived)`. This became the **contract** between the CLI and `refs.js`.
+
+### 10.2 Decisions and Rationale
+
+| Decision | Rationale |
 |---|---|
-| 無狀態全掃,不做快取（樣本專案 ~70ms） | 夠快,省掉快取失效的麻煩;高頻查詢再考慮 `--fast`（跳過 size/script 讀檔）或常駐索引 |
-| `--where` 讀 `edge.locations`,CLI 自建 `edgeMaps` 索引 `scan.edges` | `graph.js` 的 adjacency 故意丟掉 `locations`;只有 `closure` 借 `closureReport`/`buildAdjacency` |
-| 目標解析接受 path / basename / uuid / `uuid@sub` | 撞名**不猜**,印候選（上限 20）並 `exit 2` |
-| JSON 固定 1-hop（不受 `--depth`） | 多層樹狀 JSON 之後再說 |
-| 結束碼 `0`/`1`/`2`,stdout=資料、stderr=訊息 | 方便 pipe / 給 agent 解析 |
+| Stateless full scan, no cache (the sample project is ~70ms) | Fast enough, avoids cache-invalidation headaches; revisit with `--fast` (skip size/script file reads) or a resident index for high-frequency queries |
+| `--where` reads `edge.locations`, the CLI builds its own `edgeMaps` index over `scan.edges` | `graph.js`'s adjacency deliberately drops `locations`; only `closure` borrows `closureReport`/`buildAdjacency` |
+| Target resolution accepts path / basename / uuid / `uuid@sub` | On a name collision, **don't guess** — print candidates (capped at 20) and `exit 2` |
+| JSON fixed at 1-hop (unaffected by `--depth`) | Multi-level tree JSON is for later |
+| Exit codes `0`/`1`/`2`, stdout=data, stderr=messages | Easy to pipe / for an agent to parse |
 
-`makeFsProvider` 從 `test/node-run.js` 抽到 `src/node/fsProvider.js`,CLI 與 test 共用。
+`makeFsProvider` was extracted from `test/node-run.js` into `src/node/fsProvider.js`, shared by the CLI and the tests.
 
-### 10.3 驗證
+### 10.3 Validation
 
-對樣本專案實測每個命令:`deps`/`uses` 兩方向、`closure`（scene → 208 assets / 29.5 MB）、`find`;`--where` 印出真實 nodePath（`Canvas/UIRoot/InfoBar/Node · cc.Animation._clips.0`）與 frame 名;自訂腳本 `__type__` 正確還原（節點 `Boot` 上的 `Boot.ts`）;`--depth 2` 縮排展開、重訪標 `↻`;撞名 `config.json`(44 筆)印候選 + `exit 2`;結束碼齊全。
+We tested every command against the sample project: `deps`/`uses` in both directions, `closure` (scene → 208 assets / 29.5 MB), `find`; `--where` printed real nodePaths (`Canvas/UIRoot/InfoBar/Node · cc.Animation._clips.0`) and frame names; a custom script `__type__` was restored correctly (the `Boot.ts` on the `Boot` node); `--depth 2` expanded with indentation, revisits marked `↻`; a name collision on `config.json` (44 hits) printed candidates + `exit 2`; the exit codes were all in place.
 
-接著補上**自動化測試**(`test/cli.test.js`,`node:test` 內建、零相依):以子行程跑真實 `src/cli.js`,對著一份**自建於暫存目錄的合成專案**(格式正確的 `.meta` + prefab/scene JSON,`__type__` 用真實 `compressUuid` 產生)。不依賴任何本機樣本專案,可重現、CI-safe。涵蓋:`find`、`deps --json`(out 邊/orphan/in 邊)、`--where`(nodePath·屬性·frame·壓縮 `__type__` 還原)、meta 推導邊的空 `locations`、`⚠` 僅限 `resources/` 外、`closure` 計數、撞名/找不到 `exit 2`、用法/未知命令 `exit 1`、以 uuid 與 `uuid@sub` 解析目標。`npm test` 一鍵跑(glob `test/*.test.js` 不會掃到 `test/node-run.js`)。
+We then added **automated tests** (`test/cli.test.js`, the built-in `node:test`, zero dependencies): run the real `src/cli.js` in a subprocess against a **synthetic project built in a temp directory** (format-correct `.meta` + prefab/scene JSON, with `__type__` generated via a real `compressUuid`). It depends on no local sample project, so it's reproducible and CI-safe. Coverage: `find`, `deps --json` (out edges / orphan / in edges), `--where` (nodePath · property · frame · compressed `__type__` restoration), the empty `locations` of meta-derived edges, `⚠` restricted to outside `resources/`, `closure` counts, name-collision/not-found `exit 2`, usage/unknown-command `exit 1`, and resolving the target by uuid and `uuid@sub`. `npm test` runs it in one go (the glob `test/*.test.js` won't pick up `test/node-run.js`).
 
-### 10.4 分發（不靠 `npm run cli`）
+### 10.4 Distribution (without `npm run cli`)
 
-`src/cli.js` 加 shebang、`chmod +x`;`package.json` 註冊 `bin`（`coir`）、`files` 設 `["src","README.md"]`。因**零執行期相依**,打包僅 ~28KB、可離線。
+`src/cli.js` got a shebang and `chmod +x`; `package.json` registers the `bin` (`coir`) and sets `files` to `["src","README.md"]`. Because of **zero runtime dependencies**, the package is only ~28KB and works offline.
 
-| 對象 | 方式 |
+| Audience | Method |
 |---|---|
-| 隊友(有 repo) | `npm link` → 全域 `coir`;`npm unlink -g coir` 移除 |
-| 無 repo | `npm i -g <git-url>` |
-| 免安裝 | `npx <git-url> deps <asset> -C <projectDir>`（或在專案內省略 `-C`） |
-| 公開發佈 | `npm publish` → `npm i -g` / `npx` |
-| 只想 clone | `node src/cli.js …` 或 `./src/cli.js …` |
+| Teammates (with the repo) | `npm link` → global `coir`; `npm unlink -g coir` to remove |
+| No repo | `npm i -g <git-url>` |
+| No install | `npx <git-url> deps <asset> -C <projectDir>` (or omit `-C` inside the project) |
+| Public release | `npm publish` → `npm i -g` / `npx` |
+| Just want to clone | `node src/cli.js …` or `./src/cli.js …` |
 
-### 10.5 待辦
+### 10.5 To Do
 
-CLI 報告類命令（`summary`/`unused`/`orphans`/`atlas`/`size`,函式已在 `analyze.js`）、`--fast` 掃描、多層樹狀 JSON、高頻查詢的索引快取、單檔自包含 bundle（`dist/cli.cjs`）。
-
----
-
-## 11. 近期擴充
-
-### 11.1 全域類型篩選 bar + 拓撲剪枝（保留中間路徑）
-起因：把某個 `.fnt` 設為中心、又先點了 `font` 徽章來找它，拓撲兩邊全空——因為它的鄰居是 png/scene，被「清單型別篩選」連帶濾掉了。先**把篩選與拓撲解耦**（型別徽章只篩清單），確認資料其實正確；接著依使用者新點子改成更好的版本：
-
-- 型別徽章從清單分頁**拉到 banner 下一條全域 bar**，三分頁共用一個 `selectedTypes`。
-- 對**清單／報告**＝只顯示該型別；對**拓撲**＝**剪枝到「通往該型別」的分支**：符合型別的節點 + 通往它的中間節點留著、死枝丟掉、**層0 永遠保留**。篩選時建**完整樹**（cycle-bounded DEEP），讓比 5 欄視窗更深的符合節點仍保留連接路徑。`neighborsOf` 本身不過濾（維持真實結構），剪枝是建樹後做。
-
-### 11.2 CLI `--type`（同款剪枝）
-`src/cli.js` 加 `--type T[,T2]`：`deps`/`uses` 樹做同樣的「保留通往該型別中間路徑」剪枝（重構為 `buildEdgeTree → pruneByType → renderTreeText`，**未帶 `--type` 時輸出逐字不變**，由測試鎖住）；`closure`/`find`/`--json` 過濾平面清單。
-
-### 11.3 清單閉包欄 + 報告目錄欄 + 小修
-- 清單加 `被依賴∑`(`dependentClosure`＝影響範圍) / `依賴∑`(`dependencyClosure`＝打包量) 兩欄**傳遞閉包**，`setScan` 一次算完（~0ms/500 資源），樣式較直接 in/out 淡。
-- 報告每列加**目錄欄**；sticky 表頭被「捲動容器上 padding」頂出一條縫、讓資料列從表頭上方漏出——拿掉容器上 padding 修掉。
-- **圖集利用率只算 `type='atlas'`**（sprite-atlas .plist），排除像 `decal.png` 這種 meta 帶 2 個 sprite-frame 的純 png。
-
-### 11.4 缺來源檔的 meta（已刪資源的殘留 meta）
-- 來源被刪、只剩 `.meta` 的資源**不索引**（比照資料夾 meta）。驗證移除後 **0 個新孤兒**：被引用者全走有守門的衍生 texture 邊，乾淨消失。
-- 記 `scan.missing`（uuid+子 uuid → path），讓仍被 prefab/scene 以 `__uuid__` 引用者浮現為**具名「缺來源檔」孤兒**（不是裸 uuid）；UI 紅標、CLI 印路徑、`--json` 加 `path/missingSource`。
-- 報告加**摺疊「缺來源檔的 meta（已略過）」審計區**（`droppedMetaReport`）：列出全部、標「仍被引用（斷線要修）/ 無人引用（殘留可刪）」。精準度靠 `scan.missingReferenced`——在**所有指向資源的點**（`resolveUuid` + atlas/font 衍生邊 + 路徑型 spine via `missingByPath`）記錄，才抓得到「活著的 `.atlas` 仍列出一張已刪 page」這種只看 JSON 會漏的案例。
-
-### 11.5 `/` 快速搜尋大升級
-從「只比對檔名」變成**多來源模糊搜尋**：`buildSearchIndex` 攤平 asset／frame（sprite-frame 名）／usage（edge.locations）三種，每筆 `target` 都是真實資源 uuid。比對改子序列模糊（`matchScore`：精確>前綴>子字串>子序列），**命中字 VSCode 式高亮**（`fuzzyMatch` 回位置、標所有出現處，所以 `prefab` 連檔名與資料夾一起亮）。範圍前綴 `@`frame `#`type `>`usage、貼 uuid 直跳；每筆右欄顯示 `←被依賴∑ →依賴∑`（0 不畫）；打字回捲到頂。
-
-### 11.6 命名 **Coir** + 發佈
-- 取名：`Cocos` 本就是椰子屬，依賴樹⇄椰子樹的雙關 →「Coir（椰殼纖維）」。改 `package.json`/`bin`(`cag`→`coir`)/`localStorage`/`<title>`/docs；目錄 `assets-graph`→`coir`（給使用者一支 `rename-to-coir.sh`，順帶搬 `.claude` 記憶）。
-- **stale `dist/*.LICENSE.txt`**：webpack 沒清 `dist/`，留著舊 cytoscape/fcose 的 bezier/spring 授權銘牌——與「無第三方相依」矛盾 → 刪掉並加 `output.clean:true`；production 關 sourcemap、`publicPath:'auto'` 讓 gh-pages 友善。
-- GitHub Pages：`index.html`＋committed `dist/app.bundle.js` 直接從 `main`/root 上線（加 `.nojekyll`、MIT `LICENSE`），README 放 Live Demo badge。
-
-### 11.7 多語系 + 首航 UX
-- **i18n**（繁中＋English，零相依）：所有可見字串集中到 `src/browser/i18n.js`（`MESSAGES` + `t(key,vars)` `{var}` 插值），靜態 HTML 用 `data-i18n` / `data-i18n-html` / `data-i18n-ph` / `data-i18n-title`（中文留作 fallback）。banner 下拉切換 → `relocalize()` 重掃＋重繪；自動偵測 `navigator.language`。`src/core/` 零字串；**CLI 固定英文**、集中在 `USAGE`＋`M` 物件（一個測試斷言改 `(missing source)`）。
-- **首航卡片**：剛進來中央浮卡片（選擇按鈕＋說明），全螢幕遮罩，只有語系/`?`/GitHub 抬到遮罩之上（z-index 48）可按。
-- **說明 modal**（`?`，z-index 55）：分頁/拓撲/搜尋/快捷鍵，底部 GitHub 連結；🥥 favicon（emoji SVG）、banner GitHub 圖示。
-- 拓撲欄頭改符號 `←層N`/`→層N`＋層0 染色（避免與 palette 的 `←數量` 撞義）；usage popup 右上角加複製鈕。
-
-### 11.8 外掛化（型別＋邊可擴充）
-動機：讓別人容易加新資源型別與新邊，而不必動 `scan.js` 核心。把原本 inline 的 meta 衍生邊（atlas/font/particle/spine 三件組）抽成 `src/core/plugins/` 下**一型一檔**的 plugin（每個檔同時帶該型別的 `importerTypes`/`typeByExt`、`edges(ctx)`、`colors`），`index.js` 匯出 `BUILTIN_PLUGINS`／`PLUGINS`（內建即全部，外部 plugin 由呼叫端組合）。
-
-- **介面**：plugin 是純物件 `{ name, importerTypes?, typeByExt?, jsonSourceExts?, rootTypes?, colors?, messages?, edges(ctx)? }`；`edges` **只用 `ctx`**（index＋`addEdge`/`resolveUuid`／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），不 import 任何東西 → 第三方 plugin 零 build step。
-- **接線**：`scanProject(fp,{plugins=PLUGINS})` 預設吃 registry，所以 **CLI／node-run／瀏覽器同一套**；`meta.js` 改 `buildTypeResolver(plugins)`＋`knownTypes(plugins)`（移除靜態 `KNOWN_TYPES`/`normalizeType`，baseline `IMPORTER_TYPE` 不含 atlas/font/particle/spine——那些回到各自 plugin）；`analyze.js` 的 root 型別 union `scan.rootTypes`；`ui.js` 把 plugin `colors` 併進 `TYPE_COLOR`、`messages` 經新增的 `registerMessages` 併進 i18n（皆在 `setScan` 首次繪製前）。
-- **註冊路徑**（優先序：內建 → 全域 → 專案 → `--plugin`）：內建 → 加檔到 `index.js`；**repo 外**（CLI/node，`src/node/loadPlugins.js`）→ `coir.plugins.mjs` 自動載入(coir 根=跨專案全域、被掃專案根=該專案)＋`--plugin <file>`，皆 gitignore、不進 repo；免 rebuild（瀏覽器）→ `window.coir.use(plugin)`（userscript 可跨專案常駐）。`local.js` 已退場（與 repo 根的 `coir.plugins.mjs` 重疊，後者更乾淨：在 `src/` 外、免 rebuild）。
-- **刻意留 core**：JSON `__uuid__`/`__type__` 引擎（3a–3c）與 component 剪枝＋`extends`（3b/3e）耦合太深、不外掛化,但 plugin 可經 `ctx.scripts` 唯讀取用。
-- **驗證**：既有 18 個測試逐字綠（atlas/script/prefab/scene 路徑 byte-identical），`npm run build` 通過,另以合成專案確認搬移後的 font/particle/spine 邊（含多頁 atlas→page texture）全數產生。
-
-### 11.9 型別化(JSDoc + `.d.ts`,不改成 `.ts`)
-評估過全量 TS,但它會撞到本專案兩條底線(零 runtime 相依、clone 即可直跑 `node src/cli.js`)。改走中間路線:**檔案維持 `.js`,型別走 JSDoc + 一份手寫 `types/index.d.ts`**,只多 `typescript`/`@types/node` 兩個 **devDep**(runtime 仍零相依)。
-
-- **型別**:`types/index.d.ts` 宣告資料模型(`Asset`/`SubAsset`/`Edge`/`EdgeLocation`/`ScanResult`/`Adjacency`)與**外掛契約**(`Plugin`/`PluginContext`),經 `package.json` `"types"` 隨套件 ship——外掛作者一行 `/** @type {import('coir').Plugin} */` 就有 `ctx.addEdge`/`ctx.assets` 的 autocomplete 與檢查。
-- **設定**:`tsconfig.json` `allowJs`+`checkJs:false`+`strict:false`+`noEmit`;檢查**逐檔 opt-in** 靠 `// @ts-check`,目前涵蓋全部非瀏覽器檔(`src/core/**`、`src/node/**`);DOM 重的 `src/browser/**` 刻意不檢(投報率低)。`npm run typecheck`=`tsc --noEmit`。
-- **不變的**:無 `.ts`、無 loader、無 build step——`node src/cli.js`、`node --test`、webpack 全部照舊;JSDoc 編譯後消失,runtime 不受影響。
-- **驗證**:`typecheck` 0 error(並以注入 `ctx.addEge` typo 確認 `// @ts-check` 真的生效、契約型別真的擋得住);`npm test` 18/18、`npm run build` bundle 不變、CLI 直跑不變。之後要收緊就翻 `checkJs:true`/`strict:true` 並補 browser 檔。
-
-### 11.10 repo 外的 plugin 載入 + 拓撲導覽強化
-**外部 plugin 載入**(讓 project-specific 規則住在 coir 外):`coir.plugins.mjs` config 從 **coir 根**(全域/跨專案)與**被掃專案根**(該專案)自動載入,加上 `--plugin <檔>`(CLI)與 `window.coir.use()`(瀏覽器 runtime)。CLI/node 走 `src/node/loadPlugins.js`;**瀏覽器**新增:`loadGlobalPlugins`(`webpackIgnore` 動態 import dev server serve 的那份)+ `loadProjectPlugins`(用 File System Access handle 讀被選專案那份、blob URL import,每次選專案重讀)。四個來源由 `dedupePlugins` 收斂(general→specific,同名後者覆蓋),開啟專案後狀態列列出生效的非內建 plugin、標 `來源.名稱`(`global`/`project`/`use`)。
-
-**拓撲/清單導覽**(一連串鍵盤/滑鼠回饋):拓撲 `−`/`+` 上一動/下一動(`navHistory`/`navForward` 的 centre+selection 歷史)、`Delete` 回清單、每個 cell hover 顯示複製完整路徑鈕、同名兄弟列自動補「彼此差異的最短目錄」(`distinguishingDirs`);清單 `↑↓` 鍵盤游標、單擊選中、雙擊/`Enter` 設為中心、切回清單時捲到選中/中心列並閃一下;型別篩選＋搜尋字串持久化到 `localStorage`(`coir.filter`,還原時與專案實際型別取交集)。`Tab` 循環三分頁、`Esc` 清篩選、`Ctrl/⌘+P`=快速搜尋、`Ctrl/⌘+R`=選目錄。
-
-**一輪 code review 修掉的**:`−`/`+` 加 modifier 守門(不攔 `Cmd/Ctrl±` 縮放)、CLI `--plugin` 加 `!startsWith('-')` 守門(不吞後面旗標)、`Esc` 加 typing 判斷(打字中不清篩選)。
-
-### 11.11 拓撲／快速搜尋虛擬化 + 拓撲內找尋
-項目一多時拓撲會卡——`renderTopo` 只用 `inWin` 限制**欄**（固定 5 欄），不限制**列**：被幾百個 prefab 依賴的 texture，那一欄就吐幾百個 cell 進 DOM。改成**垂直虛擬化**（列高固定 30px，數學精確）：
-
-- `topo.js` 把「建樹」與「畫」拆開——`buildSide` 只在換中心／選取／篩選時跑一次、快取進 `S.topo`；捲動時只 `paintTopo()` 重畫**視窗內的列**（rAF 節流），底部一個 spacer 撐住總捲動高度，DOM 永遠約一個螢幕的 cell。cell 點擊改**事件委派**；←→ 導覽與置中改用 cell **資料**（row）計算，不再靠 DOM rect（離畫面的 cell 已不在 DOM）。
-- **自適應 padding**：原本固定 `padding-block:45vh`，小圖會浮在一大片空白裡。改成 JS 設 `視窗高/2 − 列高/2`——每一列都能捲到視窗正中、短樹也置中且不留多餘空捲區，resize 時 `reflowTopo` 重新貼合。
-- `/` 快速搜尋同款虛擬化（列高 32px、委派、spacer），順手**拿掉 100 筆上限**，所有命中都捲得到。
-- **拓撲內 `Ctrl/⌘+F` 找尋**：虛擬化後捲出畫面的節點不在 DOM、原生 Ctrl+F 找不到 → 自製找尋搜 cell **資料**（顯示中欄位的全部 cell，含中心），命中**琥珀色高亮**、`Enter`/`⇧Enter` 上下個、`Esc` 關，**只垂直捲到該節點**（不改中心、不重建樹，所以 matches 不會跑掉）。找尋列是 `#topo` 的兄弟節點，`renderTopo` 重寫 innerHTML 不會把它清掉。
-
-### 11.12 CI build + GitHub Pages 部署（dist 不再進 repo）
-原本 Pages 直接從 `main`/root 服務整個 repo，所以 `dist/app.bundle.js` 必須 commit（也順帶把 `src/`、`test/` 都公開了）。改用 **GitHub Actions** 當 Pages 來源：`.github/workflows/deploy.yml` 在 push 到 main 時 `npm ci` → typecheck → test → build，再發佈一份**精準的**靜態站（`index.html` + `dist/` + `img/coir-topology.png` + robots/sitemap，**不含 `.md`**）。於是 **`dist/` 改為 gitignore、`git rm --cached` 移出 repo**——純建置產物，CI 每次自己重 build。同時把截圖從 `docs/` 搬到 `img/`（`docs/` 只留 markdown，發佈時不再連同 `.md` 一起 cp，900K 的 README-only 編輯器截圖也不發佈），og:image 與 README 連結改指 `img/`。
-
-### 11.13 拓撲呈現強化：連線 overlay／選取鏈高亮／頂端 bar（篩選＋麵包屑）
-拓撲是把 DAG 攤成樹、本來**沒有連線**，欄間歸屬只靠位置暗示（第一個子節點與父同列），深了就難讀。補三件事：
-
-- **父子連線**：`paintTopo` 依**可見** cell 的 grid 座標即時生一張 `<svg class="edges">`（每條 parent→child 用 cubic bezier 跨欄界）。`.tree` 設 `position:relative`、連線 `z-index:0`＋`pointer-events:none`、cell `z-index:1` 壓在線上方。座標對齊靠 `padTop + row*ROW_H + ROW_H/2`（與 cell 實際位置同一套）。線條**一律灰色**（依使用者回饋，避免喧賓奪主）。
-- **選取鏈高亮**：選中一個節點時，`computeSelPath` 沿 `parentKeyOf` 走出**祖先鏈（root→選取）＋直接子節點**（`pathSet`/`childSet`），cell 標 `.onpath`/`.kid`、鏈上連線標 `.hot`，全用灰調；真正的「選取／中心」維持藍色。
-- **頂端 bar `#topobar`**（選定中心後才浮現）：左邊一個**篩選框**＝**真的隱藏非相符節點**（與型別篩選共用 `buildSide` 剪枝：型別 ∧ 路徑關鍵字、任一篩選啟用就建深樹 `DEEP`、輸入 debounce、清空或 `Esc` 即還原完整樹）；右邊一條**麵包屑**＝選取項到中心的整條鏈，**方向固定「被依賴 → 依賴」**（依帶號 `offsetOfKey` 排序，不論選取在哪一側都不翻轉），每一節可點即跳選，旁邊一顆**複製鈕**把整條鏈以**每行一個完整路徑**複製、再一顆**連結鈕**（`copyCrumbLink`）複製此中心的 `#topo=` 拓撲快照連結（見 §11.15）。原本 `Ctrl/⌘+F` 的**找尋**（高亮＋跳轉）則**還原**成樹區**右上角浮動框**——為此把 `#topo` 包進定位容器 `#topowrap`，找尋框是 `#topo` 的兄弟節點（`renderTopo` 重寫 `#topo.innerHTML` 不會清掉它）。分工清楚：**篩選縮小範圍、找尋在結果內定位**。
-
-### 11.14 外掛命令（CLI ＋ MCP 一份定義）+ `src/seam/` 整理
-再開一條外掛維度:plugin 除了型別／邊,還能貢獻**命令**(`commands: [{ name, usage?, description?, inputSchema?, positional?, run(ctx) }]`)。沿用 coir 既有的「一份邏輯、雙宿主」seam 哲學 —— `run(ctx)` **回傳 `{data,text}`／`{error}`、從不印**,CLI 印 text(`-o json` 印 data)、帶 `inputSchema` 者**自動也是 MCP 工具**回 data;**登記一次、兩個介面**。`ctx` 跨宿主一致(`env`／`args`(CLI positionals 經 `positional` 對映成跟 MCP JSON 同形)／`scan`／`readText`／`resolveAsset`(CLI 印候選+exit2、MCP throw→乾淨 tool error)／`edgeMaps`／`uuid.*`／`util`)。內建命令永遠優先(撞名忽略+警告);零執行期相依不變(`pluginCommands.js` 是純註冊表)。兩宿主各測一遍(`test/plugin-command.test.js` 走 CLI、`test/plugin-mcp.test.js` 走 MCP)。**證明者**:`timeline-viewer/coir-plugin` 用它加了 `coir timeline <prefab>`(也是 `timeline` MCP 工具),engine-free 解 Cocos prefab 的 TimeLineTool 結構——一個外掛就撐起一個有料的 headless 命令,不必 fork coir。
-
-順手把 headless 邏輯 seam **收進 `src/seam/`**:`query.js`(讀)、`shared.js`(resolve／edgeMaps／helpers)、`pluginCommands.js`(命令註冊)。頂層只剩 `cli.js`／`editCli.js`(CLI 呈現)+ 各功能目錄(`core`／`browser`／`node`／`edit`／`mcp`／`seam`);寫端 `edit/ops.js` 維持與 `editPrefab.js` 同住。純搬移:10 處 import 改完、全測試綠。
-
-### 11.15 URL 快照 viewer + 嵌入出口 + Cocos 擴充
-為了能「指著一個資源直接看它的拓撲」嵌進別的工具(尤其 Cocos 編輯器):
-
-- **URL 快照 viewer**(`src/core/topohash.js`):把某資源的**鄰域子圖**壓進網址 hash `#topo=<blob>`(節點整數索引 + intern 型別/種類 + gzip + base64url;`CompressionStream`／`btoa` Node/瀏覽器皆有，舊 Node（如 Cocos 3.5 的 Electron）連這兩個都沒有，退回 bare `zlib`＋`globalThis.Buffer`（gzip 互通、base64 等價）→ 零依賴、兩端共用)。瀏覽器看到 `#topo=` 就 decode → 畫拓撲,**完全不碰 File System Access** → 非 Chromium(Firefox/Safari/手機)也能看,只有「選目錄掃描」那條才需 FSA。`encodeTopo` 自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`(預設 256KB、可調),連 depth 1 都爆就丟使用處、**永遠回連結**;邊界節點標 `⋯`、使用處只放最近 ±2 層、更外層給「未載入」提示。round-trip／縮小／邊界／舊-Node fallback 有 `test/topohash.test.js`。
-- **嵌入出口**:`package.json` 加 `exports`(`.` → `src/index.js` barrel),host 一行 `import('coir')` 就拿到 `scanProject`／`buildAdjacency`／`encodeTopo`／`decodeTopo`／`makeFsProvider`／`PLUGINS`／`dedupePlugins`／`loadConfigPlugins`／`COIR_ROOT`…(Node 端;瀏覽器仍走 `app.js`)。
-- **Cocos Creator 3.5–3.8 擴充**(`cocos-extension/`,`editor: >=3.5.0`;3.5 靠上面的 zlib／Buffer fallback):資源**右鍵** → 子選單列出**依賴(→)／被依賴(←)**,每筆點了跳到該資源(`Editor.Selection.select`),頂層開拓撲快照(`encodeTopo` → `shell.openExternal('…#topo=')`)。擴充主行程 **in-process 跑 coir-core**(快取 scan、asset-db 變動失效),選單必須同步建構 → 靠 main 推來的圖快取(`request` 暖機 + `coir:graph` broadcast 更新);en/zh i18n(`Editor.I18n.t`);`install.sh` 一鍵複製 + symlink coir(免 npm link)。坑:`onAssetMenu` **不能 async**(編輯器不 await → 整個選單消失),所以改同步 + 快取。
-
-### 11.16 viewer 分頁 + 擴充載專案外掛 + 選單縮排樹
-§11.15 出貨後的幾筆打磨(都未動 `src/core/` 測試,117 仍綠):
-
-- **viewer 保留 清單＋拓撲 分頁**:原本 `#topo=` viewer 只給拓撲;改成 `body.viewer` 只藏**報告**＋選目錄鈕、`cycleTab` 在 viewer 也跳過報告,**清單留著**——清單列出快照節點、點列重設中心(快照沒有專案級報告,故報告續藏)。
-- **擴充載入 `coir.plugins.mjs`**:barrel 加匯出 `loadConfigPlugins`／`loadPluginFiles`／`COIR_ROOT`(= repo 根,由 `import.meta.url` 推);`main.js` 的 `getScan` 比照 CLI/瀏覽器組 `dedupePlugins([...PLUGINS, ...loadConfigPlugins(COIR_ROOT), ...loadConfigPlugins(projectPath)])` 再餵 `scanProject`——所以擴充右鍵也吃得到 audio-call 之類自訂邊(先前只跑內建外掛,所以漏了)。**生效外掛以 `來源.名稱` 印出**(`global.audio-call`／`project.…`,與瀏覽器 status line 同款:dedupe 後非內建者+來源標籤)。Node 會快取 import(ESM module 快取是**行程級**、reload 擴充不會清),改設定要 **重啟編輯器**才重讀(§11.17 踩到)。
-- **右鍵選單改縮排樹**(`assets-menu.js`):`L1/L2` 文字標籤 → **縮排**(`PAD` = NBSP×4,選 NBSP 免被編輯器折疊),`treeOf` 先 BFS 配最短深度+父節點、再 pre-order 走訪 → 每個 L2 nested 在它的 L1 底下;兩個方向都是「L1 齊左、每深一層往右一格」(`depth-1`);區塊序 `→` 先 `←` 後;**移除 per-node 上限**(列出全部鄰居)。
-- **3.5 安裝驗證**:`install.sh` 重裝到 3.8 與 3.5.2 測試專案,`import('coir')` 從各專案 `node_modules/coir` symlink 解析回 repo(15 個匯出、`COIR_ROOT` 正確),audio-call 邊(某 component 腳本 → 同名音檔)在擴充完整路徑下確實生成。
-
-### 11.17 anim/skel 外掛 + plugin `assetMenus`(資源右鍵看動畫時長)
-
-把外部 [coir-plugins](https://github.com/aaronhg/coir-plugins) 的 `anim`/`skel` 兩個命令外掛(讀 `.anim` clip、讀 Spine 二進位 `.skel` + vendored spine 3.8 runtime)接進編輯器右鍵,需求:右鍵 `.anim` 看到 `Coir anim 0.33s`、`.skel` 列出各動畫名/時長。
-
-- **新增 `assetMenus` plugin 貢獻點**(與 `commands` **獨立** —— 一開始我把它掛在 command 上,依回饋拆成 plugin 層自有欄位,純 asset-menu plugin 不必有 command):`{ ext?, types?, label?, rows(ctx) }`,`rows(ctx)` 由資源自身算出(`ctx = { asset, scan, projectDir, readText }`)。契約進 `types/index.d.ts`(`AssetMenu`/`AssetMenuContext`)。CLI/MCP 忽略它。
-- **擴充端預算 + 推送**(同 graph 那套,因選單必須同步):`main.js` `assetMenuSnapshot()` 對符合 `ext`/`type` 的資源在背景跑 `rows(ctx)`、`mapLimit(8)` + **`uuid:mtime` 快取**(不重 parse 沒變的 `.skel`),經 `coir:asset-menus` broadcast + `all-asset-menus` prime;`assets-menu.js` 同步查表渲染。**單列收合成扁平項**(`Coir anim  0.33s`)、**多列保留子選單**(`Coir skel ▸ idle / 2s · …`) —— 依回饋從「一律子選單」改來。
-- **踩到的兩個坑**:① 加進全域 `coir.plugins.mjs` 後右鍵沒反應 —— `loadConfigPlugins` 用 `import(fileURL)` 無 cache-bust,editor 行程的 **ESM 快取**讓它一直用舊設定(log 有 `global.resources-sprite` 卻沒 `global.anim/skel`);**reload 擴充不會清快取,要完整重啟編輯器**。② `install.sh` 是**複製**擴充進專案(只有 `node_modules/coir` 是 symlink),所以改 `main.js`/`assets-menu.js` 要**重裝**才生效。③ glTF/FBX 模型的 `.animation` 是 **sub-asset**(`uuid@sub`,非頂層資源、非 `cc.AnimationClip` JSON)→ 目前不支援(僅手做 `.anim`)。
-
-### 11.18 跳轉(goto)面板
-
-可停靠的 **`Coir 跳轉`** 面板(`panels/goto.js`;選單 面板→Coir→跳轉到節點… 或 `Ctrl+Alt+G`),把 coir 定位字串⇄編輯器選取打通,**雙向**:
-
-- **打字/貼上 → 選取**:① **節點路徑**(`nodePath`(+`[i]`))→ 對**活場景樹**(`scene` `query-node-tree`,不讀檔)走訪並選取該節點;② 結尾是 `.副檔名`(`xxx.prefab`/`ui/foo.png`)→ 走 `asset-db` 選取 Assets 面板裡的**資源**(basename 或路徑後綴比對,撞名要求更完整路徑)。
-- **反向回填**:在編輯器選取節點/資源 → 輸入框自動填回它的 coir `nodePath`(含 `[i]` 消歧)/檔名 —— 但你正在輸入框打字時不覆蓋(`document.activeElement` 判斷)。
-- **語法**:比照 coir 印出的(`--where`、瀏覽器用在哪、麵包屑);剝掉結尾 `:Comp`/`.prop`(編輯器無單獨高亮元件卡的 API);同名兄弟沒給 `[i]` → 取 `[0]`;不支援 `#N`(活場景沒有序列化絕對 index)。Enter 用原生 `keydown` 抓(`ui-input` 的 `confirm` 只在值有變才觸發 → 之前第二次 Enter 沒反應)。
+CLI report commands (`summary`/`unused`/`orphans`/`atlas`/`size`, the functions already exist in `analyze.js`), `--fast` scanning, multi-level tree JSON, an index cache for high-frequency queries, and a single-file self-contained bundle (`dist/cli.cjs`).
 
 ---
 
-## 12. 最終狀態
+## 11. Recent Expansions
 
-- **形式**：純前端（HTML+JS，無第三方執行期庫，~60KB），Chrome File System Access API 選專案目錄；webpack 打包、`npm run dev` 熱重載；公開於 GitHub＋GitHub Pages（MIT，由 **GitHub Actions** 自動 build＋部署，`dist/` 不進 repo）；welcome／說明頁印 **build stamp**（webpack 注入的 commit·date,dev build 標 `dev`）。
-- **名稱**：**Coir**（CLI `coir`）。介面**繁中／English** 可切，首航有歡迎卡 + `?` 說明。
-- **三分頁 + 全域型別篩選 bar**：清單（可排序資源表＝層0，含 in/out 與 `∑` 閉包欄）/ 拓撲（雙向 5 欄滑動視窗樹，**垂直虛擬化**、灰色父子連線、選取鏈高亮、頂端 bar＝篩選框（隱藏非相符）＋麵包屑（被依賴→依賴）＋複製整條鏈，右上角浮動 `Ctrl/⌘+F` 找尋，型別篩選會保留路徑）/ 報告（未使用、孤兒參照、圖集利用率、體積、缺來源檔 meta 審計）。
-- **依賴模型**：圖檔、plist/Spine 圖集、fnt、particle、prefab、scene、component，邊含 sprite-frame/texture/script/extends/prefab/anim/font…與 ClickEvent 接線；每條邊帶使用位置（節點路徑·元件.屬性·frame）。來源缺檔的 meta 不索引但仍可追蹤其斷線。
-- **無頭 CLI**（`src/cli.js`，`bin` 註冊 `coir`，零執行期相依）：依賴查詢 `deps`/`uses`/`closure`/`find`/`info` + 專案級稽核 `analyze`（stats/unused/orphans/atlas/size，= node-run.js 報告）（`--where` 把位置印成可貼回 edit 的 selector、`--type` 型別剪枝、`-o json` 結構化）＋ **就地編輯 prefab/scene** `edit`（`tree`(結構發現)/`get`/`set`/`swap-uuid`/`rename`/`set-parent`/`add`/`rm-*` …；真刪+索引壓縮、template-by-example、巢狀實例護欄、atomic+mtime 寫入護欄；設計見 `docs/EDITING.md`）。讀寫邏輯抽成共用 seam（`src/edit/ops.js` + `src/seam/query.js`），CLI 與 **MCP server**（`coir mcp`，手刻零依賴 JSON-RPC/stdio，型別化工具：讀無前綴 / 寫 `edit_*`，host 裡 `coir__<工具>`；見 `docs/MCP.md`）同源。**外掛可再貢獻命令**（`coir <name>`，帶 `inputSchema` 也自動成為 MCP 工具；見 §11.14）**與資源右鍵 asset menu**（`assetMenus`，與命令獨立；見 §11.17）。專案目錄走 `-C <dir>` 或預設當前目錄。`npm test` 跑 `test/*.test.js`（合成專案、CI-safe，**117 個案例**：CLI 98 + MCP 6 + 外掛命令 6 + topohash 5 + 外掛節點／搜尋索引各 1，含 3.5.2/3.8.6 跨版本雙 fixture）；`test/node-run.js` 對真實專案跑整份報告回歸。
-- **嵌入 / 分享**：`#topo=<blob>` **URL 快照 viewer**（鄰域子圖塞進 hash → 開連結直接看拓撲，**不需 File API、跨瀏覽器**；`src/core/topohash.js` 的 `encodeTopo`/`decodeTopo`，自動縮深度塞進 256KB）；`import('coir')` **嵌入出口**（`exports` → `src/index.js`）；**Cocos Creator 3.5–3.8 擴充**（`cocos-extension/`：資源右鍵看 被依賴/依賴 分層 + 跳轉 + 開拓撲快照 + 外掛 asset menu（如 anim/skel 顯示動畫時長），in-process 跑 coir-core，`install.sh` 部署）。
-- **用法**：瀏覽器版 `npm install && npm run dev` → Chrome 開 `localhost:8080` → 選 Cocos 專案目錄；CLI 版在專案內 `coir deps <資源>`（或 `-C <專案目錄>` 指向別處；`coir --help` 看全部與範例）。
+### 11.1 Global Type-Filter Bar + Topology Pruning (Preserving Intermediate Paths)
+The trigger: set some `.fnt` as the center, but having first clicked the `font` badge to find it, both sides of the topology were empty — because its neighbors are png/scene, which were filtered out along with the "list type filter". We first **decoupled filtering from the topology** (type badges only filter the list), confirming the data was actually correct; then, following the user's new idea, we changed it to a better version:
 
-> 詳細功能與資料模型見 `README.md`；edit 設計見 `docs/EDITING.md`、序列化契約見 `docs/SERIALIZATION.md`；開發指令與擴充方式見本檔上方與 `CLAUDE.md`。
+- The type badges were **pulled from the list tab to a global bar under the banner**, shared across all three tabs via a single `selectedTypes`.
+- For **List/Reports** = show only that type; for **Topology** = **prune to the branches that "reach that type"**: nodes matching the type plus the intermediate nodes leading to them are kept, dead branches are dropped, and **layer 0 is always kept**. When filtering, we build the **full tree** (cycle-bounded DEEP) so that matching nodes deeper than the 5-column window still keep their connecting path. `neighborsOf` itself does no filtering (it preserves the real structure); pruning is done after the tree is built.
 
+### 11.2 CLI `--type` (Same Pruning)
+`src/cli.js` got `--type T[,T2]`: the `deps`/`uses` tree does the same "preserve the intermediate path leading to that type" pruning (refactored into `buildEdgeTree → pruneByType → renderTreeText`, **byte-for-byte identical output when `--type` is absent**, locked down by tests); `closure`/`find`/`--json` filter the flat list.
+
+### 11.3 List Closure Columns + Reports Directory Column + Small Fixes
+- The List got two **transitive-closure** columns, `被依賴∑` (`dependentClosure` = blast radius) / `依賴∑` (`dependencyClosure` = bundle size), computed once in `setScan` (~0ms / 500 assets), styled lighter than the direct in/out.
+- Each Reports row got a **directory column**; the sticky header was pushed out by "padding on top of the scroll container", leaving a seam through which data rows leaked above the header — removing the top padding on the container fixed it.
+- **Atlas utilization is computed only for `type='atlas'`** (sprite-atlas .plist), excluding pure pngs like `decal.png` whose meta carries 2 sprite-frames.
+
+### 11.4 Source-less Metas (Residual Metas of Deleted Assets)
+- An asset whose source was deleted, leaving only the `.meta`, is **not indexed** (same treatment as directory metas). Validation after removal: **0 new orphans** — anything that referenced it went through the guarded derived-texture edge and disappeared cleanly.
+- We record `scan.missing` (uuid + sub-uuid → path), so anything still referencing it from a prefab/scene via `__uuid__` surfaces as a **named "missing source" orphan** (not a bare uuid); the UI flags it red, the CLI prints the path, and `--json` adds `path/missingSource`.
+- Reports got a **collapsible "source-less metas (skipped)" audit section** (`droppedMetaReport`): it lists all of them, marked "still referenced (a broken link to fix) / unreferenced (a leftover that can be deleted)". The accuracy relies on `scan.missingReferenced` — recorded at **every point that resolves an asset** (`resolveUuid` + the atlas/font derived edges + path-based spine via `missingByPath`), so it catches cases that JSON-only inspection would miss, like a live `.atlas` still listing a deleted page.
+
+### 11.5 Major Upgrade to `/` Quick Search
+Went from "matching filenames only" to **multi-source fuzzy search**: `buildSearchIndex` flattens three kinds — asset / frame (sprite-frame name) / usage (edge.locations) — and every entry's `target` is a real asset uuid. Matching switched to subsequence fuzzy (`matchScore`: exact > prefix > substring > subsequence), with **VSCode-style highlighting of matched characters** (`fuzzyMatch` returns positions and marks all occurrences, so `prefab` lights up in both the filename and the directory). Scope prefixes `@`frame `#`type `>`usage, and pasting a uuid jumps directly; each entry's right column shows `←被依賴∑ →依賴∑` (0 not drawn); typing scrolls back to the top.
+
+### 11.6 Naming **Coir** + Release
+- Naming: `Cocos` is itself a genus of coconut palm, and with the dependency-tree⇄coconut-tree pun → "Coir (coconut husk fiber)". Updated `package.json`/`bin` (`cag`→`coir`)/`localStorage`/`<title>`/docs; renamed the directory `assets-graph`→`coir` (gave the user a `rename-to-coir.sh` that also moves the `.claude` memory).
+- **Stale `dist/*.LICENSE.txt`**: webpack didn't clean `dist/`, leaving the old cytoscape/fcose bezier/spring license banners — contradicting "no third-party dependencies" → deleted them and added `output.clean:true`; production turns off sourcemaps, and `publicPath:'auto'` makes it gh-pages friendly.
+- GitHub Pages: `index.html` + the committed `dist/app.bundle.js` go live directly from `main`/root (added `.nojekyll`, the MIT `LICENSE`), and the README has a Live Demo badge.
+
+### 11.7 Internationalization + First-Run UX
+- **i18n** (Traditional Chinese + English, zero dependencies): all visible strings are centralized in `src/browser/i18n.js` (`MESSAGES` + `t(key,vars)` with `{var}` interpolation), and static HTML uses `data-i18n` / `data-i18n-html` / `data-i18n-ph` / `data-i18n-title` (the Chinese kept as the fallback). The banner dropdown switches → `relocalize()` rescans + re-renders; auto-detects `navigator.language`. `src/core/` has zero strings; **the CLI is fixed English**, centralized in the `USAGE` + `M` object (one test assertion changed to `(missing source)`).
+- **First-run card**: a floating card in the center on entry (a pick button + intro), with a full-screen mask; only the language selector / `?` / GitHub are raised above the mask (z-index 48) and clickable.
+- **Help modal** (`?`, z-index 55): tabs / topology / search / shortcuts, with a GitHub link at the bottom; the 🥥 favicon (emoji SVG) and the banner GitHub icon.
+- The topology column headers changed to symbols `←層N`/`→層N` + layer-0 tinting (to avoid clashing in meaning with the palette's `←count`); the usage popup got a copy button in its top-right corner.
+
+### 11.8 Pluginization (Types + Edges Are Extensible)
+Motivation: make it easy for others to add new asset types and new edges without touching the `scan.js` core. The previously inline meta-derived edges (the atlas/font/particle/spine triple) were extracted into **one-type-per-file** plugins under `src/core/plugins/` (each file carries that type's `importerTypes`/`typeByExt`, `edges(ctx)`, and `colors`), with `index.js` exporting `BUILTIN_PLUGINS` / `PLUGINS` (the built-ins are the full set; external plugins are composed by the caller).
+
+- **Interface**: a plugin is a plain object `{ name, importerTypes?, typeByExt?, jsonSourceExts?, rootTypes?, colors?, messages?, edges(ctx)? }`; `edges` **uses only `ctx`** (the index + `addEdge`/`resolveUuid`/`readText`/`mapLimit`/`uuid.*`/the read-only `scripts`) and imports nothing → a third-party plugin has zero build step.
+- **Wiring**: `scanProject(fp,{plugins=PLUGINS})` defaults to the registry, so **the CLI / node-run / browser all get the same set**; `meta.js` switched to `buildTypeResolver(plugins)` + `knownTypes(plugins)` (removing the static `KNOWN_TYPES`/`normalizeType`, with the baseline `IMPORTER_TYPE` no longer including atlas/font/particle/spine — those moved back into their respective plugins); `analyze.js`'s root types union `scan.rootTypes`; `ui.js` merges plugin `colors` into `TYPE_COLOR` and `messages` into the i18n catalog via the new `registerMessages` (both before `setScan`'s first render).
+- **Registration paths** (precedence: built-in → global → project → `--plugin`): built-in → add a file to `index.js`; **out-of-repo** (CLI/node, `src/node/loadPlugins.js`) → `coir.plugins.mjs` auto-loads (coir root = cross-project global, the scanned project's root = that project) plus `--plugin <file>`, all gitignored and out of the repo; rebuild-free (browser) → `window.coir.use(plugin)` (a userscript can persist across projects). `local.js` retired (it overlapped with the repo-root `coir.plugins.mjs`, which is cleaner: outside `src/`, rebuild-free).
+- **Deliberately kept in core**: the JSON `__uuid__`/`__type__` engine (3a–3c) and component pruning + `extends` (3b/3e) are too tightly coupled to pluginize, but a plugin can read them via `ctx.scripts` (read-only).
+- **Validation**: the existing 18 tests pass byte-for-byte (the atlas/script/prefab/scene paths are byte-identical), `npm run build` passes, and a synthetic project additionally confirms that the relocated font/particle/spine edges (including multi-page atlas→page texture) are all produced.
+
+### 11.9 Typing (JSDoc + `.d.ts`, not converting to `.ts`)
+We evaluated a full TS conversion, but it would collide with two of this project's bottom lines (zero runtime dependencies, and "clone and `node src/cli.js` runs directly"). We took a middle road instead: **keep the files as `.js`, with types via JSDoc + a single hand-written `types/index.d.ts`**, adding only the two **devDeps** `typescript`/`@types/node` (runtime stays dependency-free).
+
+- **Types**: `types/index.d.ts` declares the data model (`Asset`/`SubAsset`/`Edge`/`EdgeLocation`/`ScanResult`/`Adjacency`) and the **plugin contract** (`Plugin`/`PluginContext`), shipped with the package via `package.json` `"types"` — a plugin author gets autocomplete and checking for `ctx.addEdge`/`ctx.assets` with a single `/** @type {import('coir').Plugin} */`.
+- **Configuration**: `tsconfig.json` `allowJs` + `checkJs:false` + `strict:false` + `noEmit`; checking is **opt-in per file** via `// @ts-check`, currently covering every non-browser file (`src/core/**`, `src/node/**`); the DOM-heavy `src/browser/**` is deliberately unchecked (low return on investment). `npm run typecheck` = `tsc --noEmit`.
+- **What doesn't change**: no `.ts`, no loader, no build step — `node src/cli.js`, `node --test`, and webpack all stay as they were; JSDoc vanishes after compilation and runtime is unaffected.
+- **Validation**: `typecheck` 0 errors (and by injecting a `ctx.addEge` typo we confirmed `// @ts-check` really takes effect and the contract types really catch it); `npm test` 18/18, `npm run build` bundle unchanged, the CLI runs unchanged. To tighten later, flip `checkJs:true`/`strict:true` and annotate the browser files.
+
+### 11.10 Out-of-Repo Plugin Loading + Topology Navigation Enhancements
+**External plugin loading** (letting project-specific rules live outside coir): a `coir.plugins.mjs` config auto-loads from the **coir root** (global / cross-project) and the **scanned project's root** (that project), plus `--plugin <file>` (CLI) and `window.coir.use()` (browser runtime). CLI/node go through `src/node/loadPlugins.js`; **the browser** added `loadGlobalPlugins` (a `webpackIgnore` dynamic import of the one the dev server serves) + `loadProjectPlugins` (reads the one in the selected project via the File System Access handle, blob-URL imported, re-read per project pick). The four sources are converged by `dedupePlugins` (general→specific, a later same-name plugin overriding), and after opening a project the status line lists the active non-built-in plugins tagged `source.name` (`global`/`project`/`use`).
+
+**Topology/List navigation** (a string of keyboard/mouse refinements): in Topology, `−`/`+` for undo/redo (the centre+selection history of `navHistory`/`navForward`), `Delete` to return to List, each cell shows a copy-full-path button on hover, same-name sibling rows auto-append "the shortest distinguishing directory" (`distinguishingDirs`); in List, `↑↓` for the keyboard cursor, single-click to select, double-click/`Enter` to set as center, and switching back to List scrolls to the selected/center row and flashes it; the type filter + search string persist to `localStorage` (`coir.filter`, intersected with the project's actual types on restore). `Tab` cycles the three tabs, `Esc` clears the filter, `Ctrl/⌘+P` = quick search, `Ctrl/⌘+R` = pick directory.
+
+**Fixed by one round of code review**: `−`/`+` got a modifier guard (don't intercept `Cmd/Ctrl±` zoom), the CLI `--plugin` got a `!startsWith('-')` guard (don't swallow a following flag), and `Esc` got a typing check (don't clear the filter mid-typing).
+
+### 11.11 Topology / Quick-Search Virtualization + In-Topology Find
+The topology stutters when there are many items — `renderTopo` used `inWin` to limit only the **columns** (fixed 5), not the **rows**: a texture depended on by hundreds of prefabs spits hundreds of cells into the DOM for that column. Changed to **vertical virtualization** (fixed 30px row height, mathematically exact):
+
+- `topo.js` splits "build tree" from "paint" — `buildSide` runs once per center/selection/filter change and caches into `S.topo`; on scroll, only `paintTopo()` repaints the **rows in the window** (rAF-throttled), a spacer at the bottom holds the total scroll height, and the DOM is always about one screen of cells. Cell clicks switched to **event delegation**; ←→ navigation and centering switched to computing on cell **data** (row) rather than DOM rects (off-screen cells are no longer in the DOM).
+- **Adaptive padding**: it was a fixed `padding-block:45vh`, leaving a small graph floating in a large blank. Changed to JS setting `viewport height/2 − row height/2` — every row can scroll to the exact center of the viewport, a short tree is centered without leftover empty scroll area, and `reflowTopo` re-fits on resize.
+- `/` quick search got the same virtualization (32px row height, delegation, spacer), and the **100-result cap was lifted** in passing, so every match is reachable by scrolling.
+- **In-topology `Ctrl/⌘+F` find**: after virtualization, nodes scrolled off-screen aren't in the DOM and native Ctrl+F can't find them → a custom find searches cell **data** (all cells in the displayed columns, including the center), highlighting matches in **amber**, `Enter`/`⇧Enter` for next/previous, `Esc` to close, **scrolling only vertically to that node** (without changing the center or rebuilding the tree, so the matches don't move). The find bar is a sibling of `#topo`, so `renderTopo`'s innerHTML rewrite won't clear it.
+
+### 11.12 CI build + GitHub Pages Deploy (dist no longer in the repo)
+Originally Pages served the entire repo directly from `main`/root, so `dist/app.bundle.js` had to be committed (which incidentally exposed `src/` and `test/` too). Switched to using **GitHub Actions** as the Pages source: `.github/workflows/deploy.yml` runs `npm ci` → typecheck → test → build on push to main, then publishes a **precise** static site (`index.html` + `dist/` + `img/coir-topology.png` + robots/sitemap, **excluding `.md`**). So **`dist/` is now gitignored and `git rm --cached`'d out of the repo** — it's a pure build artifact that CI rebuilds itself each time. At the same time, screenshots moved from `docs/` to `img/` (`docs/` keeps markdown only, no longer `cp`'d together with `.md` on publish, and the 900K README-only editor screenshot is no longer published), with og:image and README links repointed to `img/`.
+
+### 11.13 Topology Presentation Enhancements: Connector Overlay / Selection-Chain Highlight / Top Bar (Filter + Breadcrumb)
+The topology flattens a DAG into a tree and originally had **no connectors**; column membership was only hinted by position (the first child shares its parent's row), which gets hard to read once it's deep. Added three things:
+
+- **Parent-child connectors**: `paintTopo` builds an `<svg class="edges">` on the fly from the grid coordinates of the **visible** cells (each parent→child a cubic bezier crossing the column boundary). `.tree` is set `position:relative`, the connectors are `z-index:0` + `pointer-events:none`, and cells are `z-index:1` on top of the lines. Coordinate alignment uses `padTop + row*ROW_H + ROW_H/2` (the same scheme as the cells' actual positions). The lines are **always grey** (per user feedback, to avoid stealing the spotlight).
+- **Selection-chain highlight**: when a node is selected, `computeSelPath` walks along `parentKeyOf` to the **ancestor chain (root→selection) + direct children** (`pathSet`/`childSet`), cells get `.onpath`/`.kid` and chain connectors get `.hot`, all in grey tones; the actual "selected/center" stays blue.
+- **Top bar `#topobar`** (appears only after a center is chosen): on the left a **filter box** = **actually hide non-matching nodes** (shares the `buildSide` pruning with the type filter: type ∧ path keyword, builds the deep tree `DEEP` when either filter is active, debounced input, clearing or `Esc` restores the full tree); on the right a **breadcrumb** = the whole chain from the selected item to the center, **always ordered "dependent → dependency"** (sorted by the signed `offsetOfKey`, so it never flips regardless of which side the selection is on), each crumb clickable to re-select, with a **copy button** beside it that copies the whole chain as **one full path per line**, and a **link button** (`copyCrumbLink`) that copies a `#topo=` topology-snapshot link for this center (see §11.15). The original `Ctrl/⌘+F` **find** (highlight + jump) was **restored** to a **floating box in the top-right corner** of the tree region — to do this, `#topo` was wrapped in the positioned container `#topowrap`, with the find box a sibling of `#topo` (`renderTopo`'s rewrite of `#topo.innerHTML` won't clear it). The division of labor is clear: **the filter narrows the scope, the find locates within the results**.
+
+### 11.14 Plugin Commands (One Definition for CLI + MCP) + `src/seam/` Cleanup
+We opened another plugin dimension: beyond types/edges, a plugin can also contribute **commands** (`commands: [{ name, usage?, description?, inputSchema?, positional?, run(ctx) }]`). Following coir's existing "one logic, two hosts" seam philosophy — `run(ctx)` **returns `{data,text}` / `{error}` and never prints**, the CLI prints text (`-o json` prints data), and one carrying `inputSchema` **is also automatically an MCP tool** returning data; **register once, two interfaces**. `ctx` is consistent across hosts (`env` / `args` (CLI positionals mapped via `positional` into the same shape as MCP JSON) / `scan` / `readText` / `resolveAsset` (the CLI prints candidates + exit 2, MCP throws → a clean tool error) / `edgeMaps` / `uuid.*` / `util`). Built-in commands always win (a colliding name is ignored with a warning); zero runtime dependencies are unchanged (`pluginCommands.js` is a pure registry). Both hosts are tested (`test/plugin-command.test.js` for the CLI, `test/plugin-mcp.test.js` for MCP). **The proof**: `timeline-viewer/coir-plugin` used it to add `coir timeline <prefab>` (also a `timeline` MCP tool), parsing the engine-free TimeLineTool structure of a Cocos prefab — one plugin holds up a substantial headless command without forking coir.
+
+In passing, the headless logic seam was **gathered into `src/seam/`**: `query.js` (reads), `shared.js` (resolve / edgeMaps / helpers), `pluginCommands.js` (command registry). The top level keeps only `cli.js` / `editCli.js` (CLI presentation) + the feature directories (`core` / `browser` / `node` / `edit` / `mcp` / `seam`); the write-side `edit/ops.js` stays co-located with `editPrefab.js`. A pure move: 10 imports updated, all tests green.
+
+### 11.15 URL-Snapshot Viewer + Embedding Outlet + Cocos Extension
+To "point at an asset and see its topology directly", embedded into other tools (especially the Cocos editor):
+
+- **URL-snapshot viewer** (`src/core/topohash.js`): compresses an asset's **neighborhood subgraph** into the URL hash `#topo=<blob>` (integer-indexed nodes + interned types/kinds + gzip + base64url; `CompressionStream` / `btoa` exist in both Node and the browser, while old Node (e.g. Cocos 3.5's Electron) has neither, falling back to bare `zlib` + `globalThis.Buffer` (interoperable gzip, equivalent base64) → zero dependencies, shared by both ends). When the browser sees `#topo=` it decodes → paints the topology, **never touching File System Access** → non-Chromium browsers (Firefox/Safari/mobile) can view it too, with only "pick a directory and scan" requiring FSA. `encodeTopo` automatically shrinks the depth from ±5 down to fit `MAX_BLOB_CHARS` (default 256KB, tunable); if even depth 1 overflows, it drops the usage sites and **always returns a link**; boundary nodes are marked `⋯`, usage sites are kept only for the nearest ±2 layers, and an "unloaded" hint is given for outer layers. The round-trip / shrinking / boundary / old-Node fallback are covered by `test/topohash.test.js`.
+- **Embedding outlet**: `package.json` added `exports` (`.` → the `src/index.js` barrel), so a host gets `scanProject` / `buildAdjacency` / `encodeTopo` / `decodeTopo` / `makeFsProvider` / `PLUGINS` / `dedupePlugins` / `loadConfigPlugins` / `COIR_ROOT`… with one line `import('coir')` (Node side; the browser still goes through `app.js`).
+- **Cocos Creator 3.5–3.8 extension** (`cocos-extension/`, `editor: >=3.5.0`; 3.5 relies on the zlib/Buffer fallback above): **right-click** an asset → a submenu lists **dependencies (→) / dependents (←)**, each jumping to that asset on click (`Editor.Selection.select`), with the top level opening a topology snapshot (`encodeTopo` → `shell.openExternal('…#topo=')`). The extension's main process **runs coir-core in-process** (cached scan, invalidated on asset-db change); the menu must be built synchronously → relying on a graph cache pushed in by main (`request` warm-up + `coir:graph` broadcast updates); en/zh i18n (`Editor.I18n.t`); `install.sh` one-click copies + symlinks coir (no npm link). Pitfall: `onAssetMenu` **can't be async** (the editor doesn't await → the whole menu vanishes), so it switched to synchronous + caching.
+
+### 11.16 Viewer Tabs + Extension Loads Project Plugins + Indented-Tree Menu
+A few polish items after §11.15 shipped (none touched the `src/core/` tests, 117 still green):
+
+- **The viewer keeps the List + Topology tabs**: the `#topo=` viewer originally only offered the topology; changed so `body.viewer` only hides **Reports** + the pick-directory button, and `cycleTab` also skips Reports in the viewer, **keeping the List** — the List lists the snapshot's nodes, and clicking a row resets the center (a snapshot has no project-level reports, so Reports stays hidden).
+- **The extension loads `coir.plugins.mjs`**: the barrel added the exports `loadConfigPlugins` / `loadPluginFiles` / `COIR_ROOT` (= the repo root, derived from `import.meta.url`); `main.js`'s `getScan` composes `dedupePlugins([...PLUGINS, ...loadConfigPlugins(COIR_ROOT), ...loadConfigPlugins(projectPath)])` like the CLI/browser before feeding `scanProject` — so the extension's right-click also picks up custom edges like audio-call (previously it only ran built-in plugins, so it missed them). **Active plugins are printed as `source.name`** (`global.audio-call` / `project.…`, the same style as the browser status line: non-built-ins after dedupe + a source tag). Node caches imports (the ESM module cache is **process-level**, and reloading the extension won't clear it), so a settings change requires **restarting the editor** to be re-read (hit in §11.17).
+- **The right-click menu changed to an indented tree** (`assets-menu.js`): the `L1/L2` text labels → **indentation** (`PAD` = NBSP×4, chosen as NBSP so the editor doesn't collapse it); `treeOf` first BFS-assigns the shortest depth + parent, then walks pre-order → each L2 is nested under its L1; both directions are "L1 flush-left, one step right per deeper level" (`depth-1`); block order `→` first, `←` second; the **per-node cap was removed** (all neighbors are listed).
+- **3.5 install validation**: `install.sh` reinstalled into the 3.8 and 3.5.2 test projects, `import('coir')` resolves from each project's `node_modules/coir` symlink back to the repo (15 exports, `COIR_ROOT` correct), and the audio-call edge (a component script → a same-name audio file) is indeed generated under the extension's full path.
+
+### 11.17 anim/skel Plugins + Plugin `assetMenus` (Asset Right-Click to See Animation Duration)
+
+Hooking the external [coir-plugins](https://github.com/aaronhg/coir-plugins) `anim`/`skel` command plugins (reading `.anim` clips, reading the Spine binary `.skel` + a vendored spine 3.8 runtime) into the editor's right-click. Requirement: right-click a `.anim` to see `Coir anim 0.33s`, right-click a `.skel` to list each animation's name/duration.
+
+- **Added an `assetMenus` plugin contribution point** (**independent** of `commands` — initially I hung it on a command, but per feedback split it into a plugin-level field of its own, so a pure asset-menu plugin needn't have a command): `{ ext?, types?, label?, rows(ctx) }`, with `rows(ctx)` computed from the asset itself (`ctx = { asset, scan, projectDir, readText }`). The contract goes into `types/index.d.ts` (`AssetMenu`/`AssetMenuContext`). CLI/MCP ignore it.
+- **Extension-side budget + push** (same scheme as the graph, since the menu must be synchronous): `main.js`'s `assetMenuSnapshot()` runs `rows(ctx)` in the background over assets matching `ext`/`type`, `mapLimit(8)` + a **`uuid:mtime` cache** (don't re-parse an unchanged `.skel`), broadcast via `coir:asset-menus` + primed with `all-asset-menus`; `assets-menu.js` renders synchronously by table lookup. **A single row collapses to a flat item** (`Coir anim  0.33s`), **multiple rows stay a submenu** (`Coir skel ▸ idle / 2s · …`) — changed from "always a submenu" per feedback.
+- **Two pitfalls hit**: ① After adding it to the global `coir.plugins.mjs` there was no right-click response — `loadConfigPlugins` uses `import(fileURL)` with no cache-bust, and the editor process's **ESM cache** kept using the old settings (the log had `global.resources-sprite` but not `global.anim/skel`); **reloading the extension won't clear the cache, you must fully restart the editor**. ② `install.sh` **copies** the extension into the project (only `node_modules/coir` is a symlink), so changing `main.js`/`assets-menu.js` requires a **reinstall** to take effect. ③ The `.animation` of a glTF/FBX model is a **sub-asset** (`uuid@sub`, not a top-level asset, not `cc.AnimationClip` JSON) → currently unsupported (only hand-authored `.anim`).
+
+### 11.18 Goto Panel
+
+A dockable **`Coir 跳轉`** ("Coir goto") panel (`panels/goto.js`; menu Panels→Coir→Jump to node… or `Ctrl+Alt+G`) connects coir's location strings ⇄ editor selection, **bidirectionally**:
+
+- **Type/paste → select**: ① a **node path** (`nodePath` (+`[i]`)) → walks the **live scene tree** (`scene` `query-node-tree`, no file reads) and selects that node; ② ending in `.ext` (`xxx.prefab`/`ui/foo.png`) → goes through `asset-db` to select the **asset** in the Assets panel (matching basename or path suffix, requiring a more complete path on a collision).
+- **Reverse backfill**: selecting a node/asset in the editor → the input auto-fills its coir `nodePath` (with `[i]` disambiguation) / filename — but it won't overwrite while you're typing in the input (`document.activeElement` check).
+- **Syntax**: matches what coir prints (`--where`, the browser "where used", the breadcrumb); strips a trailing `:Comp`/`.prop` (the editor has no API to highlight a single component card); a same-name sibling with no `[i]` → resolves to `[0]`; `#N` is unsupported (the live scene has no serialized absolute index). Enter is caught via native `keydown` (`ui-input`'s `confirm` only fires when the value changed → a second Enter previously did nothing).
+
+---
+
+## 12. Final State
+
+- **Form**: pure frontend (HTML+JS, no third-party runtime libraries, ~60KB), the Chrome File System Access API to pick a project directory; webpack-bundled, `npm run dev` hot reload; public on GitHub + GitHub Pages (MIT, auto-built + deployed by **GitHub Actions**, `dist/` not in the repo); the welcome / help page prints a **build stamp** (the commit·date injected by webpack, a dev build marked `dev`).
+- **Name**: **Coir** (CLI `coir`). The interface switches between **Traditional Chinese / English**, with a welcome card on first run + `?` help.
+- **Three tabs + a global type-filter bar**: List (a sortable asset table = layer 0, with in/out and the `∑` closure columns) / Topology (the bidirectional 5-column sliding-window tree, **vertically virtualized**, grey parent-child connectors, selection-chain highlight, a top bar = filter box (hide non-matching) + breadcrumb (dependent→dependency) + copy the whole chain, a floating `Ctrl/⌘+F` find in the top-right, with the type filter preserving paths) / Reports (unused, orphan references, atlas utilization, size, source-less-meta audit).
+- **Dependency model**: images, plist/Spine atlases, fnt, particle, prefab, scene, component, with edges covering sprite-frame/texture/script/extends/prefab/anim/font… and ClickEvent wiring; every edge carries its usage location (node path · component.property · frame). Source-less metas are not indexed but their broken links are still traceable.
+- **Headless CLI** (`src/cli.js`, `bin` registered as `coir`, zero runtime dependencies): dependency queries `deps`/`uses`/`closure`/`find`/`info` + a project-level audit `analyze` (stats/unused/orphans/atlas/size, = the node-run.js report) (`--where` prints locations as a selector you can paste back into edit, `--type` does type pruning, `-o json` for structured output) + **in-place editing of prefabs/scenes** `edit` (`tree` (structure discovery) / `get` / `set` / `swap-uuid` / `rename` / `set-parent` / `add` / `rm-*` …; real-delete + index compaction, template-by-example, nested-instance guards, atomic + mtime write guards; design in `docs/EDITING.md`). The read/write logic is extracted into a shared seam (`src/edit/ops.js` + `src/seam/query.js`), with the CLI and the **MCP server** (`coir mcp`, a hand-rolled zero-dependency JSON-RPC/stdio, typed tools: reads unprefixed / writes `edit_*`, namespaced as `coir__<tool>` in a host; see `docs/MCP.md`) sharing one source. **Plugins can further contribute commands** (`coir <name>`, and one carrying `inputSchema` automatically becomes an MCP tool; see §11.14) **and asset right-click menus** (`assetMenus`, independent of commands; see §11.17). The project directory is given via `-C <dir>` or defaults to the current directory. `npm test` runs `test/*.test.js` (synthetic projects, CI-safe, **117 cases**: CLI 98 + MCP 6 + plugin commands 6 + topohash 5 + plugin node / search index 1 each, with dual 3.5.2/3.8.6 cross-version fixtures); `test/node-run.js` runs the full report against real projects as a regression.
+- **Embedding / sharing**: the `#topo=<blob>` **URL-snapshot viewer** (a neighborhood subgraph packed into the hash → open the link to see the topology directly, **no File API needed, cross-browser**; `encodeTopo`/`decodeTopo` in `src/core/topohash.js`, auto-shrinking depth to fit 256KB); the `import('coir')` **embedding outlet** (`exports` → `src/index.js`); the **Cocos Creator 3.5–3.8 extension** (`cocos-extension/`: right-click an asset to see layered dependents/dependencies + goto + open a topology snapshot + plugin asset menus (e.g. anim/skel showing animation duration), running coir-core in-process, deployed by `install.sh`).
+- **Usage**: the browser version is `npm install && npm run dev` → open `localhost:8080` in Chrome → pick a Cocos project directory; the CLI version is `coir deps <asset>` inside the project (or `-C <project dir>` to point elsewhere; `coir --help` for everything and examples).
+
+> See `README.md` for detailed features and the data model; see `docs/EDITING.md` for the edit design and `docs/SERIALIZATION.md` for the serialization contract; see above in this file and `CLAUDE.md` for development commands and extension methods.

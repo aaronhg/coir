@@ -70,6 +70,8 @@ export const S = {
   pluginReportCache: null,  // built Plugin.reports data, per scan (cleared in setScan)
   reportTab: null,          // active 報告 sub-tab id (null → first); persists across re-renders
   reportBodies: null,       // id -> {title,sub,body} for the core sections (sync sub-tab swap)
+  sizemapSel: null,         // 體積圖 keyboard cell cursor (uuid)
+  sizemapGen: 0,            // bumped each renderSizemap; a stale thumbnail hydration bails
 };
 
 // Canonical component name (cc.Sprite / ResSprite) — same as the CLI --where and
