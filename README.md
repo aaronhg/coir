@@ -225,6 +225,7 @@ coir uses    <資源>            # = deps --in（誰參照它）
 coir closure <資源> [--type T] [--list] [-o json]   # 打包閉包
 coir find    <查詢> [--type T]                       # 依名稱找候選
 coir info    <資源>                                  # 印單一資源的 record（型別/uuid/度數/子資源/userData）
+coir share   <資源> [--depth N] [--base <url>] [--blob] [-o json]   # 產生可分享的 #topo= 拓撲快照連結（見「嵌入/整合」）
 coir analyze [section] [-o json]                     # 專案級稽核（= node-run.js 報告的 CLI 版）
 #   section = stats（總覽/邊種類/健康）| unused（未使用）| orphans [--dropped] | atlas（圖集利用率）| size [--type T][--list]；無 section = 全部
 coir duplicates [files|configs] [--type T] [-o json] # 重複資源：位元組相同的檔 / 結構相同的 prefab·material·anim
@@ -255,6 +256,8 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 
 ### URL 快照 viewer（`#topo=`）
 把某資源的**鄰域子圖**壓進網址 hash —— `https://aaronhg.github.io/coir/#topo=<blob>` —— 開連結就**直接進拓撲**、聚焦那個資源（viewer 保留 **清單＋拓撲** 兩個分頁可切，只藏報告與選目錄鈕；清單列出快照節點、點列重設中心）。資料全在 hash（節點整數索引 + gzip + base64url），所以**不需 File System Access、不需 server**：連非 Chromium（Firefox / Safari / 手機）都看得了（只有「選目錄掃描」那條才需 FSA）。可分享、可加書籤。`encodeTopo`/`decodeTopo` 在 `src/core/topohash.js`（Node 也能跑），會自動把深度從 ±5 縮到塞得進 `MAX_BLOB_CHARS`（預設 256KB、可調）、永遠回連結；鄰域外緣節點標 `⋯`、超出範圍的使用處給「未載入」提示。
+
+> ▶ **試開一個範例快照**（任何瀏覽器都行）：**[開啟拓撲快照範例](https://aaronhg.github.io/coir/#topo=H4sIAAAAAAAAE-2abYvbOBCA_0qZTy1MHCuO8_at7XFt4a6U3ZYWTAjaWMm6kSVjO-0u5f77IUvOOpv4RUm5L2dYFlkePTOazEj2yL_gBywIQggLHyF_hEUA2ZoJBghJyjb0DhCimG5VR0xzlkaUA8Lm7gGWCDsln7OHfJ8ejahIbnm-GcQsuy_b2Y5xlktRXlMRxTSPig6WJgODG6z3d0zpELAIjFHDmEbCMfa5SwwgliHjw3vGufwqUx4Oo4xTEWZOaQo5K5VJHkYsbZHapjTL9P93cp8cS2e7xzv5MMz2Qjze7h7fyAfne7IFHBUoM_9hxuiGS5k6cc4BvUaT_3zzDXB8PDyXglXHljfylJ3tLyfWoK4UOafuPmI8rAz-KEPW3UlNWqtiFc0nxhUTrjjyuUAx8UTU3j_8sg0iepYNSqrGNoCOxA5OWiIwFbKEIJmhW7iNjHCEBAPtUUBYr51PxYgPYiMBgWYZy6F0eb3AconBHMnUcEcuEk-hTXuMXqU9rrT9oj1F4puhMyST0joPydy0fVS9QQCA6m-VpDLJHNdRmff5kOiHsC5zvzDM08YEARxyxvjoRspcTUxf6und7iIhWPg3y-5vmAhZylKlsAzGzHELf_SoHtWjbFEmHdV6cGU6mp1br-_q4loze2AP7IGXAQ9pPb4yrSsP4V-EoDELb02Pc7h1pfm9il5Fr-J_reKwXPlnlqsSr4Qpf12pAqzWPFIvHYDwme7YC9clzlOV4IzhDaiQbeie5295lPwOXG9Zb1lvWW9Zb1lv2X9imdpCCfq6rGYqxU_7dMKpYC7RGloLAgQnuh5gydHvIUZm4D693JxwivJtM0aLDEgDRdV4myGFxGDUxni5WtF9LrdMvPBedQB6FsBxF-DYAuh3AfoWwEkX4MQCOO0CnFoAZ12AMwvgvAtwXnmZJjitSa3GUD7NrFkNpimWn9X-Lo9hW1Bt7NqCamPWFlQbq7ag2hi1BdXGpi2oNiafB9EI5zqIzBlWJRZ1h1Ul-RRSHHtdyfgpUwuEnhVx9a5z2bTMrlGea5ZLwUXTMyxzylmPap-lISnBVpvKfbWLVS6pLE6F68YXu67-FX3gHtcBLnFmA5200Vv92wAfdTK9xecNfO9Z_WKEhNSlZaef92xC-BXgNY-a7Yhuj5guEn0-rc55m4-f3fIou4uo1110jJNj0dviCwsjumLiR0yT93_cqH1cnzq_1V-ItI2xHvDXqRJlI6xh4SLksIDKdyj__AvD2JgDQyMAAA)** — 這條連結就是 `coir share` 產生的格式。產生方式：瀏覽器拓撲 bar 的**連結鈕**、Cocos 擴充的**開啟拓撲圖**、或 headless 的 **`coir share <資源>`**（見上）。
 
 ### 嵌入出口（`import('coir')`）
 `package.json` 的 `exports` 讓 Node host 一行 `import('coir')` 取得 `scanProject` / `buildAdjacency` / `encodeTopo` / `decodeTopo` / `makeFsProvider` / `PLUGINS` / `dedupePlugins` / `loadConfigPlugins` / `COIR_ROOT`（barrel 在 `src/index.js`；瀏覽器仍走 `app.js`）。`COIR_ROOT` 是 repo 根，host 可用它載 repo 根的全域 `coir.plugins.mjs`。

@@ -10,7 +10,7 @@
 // types/index.d.ts (env, args, scan, readText, resolveAsset, …).
 
 // Names owned by the core CLI/MCP — a plugin command can never take these.
-export const BUILTIN_COMMANDS = new Set(['deps', 'uses', 'closure', 'find', 'info', 'analyze', 'duplicates', 'edit', 'mcp']);
+export const BUILTIN_COMMANDS = new Set(['deps', 'uses', 'closure', 'find', 'info', 'analyze', 'duplicates', 'share', 'edit', 'mcp']);
 
 /**
  * Collect + normalize every plugin's `commands` into a name→spec map. Built-ins

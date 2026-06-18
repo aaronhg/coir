@@ -2,11 +2,29 @@
 // commands (editCli.js): asset resolution, edge indexing, location text. Kept
 // framework-free and side-effect-free except resolveAsset (which exits on a bad
 // target, the universal CLI behaviour). Mirrors cli.js's unchecked JS style.
-import { looksCompressed, decompressUuid } from '../core/uuid.js';
+import { looksCompressed, decompressUuid, mainUuid } from '../core/uuid.js';
 import { componentName, locSelector } from '../core/selector.js';
+import { encodeTopo } from '../core/topohash.js';
 
 export const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 export const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`);
+
+// Build a shareable #topo= snapshot of an asset's dependency neighbourhood — the
+// headless equivalent of the browser's "copy topology link" + the extension's
+// "open topology". One encoder (encodeTopo) serves browser/extension/CLI/MCP.
+// Shared by the CLI `share` command and the MCP `share` tool. Centre on the main
+// uuid (a sub-asset uuid@sub falls back to its owner node).
+const DEFAULT_VIEWER = 'https://aaronhg.github.io/coir/';
+export async function shareData(scan, uuid, { depth = null, cap = null, base: viewer = null, title = null } = {}) {
+  const opts = {};
+  if (depth != null) opts.maxDepth = depth;
+  if (cap != null) opts.cap = cap;
+  if (title) opts.title = title;
+  const center = mainUuid(uuid);
+  const r = await encodeTopo(scan, center, opts); // { blob, depth, nodes, edges, bytes, droppedLoc, over }
+  const baseUrl = viewer || (typeof process !== 'undefined' && process.env && process.env.COIR_VIEWER) || DEFAULT_VIEWER;
+  return { uuid, center, url: `${baseUrl}#topo=${r.blob}`, blob: r.blob, depth: r.depth, nodes: r.nodes, blobChars: r.blob.length, droppedLoc: r.droppedLoc };
+}
 
 // ---- target resolution: path / basename / uuid / uuid@sub ----------------
 export function resolveTarget(scan, query) {

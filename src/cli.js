@@ -32,7 +32,7 @@ import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { collectPluginCommands, mapPositionals } from './seam/pluginCommands.js';
 import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
-import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './seam/shared.js';
+import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareData } from './seam/shared.js';
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
 import { cmdEdit } from './editCli.js';
@@ -65,6 +65,7 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir closure <asset> [--type T] [--list] [-o json]
   coir find    <query> [--type T] [-o json] [--limit N]
   coir info    <asset> [-o json]
+  coir share   <asset> [--depth N] [--base <url>] [--blob] [-o json]   shareable #topo= snapshot link of its neighbourhood
   coir analyze [section] [-o json]   project-wide audit; section = stats|unused|orphans|atlas|size (none = all)
                                      stats=counts/edge-kinds/health  unused=0-referrer assets  orphans [--dropped]
                                      atlas=frame utilization  size [--type T] [--list]=per-type/largest totals
@@ -133,7 +134,7 @@ const M = {
 };
 
 function parseArgs(argv) {
-  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), kinds: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false };
+  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), kinds: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false, base: null, blob: false };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
   const addKinds = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.kinds.add(v); } };
   const pos = []; // positionals, in order, from anywhere in argv
@@ -158,6 +159,9 @@ function parseArgs(argv) {
     else if (a.startsWith('--depth=')) flags.depth = parseInt(a.slice(8), 10) || 1;
     else if (a === '--limit') flags.limit = parseInt(argv[++i], 10) || Infinity;
     else if (a.startsWith('--limit=')) flags.limit = parseInt(a.slice(8), 10) || Infinity;
+    else if (a === '--base') { if (argv[i + 1] !== undefined) flags.base = argv[++i]; } // share: viewer base URL
+    else if (a.startsWith('--base=')) flags.base = a.slice(7);
+    else if (a === '--blob') flags.blob = true; // share: output the bare #topo= blob, not the full URL
     else if (a === '--index') { const v = parseInt(argv[++i], 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a.startsWith('--index=')) { const v = parseInt(a.slice(8), 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a === '--with') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.with = argv[++i]; } // edit tree: keep nodes with this component
@@ -364,6 +368,16 @@ function cmdInfo(scan, uuid, flags) {
   console.log(lines.join('\n'));
 }
 
+// ---- share: a #topo= snapshot link of an asset's neighbourhood (headless) ----
+// The CLI equivalent of the browser's "copy topology link" — `shareData` runs the
+// shared `encodeTopo` and builds the viewer URL (same as the MCP `share` tool).
+async function cmdShare(scan, uuid, flags) {
+  const a = scan.assets.get(uuid);
+  const r = await shareData(scan, uuid, { depth: flags.depth, base: flags.base, title: a ? base(a.path) : undefined });
+  if (flags.json) { console.log(JSON.stringify(r)); return; }
+  console.log(flags.blob ? `#topo=${r.blob}` : r.url);
+}
+
 // ---- analyze: project-wide audit (the node-run.js report, as CLI sections) ---
 // `coir analyze [section]` — section ∈ stats/unused/orphans/atlas/size, or none
 // for the full report. Pure data comes from query.analyzeData (shared with the
@@ -549,7 +563,7 @@ async function main() {
     return;
   }
 
-  if (!['deps', 'uses', 'closure', 'info'].includes(command)) {
+  if (!['deps', 'uses', 'closure', 'info', 'share'].includes(command)) {
     console.error(`${M.unknownCmd(command)}\n\n${helpText}`); process.exit(1);
   }
   if (!target) { console.error(`${M.needTarget(command)}\n\n${USAGE}`); process.exit(1); }
@@ -558,6 +572,7 @@ async function main() {
 
   if (command === 'info') { cmdInfo(scan, uuid, flags); return; }
   if (command === 'closure') { cmdClosure(scan, uuid, flags); return; }
+  if (command === 'share') { await cmdShare(scan, uuid, flags); return; }
   const f = { ...flags };
   if (command === 'uses') f.dir = 'in';
   cmdDeps(scan, edgeMaps(scan), uuid, f);

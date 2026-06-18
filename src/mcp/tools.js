@@ -5,7 +5,7 @@
 // of the MCP exit). Each tool's `run(ctx, args)` returns { data } on success or
 // { error, candidates? } on failure; ctx = the live server state (scan/projectDir
 // /markDirty/forceRescan). Writes commit here (respecting dryRun/backup/force).
-import { edgeMaps, resolveTarget } from '../seam/shared.js';
+import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
@@ -83,6 +83,16 @@ export const TOOLS = [
     run: (ctx, a) => {
       const u = resolveUuid(ctx.scan, a.asset); if (u.error) return u;
       return { data: infoData(ctx.scan.assets.get(u.uuid)) };
+    },
+  },
+  {
+    name: 'share',
+    description: "A shareable #topo= snapshot link of an asset's dependency neighbourhood — opens in the browser topology viewer (no server, no upload; the subgraph rides in the URL hash). Returns { url, blob, depth, nodes, … }. depth is the requested max (auto-shrunk to fit); base overrides the viewer URL.",
+    inputSchema: { type: 'object', additionalProperties: false, required: ['asset'],
+      properties: { asset: { type: 'string', description: 'Asset by path / basename / uuid.' }, depth: { type: 'number', description: 'Max neighbourhood depth (default 5; auto-shrinks to fit).' }, base: { type: 'string', description: 'Viewer base URL (default the hosted viewer).' } } },
+    run: async (ctx, a) => {
+      const u = resolveUuid(ctx.scan, a.asset); if (u.error) return u;
+      return { data: await shareData(ctx.scan, u.uuid, { depth: a.depth, base: a.base }) };
     },
   },
   {
