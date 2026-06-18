@@ -173,7 +173,7 @@ function smoothScrollTop(el, duration = 180) {
   requestAnimationFrame(step);
 }
 function cycleTab(delta) {
-  const tabs = document.body.classList.contains('viewer') ? ['list', 'topo'] : ['list', 'topo', 'sizemap', 'reports']; // 體積圖/報告 hidden in viewer (snapshot has no sizes/files)
+  const tabs = document.body.classList.contains('viewer') ? ['list', 'topo', 'sizemap'] : ['list', 'topo', 'sizemap', 'reports']; // 報告 hidden in viewer (snapshot has no project-wide reports); 體積圖 works off the snapshot's sizes
   const i = tabs.indexOf(S.tab);
   setTab(i < 0 ? 'list' : tabs[(i + delta + tabs.length) % tabs.length]);
 }

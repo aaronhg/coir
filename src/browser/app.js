@@ -182,7 +182,7 @@ function scanFromPayload(p) {
   const ty = p.ty || [], k = p.k || [];
   const assets = new Map(), byPath = new Map();
   (p.n || []).forEach((nd, i) => {
-    const a = { uuid: String(i), path: nd[0], type: ty[nd[1]] ?? 'orphan', ext: '', importer: '', size: 0, in: 0, out: 0, subAssets: [], hasSource: true, boundary: nd[2] === 1 };
+    const a = { uuid: String(i), path: nd[0], type: ty[nd[1]] ?? 'orphan', ext: '', importer: '', size: nd[2] || 0, in: 0, out: 0, subAssets: [], hasSource: true, boundary: nd[3] === 1 };
     assets.set(a.uuid, a); byPath.set(a.path, a);
   });
   const edges = (p.e || []).map(([from, to, kIdx, extra]) => {

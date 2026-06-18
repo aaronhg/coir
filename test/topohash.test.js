@@ -64,9 +64,9 @@ test('boundary nodes are flagged when real neighbours are trimmed', async () => 
   const scan = fixture();
   const p = await decodeTopo((await encodeTopo(scan, 'n0')).blob);
   const n5 = p.n.find((r) => r[0] === 'p/n5.texture');
-  assert.equal(n5[2], 1, 'n5 is a boundary (n6 was trimmed)');
+  assert.equal(n5[3], 1, 'n5 is a boundary (n6 was trimmed)'); // [path, type, size, boundary]
   const n1 = p.n.find((r) => r[0] === 'p/n1.texture');
-  assert.equal(n1.length, 2, 'n1 is interior, not a boundary');
+  assert.equal(n1.length, 3, 'n1 is interior ([path, type, size]), not a boundary');
 });
 
 test('old-Node fallback (no CompressionStream/btoa, e.g. Cocos 3.5) round-trips via zlib + Buffer', async () => {

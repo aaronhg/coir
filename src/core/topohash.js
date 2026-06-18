@@ -97,8 +97,8 @@ function buildPayload(scan, adj, center, depth, locDepth, title) {
   const intern = (tab, map, v) => { let i = map.get(v); if (i === undefined) { i = tab.length; tab.push(v); map.set(v, i); } return i; };
   const n = order.map((key) => {
     const a = scan.assets.get(key);
-    const row = [a ? a.path : key, intern(tyTab, tyMap, a ? a.type : 'orphan')];
-    for (const nb of assetNeighbors(scan, adj, key)) if (!inSet.has(nb)) { row.push(1); break; } // boundary
+    const row = [a ? a.path : key, intern(tyTab, tyMap, a ? a.type : 'orphan'), (a && a.size) || 0]; // [path, type, bytes]
+    for (const nb of assetNeighbors(scan, adj, key)) if (!inSet.has(nb)) { row.push(1); break; } // boundary → index 3
     return row;
   });
   const e = [];

@@ -61,7 +61,7 @@
   .help-foot { flex:0 0 auto; padding:10px 16px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .ver { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; }
   /* viewer mode (URL-hash topology snapshot): topology only — hide picker + list/reports tabs */
-  body.viewer #pickBtn, body.viewer .btabs button[data-tab="reports"], body.viewer .btabs button[data-tab="sizemap"] { display:none; } /* viewer keeps 清單 + 拓撲, hides 體積圖/reports + the picker */
+  body.viewer #pickBtn, body.viewer .btabs button[data-tab="reports"] { display:none; } /* viewer keeps 清單 + 拓撲 + 體積圖 (snapshot now carries sizes), hides reports + the picker */
   .cell.bnd .cnm::after { content:' ⋯'; opacity:.45; } /* boundary node: real neighbours trimmed from the snapshot */
   .up-more { color:var(--mut); font-style:italic; }
   .help-foot a { color:var(--acc); text-decoration:none; font-size:12px; }
