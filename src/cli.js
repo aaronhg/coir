@@ -34,6 +34,7 @@ import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort } from './seam/shared.js';
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
+import { duplicatesData } from './core/duplicates.js';
 import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -67,6 +68,8 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir analyze [section] [-o json]   project-wide audit; section = stats|unused|orphans|atlas|size (none = all)
                                      stats=counts/edge-kinds/health  unused=0-referrer assets  orphans [--dropped]
                                      atlas=frame utilization  size [--type T] [--list]=per-type/largest totals
+  coir duplicates [files|configs] [--type T] [-o json]   redundant assets: byte-identical files / structurally
+                                     identical prefab·material·anim (none = both). Pair with edit --all swap-uuid.
 
 Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup, --force overrides the concurrent-change guard):
   coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
@@ -421,6 +424,31 @@ function cmdAnalyze(scan, section, flags) {
   console.log(lines.join('\n'));
 }
 
+// ---- duplicates: redundant assets (needs I/O, so not an analyze section) ------
+// `coir duplicates [files|configs]` — files = byte-identical sources, configs =
+// structurally identical prefab/material/anim. Pair with `edit --all swap-uuid`.
+function renderDupGroups(groups, lines, label) {
+  lines.push(`${label}: ${groups.length} group(s), ${kb(groups.reduce((s, g) => s + g.reclaimable, 0))} reclaimable`);
+  for (const g of groups) {
+    const flags = g.warnings.length ? `  [${g.warnings.join(', ')}]` : (g.mergeable ? '' : '  [not-mergeable]');
+    lines.push(`  ${g.key}${g.size ? ` ${kb(g.size)}` : ''} ×${g.count} · save ${kb(g.reclaimable)}${flags}`);
+    for (const m of g.members) lines.push(`      ${m.uuid === g.canonical ? '✓ keep ' : '  drop '} ${m.path}${m.in ? `  (${m.in} ref)` : ''}`);
+  }
+}
+async function cmdDuplicates(scan, fp, section, flags) {
+  if (section && !['files', 'configs'].includes(section)) { console.error(`unknown section '${section}' (files|configs)`); process.exit(1); }
+  const readers = { readBytes: fp.bytes ? (p) => fp.bytes(p) : undefined, readText: (p) => fp.readText(p) };
+  const d = await duplicatesData(scan, readers, { section, types: flags.types });
+  if (flags.json) { console.log(JSON.stringify(d)); return; }
+  const lines = [];
+  if (d.files) renderDupGroups(d.files, lines, 'files (byte-identical)');
+  if (d.files && d.configs) lines.push('');
+  if (d.configs) renderDupGroups(d.configs, lines, 'configs (structurally identical)');
+  if (!d.files && !d.configs) lines.push('nothing to check');
+  lines.push('', `total reclaimable: ${kb(d.summary.reclaimable)}  ·  merge with: coir edit --all swap-uuid <drop> <keep>`);
+  console.log(lines.join('\n'));
+}
+
 // --- Plugin-contributed commands -------------------------------------------
 // A plugin adds `commands: [{ name, usage?, description?, inputSchema?, positional?,
 // run(ctx) }]`. Registration is ONCE: the same command also becomes an MCP tool
@@ -503,6 +531,7 @@ async function main() {
 
   if (command === 'find') { cmdFind(scan, target, flags); return; }
   if (command === 'analyze') { cmdAnalyze(scan, target, flags); return; } // project-wide; target = the section (or none)
+  if (command === 'duplicates') { await cmdDuplicates(scan, fp, target, flags); return; } // redundant assets (byte / structural)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
 
   // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).

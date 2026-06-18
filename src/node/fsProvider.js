@@ -25,5 +25,6 @@ export function makeFsProvider(assetsRoot) {
     },
     readText: (p) => fs.readFile(path.join(assetsRoot, p), 'utf8'),
     size: async (p) => (await fs.stat(path.join(assetsRoot, p))).size,
+    bytes: async (p) => new Uint8Array(await fs.readFile(path.join(assetsRoot, p))),
   };
 }

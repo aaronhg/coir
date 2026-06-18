@@ -111,7 +111,7 @@ async function handlePick() {
     const plugins = dedupePlugins([...PLUGINS, ...globalP, ...projectP, ...runtimePlugins]);
     const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress });
     scan.adjacency = buildAdjacency(scan.edges);
-    ui.setScan(scan, provider.projectName, { plugins });
+    ui.setScan(scan, provider.projectName, { plugins, provider });
     // Show the active NON-builtin plugins, each prefixed `source.name`.
     const ext = plugins.filter((p) => !PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
     if (ext.length) ui.setStatus(t('status.plugins', { names: ext.join(', ') }));

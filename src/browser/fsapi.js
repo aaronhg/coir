@@ -50,5 +50,12 @@ export async function makeProvider(rootHandle) {
       if (!h) return 0;
       return (await h.getFile()).size;
     },
+    // Raw File/Blob for binary sources (images) — feeds createImageBitmap and
+    // object URLs. Used by the report thumbnails / pixel-confirmation pass.
+    file: async (p) => {
+      const h = handles.get(p);
+      if (!h) throw new Error(`no file: ${p}`);
+      return h.getFile();
+    },
   };
 }

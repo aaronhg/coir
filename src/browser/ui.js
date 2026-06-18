@@ -32,6 +32,10 @@ export function initUI({ onPick }) {
   $('help').onclick = (e) => { if (e.target === $('help')) $('help').hidden = true; }; // backdrop closes
   $('search').oninput = () => { saveFilter(); renderTable(); };
   for (const b of document.querySelectorAll('.btabs button')) b.onclick = () => setTab(b.dataset.tab);
+  // Back-to-top (清單 / 報告): show once the active tab's scroller is past a screenful.
+  $('tab-list').addEventListener('scroll', updateToTop);
+  $('tab-reports').addEventListener('scroll', updateToTop);
+  $('toTop').onclick = () => { const c = scrollContainer(); if (c) smoothScrollTop(c); };
   document.body.addEventListener('click', (e) => {
     const el = e.target.closest('[data-uuid]');
     if (!el || el.closest('#topo') || el.closest('#palette') || el.closest('#nodeList')) return; // 清單列自有單擊/雙擊處理
@@ -94,6 +98,31 @@ export function setTab(name) {
   if (name === 'topo') renderTopo();
   else if (name === 'reports') renderReports(); // reflect the current global filter
   else if (name === 'list') scrollListToSelection(); // 捲到選中/中心那列並閃一下
+  updateToTop();
+}
+// The active tab's scroll container (清單 / 報告 only — 拓撲 has its own nav).
+function scrollContainer() {
+  if (S.tab === 'list') return $('tab-list');
+  if (S.tab === 'reports') return $('tab-reports');
+  return null;
+}
+function updateToTop() {
+  const c = scrollContainer();
+  $('toTop').hidden = !c || c.scrollTop < 300;
+}
+// Custom scroll-to-top — native behavior:'smooth' has an uncontrollable (and
+// slowish) duration; this is a snappy ~180ms easeOutCubic (~half the native feel).
+function smoothScrollTop(el, duration = 180) {
+  const start = el.scrollTop;
+  if (start <= 0) return;
+  let t0 = null;
+  const step = (ts) => {
+    if (t0 == null) t0 = ts;
+    const p = Math.min(1, (ts - t0) / duration);
+    el.scrollTop = start * (1 - (1 - (1 - p) ** 3)); // easeOutCubic
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 function cycleTab(delta) {
   const tabs = document.body.classList.contains('viewer') ? ['list', 'topo'] : ['list', 'topo', 'reports']; // 報告 in viewer is hidden (snapshot)
@@ -119,13 +148,17 @@ function relocalize() {
 function setScan(s, name, opts = {}) {
   // `opts`: { plugins, viewer, center }. viewer = a URL-hash topology snapshot →
   // topology only (no list/reports/picker), focus `center` instead of the list.
-  const { plugins = PLUGINS, viewer = false, center = null } = opts;
+  const { plugins = PLUGINS, viewer = false, center = null, provider = null } = opts;
   // Fold plugin presentation into the UI before the first render: type colors
   // into TYPE_COLOR (plugin wins), localized strings into the i18n catalog.
   for (const p of plugins) {
     if (p.colors) Object.assign(TYPE_COLOR, p.colors);
     if (p.messages) registerMessages(p.messages);
   }
+  S.plugins = plugins;            // composed set (built-ins + global/project/use) — for Plugin.reports
+  S.provider = provider;          // live FileProvider for report thumbnails (null in viewer/snapshot)
+  S.pluginReportCache = null;     // a new scan invalidates any built plugin-report data
+  S.reportTab = null;             // a new project starts on the first report tab (體積圖)
   S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;
   S.searchIndex = null;
   $('topoFilterInput').value = ''; // a new project resets the topo text filter

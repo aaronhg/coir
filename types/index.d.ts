@@ -10,6 +10,10 @@ export interface FileProvider {
   listFiles(): Promise<string[]>;
   readText(path: string): Promise<string>;
   size(path: string): Promise<number>;
+  /** Read a source file's raw bytes (binary-safe). Node only; for hashing/decoding. */
+  bytes?(path: string): Promise<Uint8Array>;
+  /** A Blob/File for a source (browser) — feeds `createImageBitmap` / object URLs. */
+  file?(path: string): Promise<Blob>;
 }
 
 /** A sub-asset declared in a .meta's subMetas (e.g. a sprite-frame in an atlas). */
@@ -161,6 +165,62 @@ export interface Plugin {
    * cocos-extension/.
    */
   assetMenus?: AssetMenu[];
+  /**
+   * Browser report sections this plugin contributes to the 報告 tab. Each
+   * `build(ctx)` returns DATA (visual groups, each member optionally carrying a
+   * `CropSpec`); the host renders the section, draws a thumbnail per member from
+   * the crop, and — when crops are present — runs a generic pixel-level
+   * confirmation that upgrades/downgrades each group's badge. CLI/MCP ignore this
+   * (no DOM); snapshot/viewer mode skips it (no FileProvider). See spine's
+   * `spine-dup` report (the same shared-region data the `spine-dup` command finds).
+   */
+  reports?: ReportSection[];
+}
+
+/** A browser report section contributed by a plugin (see `Plugin.reports`). */
+export interface ReportSection {
+  id: string; // stable id → the section element id + dedup key
+  title?: string; // section heading; passed through the i18n `t()` so it may be a message key
+  build(ctx: ReportContext): VisualReport | Promise<VisualReport>;
+}
+
+/** What a `ReportSection.build(ctx)` receives — the finished scan + a text reader. */
+export interface ReportContext {
+  scan: ScanResult;
+  readText(path: string): Promise<string>; // read any source under assets/ (POSIX-relative)
+}
+
+/** Data a report section returns; the host renders it generically. */
+export interface VisualReport {
+  groups: VisualGroup[];
+  note?: string; // small sub-text shown beside the heading (e.g. a count)
+}
+
+/** One group of members claimed equivalent — the host can confirm via pixels. */
+export interface VisualGroup {
+  key: string;
+  label: string;
+  /** Initial confidence; the host may overwrite it after pixel confirmation. */
+  badge?: 'confirmed' | 'likely' | 'name-only' | 'different';
+  note?: string; // e.g. dimensions, or "dims differ"
+  members: VisualMember[];
+}
+
+/** One member of a `VisualGroup`. */
+export interface VisualMember {
+  label: string; // e.g. the atlas path (shown as a caption)
+  focusUuid?: string; // click → focus this asset in the UI
+  crop?: CropSpec; // present → the host draws a thumbnail + uses it for confirmation
+}
+
+/** A rectangle to crop out of a source image, for a thumbnail / pixel signature. */
+export interface CropSpec {
+  page: string; // POSIX-relative path of the source image (e.g. an atlas page .png)
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotate?: boolean; // libGDX 90° pack — the host un-rotates before drawing/hashing
 }
 
 /**

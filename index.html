@@ -97,7 +97,12 @@
   .tab { position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
   .tab[hidden] { display:none; }
   #tab-list { padding:0 10px 10px; overflow:auto; } /* NO top padding: a sticky thead top:0 inside a padded scroller leaves a band where rows bleed above the header */
-  #tab-reports { padding:10px; overflow:auto; }
+  #tab-reports { padding:0 10px 10px; overflow:auto; } /* no top padding: the .rtabs sticky bar sits flush at the top */
+  /* back-to-top button (清單 / 報告) */
+  .totop { position:fixed; right:18px; bottom:46px; z-index:40; width:38px; height:38px; border-radius:50%;
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line); box-shadow:0 3px 12px rgba(0,0,0,.4);
+    cursor:pointer; font-size:18px; line-height:1; display:flex; align-items:center; justify-content:center; }
+  .totop:hover { background:var(--line); color:#fff; }
   /* list tab */
   #search { width:100%; padding:7px 9px; background:var(--panel2); border:1px solid var(--line); border-radius:6px; color:var(--fg); margin:10px 0 8px; }
   .chip { display:inline-flex; align-items:center; gap:4px; font-size:13px; color:var(--mut); cursor:pointer; background:var(--panel2); padding:3px 8px; border-radius:10px; border:1px solid transparent; opacity:.55; }
@@ -139,6 +144,41 @@
   .rbody { padding:2px 0 10px; }
   .warn { color:#ef9a9a; } .dyn { color:#ffd54f; } .muted { color:var(--mut); }
   .rbody h4 { margin:8px 0 4px; font-size:13px; color:var(--mut); font-weight:600; }
+  /* report sub-tabs (one per section) */
+  .rtabs { position:sticky; top:0; z-index:2; background:var(--bg); padding-top:8px; display:flex; flex-wrap:wrap; gap:2px; border-bottom:1px solid var(--line); margin-bottom:10px; }
+  .rtab { background:none; border:none; border-bottom:2px solid transparent; color:var(--mut); padding:6px 11px; cursor:pointer; font-size:13px; border-radius:6px 6px 0 0; }
+  .rtab:hover { color:#fff; background:var(--panel2); }
+  .rtab.active { color:#fff; border-bottom-color:#4fc3f7; font-weight:600; }
+  .rbody-head { padding:2px 2px 8px; font-weight:600; color:#fff; }
+  .rbody-head .sub { color:var(--mut); font-weight:400; font-size:12px; }
+  /* size map (treemap) — thin gaps via cell inset, no thick borders */
+  .sizemap { width:100%; height:auto; display:block; border-radius:6px; overflow:hidden; cursor:grab; touch-action:none; }
+  .sizemap:active { cursor:grabbing; }
+  .sizemap .tmrect, .sizemap .tmimg { cursor:pointer; }
+  .sizemap .tmimg { clip-path:inset(0 round 2px); }
+  .sizemap .tmrect:hover, .sizemap .tmimg:hover { stroke:#fff; stroke-width:1; stroke-opacity:.85; }
+  .sizemap .tmname { fill:#fff; pointer-events:none; paint-order:stroke; stroke:rgba(0,0,0,.78); stroke-linejoin:round; }
+  .sizemap .tmother { stroke:rgba(255,255,255,.18); stroke-width:.6; stroke-dasharray:3 2; cursor:default; }
+  .sizemap .tmotherl { font-size:11px; fill:rgba(255,255,255,.7); pointer-events:none; }
+  /* plugin visual reports (e.g. spine cross-atlas dup): side-by-side thumbnails */
+  .vgroup { margin:8px 0; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--panel2); }
+  .vgroup.isdiff { opacity:.55; }
+  .vghead { display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+  .vglabel { font-weight:600; }
+  .vgnote { color:var(--mut); font-size:12px; font-variant-numeric:tabular-nums; }
+  .vbadge { font-size:11px; line-height:1.6; padding:0 7px; border-radius:10px; color:#fff; white-space:nowrap; }
+  .vbadge.confirmed { background:#2e7d32; } .vbadge.likely { background:#9a7d00; }
+  .vbadge.name-only { background:#566; } .vbadge.different { background:#a23b3b; }
+  .vthumbs { display:flex; gap:12px; flex-wrap:wrap; }
+  .vmember { margin:0; width:96px; cursor:pointer; }
+  .vmember figcaption { margin-top:4px; font-size:11px; color:var(--mut); text-align:center; line-height:1.2; word-break:break-all; overflow-wrap:anywhere; }
+  .vmember:hover figcaption { color:#fff; }
+  .vthumb { width:96px; height:96px; border:1px solid var(--line); border-radius:4px; background-color:#15171c;
+    background-position:center; background-repeat:no-repeat; background-size:contain;
+    background-image:linear-gradient(45deg,#23262e 25%,transparent 25%,transparent 75%,#23262e 75%),linear-gradient(45deg,#23262e 25%,transparent 25%,transparent 75%,#23262e 75%);
+    background-size:12px 12px; background-position:0 0,6px 6px; }
+  .vthumb.loaded { background-size:contain; background-position:center; }
+  .vthumb.nocrop, .vthumb.failed { display:flex; align-items:center; justify-content:center; color:var(--mut); background-image:none; }
   table.tt { width:100%; border-collapse:collapse; font-size:13px; }
   table.tt th, table.tt td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
   table.tt td:first-child { display:flex; align-items:center; gap:8px; }
@@ -284,6 +324,7 @@
     <div id="reports"><div class="empty" data-i18n="empty.pickFirst">先選擇專案目錄</div></div>
   </section>
 </div>
+<button id="toTop" class="totop" hidden data-i18n-title="totop" title="回最上面">↑</button>
 <div id="palette" hidden>
   <div class="palette-box">
     <input id="paletteInput" data-i18n-ph="palette.ph" placeholder="搜尋檔名 / uuid…　(↑↓ 選擇 · Enter 開啟 · Esc 關閉)" spellcheck="false">

@@ -32,6 +32,7 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
   state.markDirty = () => { state.dirty = true; };
   state.forceRescan = rescan;
   state.readText = (p) => fp.readText(p); // plugin MCP tools read sources under assets/ via ctx.readText
+  state.bytes = fp.bytes ? (p) => fp.bytes(p) : undefined; // binary read for the `duplicates` tool (byte-dup)
   const ensureFresh = async () => { if (state.dirty || !state.scan) await rescan(); };
 
   await rescan(); // initial scan (throws loudly if the project dir is wrong)

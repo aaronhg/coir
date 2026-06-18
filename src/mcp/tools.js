@@ -7,6 +7,7 @@
 // /markDirty/forceRescan). Writes commit here (respecting dryRun/backup/force).
 import { edgeMaps, resolveTarget } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
+import { duplicatesData } from '../core/duplicates.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
@@ -100,6 +101,16 @@ export const TOOLS = [
       const opts = { types: setOf(a.type), limit: a.limit ?? 30, dropped: !!a.dropped, list: !!a.list };
       return { data: section === 'all' ? analyzeAll(ctx.scan, opts) : analyzeData(ctx.scan, section, opts) };
     },
+  },
+  {
+    name: 'duplicates',
+    description: 'Redundant assets to merge. files = byte-identical source files (different uuids); configs = structurally identical prefab/material/anim (catches editor copy-paste that byte-hashing misses). Each group has a suggested canonical (keep) + redundant (drop), mergeable flag, and reclaimable bytes — pair with edit_swap_uuid (all:true). Default both.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: {
+        section: { type: 'string', enum: ['files', 'configs'], description: 'Restrict to one axis (default: both).' },
+        type: { type: 'string', description: 'Restrict to one asset type.' },
+      } },
+    run: async (ctx, a) => ({ data: await duplicatesData(ctx.scan, { readBytes: ctx.bytes, readText: ctx.readText }, { section: a.section, types: setOf(a.type) }) }),
   },
   {
     name: 'tree',
