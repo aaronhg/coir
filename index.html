@@ -72,6 +72,11 @@
   .help-body li { margin:4px 0; }
   .help-body code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px; }
   .help-body kbd { background:var(--panel2); border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; font:11px ui-monospace,Menlo,monospace; color:var(--fg); }
+  .help-body pre { background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:7px 32px 7px 9px; margin:6px 0; font:12px ui-monospace,Menlo,monospace; white-space:pre-wrap; word-break:break-all; overflow-x:auto; }
+  .help-body .cmd { position:relative; }
+  .help-body .cmdcopy { position:absolute; top:6px; right:6px; width:24px; height:22px; display:inline-flex; align-items:center; justify-content:center; background:var(--panel); border:1px solid var(--line); border-radius:4px; color:var(--mut); cursor:pointer; }
+  .help-body .cmdcopy:hover { color:#fff; background:var(--line); }
+  .help-body .cmdcopy.ok { color:var(--acc); border-color:var(--acc); }
   /* global type filter — shared by 清單 / 拓撲 / 報告 */
   #filterbar { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
   #filterbar[hidden] { display:none; }
@@ -90,6 +95,10 @@
   .welcome-box .wbtn { background:var(--acc); color:#04222f; border:0; padding:12px 22px; border-radius:8px; font-weight:600; font-size:15px; cursor:pointer; }
   .welcome-box .wbtn:hover { filter:brightness(1.08); }
   .welcome-box .wbtn:disabled { opacity:.5; cursor:not-allowed; }
+  .recents { margin-top:18px; display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:8px; }
+  .recents-h { width:100%; color:var(--mut); font-size:11px; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }
+  .recents .rbtn { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--acc); color:#04222f; border:0; border-radius:7px; padding:8px 14px; cursor:pointer; font-size:14px; font-weight:600; }
+  .recents .rbtn:hover { filter:brightness(1.08); }
   .welcome-box .note { color:var(--mut); font-size:12px; margin:16px 0 0; }
   .welcome-box .werr { color:#ef5350; font-size:13px; line-height:1.5; margin:16px 0 0; }
   .welcome-box .werr[hidden] { display:none; }
@@ -308,6 +317,7 @@
       <h1>🥥 Coir</h1>
       <p class="tagline" data-i18n-html="welcome.tagline"></p>
       <button id="welcomeBtn" class="wbtn" data-i18n="btn.pick">選擇 Cocos 專案目錄</button>
+      <div id="recentProjects" class="recents" hidden></div>
       <p class="werr" id="welcomeErr" hidden></p>
       <p class="note" data-i18n="welcome.note">需 Chrome / Edge（File System Access API）</p>
       <p class="ver" id="buildInfo"></p>

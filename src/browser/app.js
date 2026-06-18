@@ -6,6 +6,7 @@ import { decodeTopo } from '../core/topohash.js';
 import { PLUGINS, dedupePlugins } from '../core/plugins/index.js';
 import { initUI } from './ui.js';
 import { t } from './i18n.js';
+import { listRecent, addRecent, removeRecent } from './recent.js';
 
 // Runtime plugin registration (browser only — the CLI uses the registry). Call
 // `window.coir.use(plugin)` before picking a project; built-ins + runtime
@@ -82,10 +83,14 @@ function showHashTopo() {
   viewerFromHash(m[1]).catch(hashError);
   return true;
 }
-if (!showHashTopo() && !fsApiSupported()) {
-  ui.setStatus(t('err.noFsApi'));
-  document.getElementById('pickBtn').disabled = true;
-  document.getElementById('welcomeBtn').disabled = true;
+if (!showHashTopo()) {
+  if (!fsApiSupported()) {
+    ui.setStatus(t('err.noFsApi'));
+    document.getElementById('pickBtn').disabled = true;
+    document.getElementById('welcomeBtn').disabled = true;
+  } else {
+    renderRecents(); // one-click re-open of previously-picked projects
+  }
 }
 // Live: editing / pasting a new #topo= in the address bar re-renders without a
 // reload; clearing it while in the viewer returns to the normal app.
@@ -94,31 +99,78 @@ window.addEventListener('hashchange', () => {
   if (document.body.classList.contains('viewer')) location.reload();
 });
 
+// Scan + render a project from its root directory handle (shared by the picker
+// and the recent-projects buttons). Persists the handle on success.
+async function openRoot(root) {
+  ui.setStatus(t('status.reading'));
+  const provider = await makeProvider(root);
+  ui.setStatus(t('status.scanning', { n: provider.fileCount }));
+  // built-ins → coir-root global → project-local → window.coir.use() runtime
+  // (most-specific last; dedupePlugins lets a later same-name plugin override).
+  const globalP = await loadGlobalPlugins();
+  const projectP = await loadProjectPlugins(root);
+  const srcOf = new Map(); // plugin object -> source ('global' | 'project' | 'use')
+  for (const p of globalP) srcOf.set(p, 'global');
+  for (const p of projectP) srcOf.set(p, 'project');
+  for (const p of runtimePlugins) srcOf.set(p, 'use');
+  const plugins = dedupePlugins([...PLUGINS, ...globalP, ...projectP, ...runtimePlugins]);
+  const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress });
+  scan.adjacency = buildAdjacency(scan.edges);
+  ui.setScan(scan, provider.projectName, { plugins, provider });
+  // Show the active NON-builtin plugins, each prefixed `source.name`.
+  const ext = plugins.filter((p) => !PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
+  if (ext.length) ui.setStatus(t('status.plugins', { names: ext.join(', ') }));
+  addRecent(root); // remember it (best-effort) for one-click re-open next time
+}
+
 async function handlePick() {
+  let root;
+  try { root = await pickProjectDirectory(); }
+  catch (e) { if (e && e.name === 'AbortError') return; console.error(e); ui.setStatus(t('status.error', { msg: (e && e.message) || e })); return; }
+  try { await openRoot(root); }
+  catch (e) { console.error(e); ui.setStatus(t('status.error', { msg: (e && e.message) || e })); }
+}
+
+// Re-open a remembered project: re-check / re-request read permission (the button
+// click is the required user gesture), then scan. A vanished folder is dropped.
+async function openRecent(it) {
   try {
-    const root = await pickProjectDirectory();
-    ui.setStatus(t('status.reading'));
-    const provider = await makeProvider(root);
-    ui.setStatus(t('status.scanning', { n: provider.fileCount }));
-    // built-ins → coir-root global → project-local → window.coir.use() runtime
-    // (most-specific last; dedupePlugins lets a later same-name plugin override).
-    const globalP = await loadGlobalPlugins();
-    const projectP = await loadProjectPlugins(root);
-    const srcOf = new Map(); // plugin object -> source ('global' | 'project' | 'use')
-    for (const p of globalP) srcOf.set(p, 'global');
-    for (const p of projectP) srcOf.set(p, 'project');
-    for (const p of runtimePlugins) srcOf.set(p, 'use');
-    const plugins = dedupePlugins([...PLUGINS, ...globalP, ...projectP, ...runtimePlugins]);
-    const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress });
-    scan.adjacency = buildAdjacency(scan.edges);
-    ui.setScan(scan, provider.projectName, { plugins, provider });
-    // Show the active NON-builtin plugins, each prefixed `source.name`.
-    const ext = plugins.filter((p) => !PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
-    if (ext.length) ui.setStatus(t('status.plugins', { names: ext.join(', ') }));
+    const opts = { mode: 'read' };
+    let perm = await it.handle.queryPermission(opts);
+    if (perm !== 'granted') perm = await it.handle.requestPermission(opts);
+    if (perm !== 'granted') { ui.setStatus(t('err.perm')); return; }
+    await openRoot(it.handle);
   } catch (e) {
-    if (e && e.name === 'AbortError') return; // user cancelled the picker
+    if (e && e.name === 'AbortError') return;
     console.error(e);
     ui.setStatus(t('status.error', { msg: (e && e.message) || e }));
+    if (e && e.name === 'NotFoundError') { await removeRecent(it.id); renderRecents(); } // folder moved/deleted → drop it
+  }
+}
+
+// List previously-opened projects as buttons on the welcome card.
+async function renderRecents() {
+  const box = document.getElementById('recentProjects');
+  if (!box) return;
+  if (!fsApiSupported()) { box.hidden = true; return; }
+  const items = await listRecent();
+  // Keep only the ones re-openable WITHOUT a permission prompt (still granted);
+  // anything else (permission lapsed / folder gone) is purged from IndexedDB.
+  const granted = [];
+  for (const it of items) {
+    let perm = 'denied';
+    try { perm = await it.handle.queryPermission({ mode: 'read' }); } catch { /* ignore */ }
+    if (perm === 'granted') granted.push(it);
+    else removeRecent(it.id);
+  }
+  box.textContent = '';
+  if (!granted.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const h = document.createElement('div'); h.className = 'recents-h'; h.textContent = t('welcome.recent'); box.appendChild(h);
+  for (const it of granted) {
+    const b = document.createElement('button'); b.className = 'rbtn'; b.textContent = it.name; b.title = it.name;
+    b.onclick = () => openRecent(it);
+    box.appendChild(b);
   }
 }
 

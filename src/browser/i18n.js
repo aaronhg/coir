@@ -18,18 +18,27 @@ const MESSAGES = {
     'palette.hint': '<b>@</b> sprite-frame　<b>#</b> 型別　<b>&gt;</b> 引用處/節點　<b>~</b> 邊種類　·　貼 uuid 直接跳',
     'welcome.tagline': '載入一個 <b>Cocos Creator 3.8.x</b> 專案，瀏覽資源的<b>使用情形</b>與<b>依賴拓撲</b>。<br>全程在瀏覽器端執行，<b>不會上傳任何檔案</b>。',
     'welcome.note': '需 Chrome / Edge（File System Access API）',
+    'welcome.recent': '最近開啟',
+    'err.perm': '未取得讀取此資料夾的權限',
     'help.btn': '說明',
     'help.title': '說明',
     'help.close': '關閉',
+    'help.copy': '複製',
     'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資源的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
-      + '<h3>三個分頁</h3><ul><li><b>清單</b> — 可排序資源表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為拓撲中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
-      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗，父子間以灰色連線相連、選中時整條鏈（祖先）與直接子節點會加亮。選一個節點會自動顯示它「用在哪」。頂端的 bar：左邊<b>篩選框</b>會直接隱藏不相符的節點（清空或 <kbd>Esc</kbd> 即還原），右邊<b>麵包屑</b>顯示到中心的整條鏈（方向固定「被依賴 → 依賴」，每節可點跳選，旁邊一顆按鈕複製整條鏈）。</li>'
-      + '<li><b>報告</b> — 未使用、孤兒參照、圖集利用率、資源體積、缺來源檔的 meta。</li></ul>'
-      + '<h3>型別篩選</h3><p>banner 下方的型別徽章三個分頁共用：篩清單／報告；在拓撲上保留「通往該型別」的路徑、剪掉無關的分支。</p>'
+      + '<h3>四個分頁</h3><ul><li><b>清單</b> — 可排序資源表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
+      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗，父子間以灰色連線相連、選中時整條鏈（祖先）與直接子節點會加亮。選一個節點會自動顯示它「用在哪」。頂端 bar：左邊<b>篩選框</b>直接隱藏不相符的節點（清空或 <kbd>Esc</kbd> 即還原），右邊<b>麵包屑</b>顯示到中心的整條鏈（方向固定「被依賴 → 依賴」，每節可點跳選，旁邊按鈕複製整條鏈／拓撲快照連結）。</li>'
+      + '<li><b>體積圖</b> — 把資源依大小攤成 treemap（方塊面積 ∝ bytes、按型別上色），<b>範圍＝拓撲中心的依賴 closure</b>（沒中心則整個專案），圖檔直接貼縮圖。<b>單擊</b>方塊鑽入它的依賴體積、<b>雙擊</b>跳到拓撲；hover 看名稱＋體積、<b>兩指縮放</b>＋滑動平移、方向鍵移動＋<kbd>Enter</kbd> 鑽入。</li>'
+      + '<li><b>報告</b>（子分頁）— 未使用／孤兒參照、圖集利用率、資源體積、缺來源檔的 meta，以及外掛貢獻的<b>跨圖集重複圖</b>（同一張美術被打進多個 Spine／.plist 圖集，並排縮圖＋逐像素確認）。</li></ul>'
+      + '<h3>型別篩選</h3><p>banner 下方的型別徽章各分頁共用：篩清單／報告／體積圖（體積圖的徽章數量還會跟著目前範圍變動）；在拓撲上保留「通往該型別」的路徑、剪掉無關的分支。</p>'
       + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 引用處/節點、<kbd>~</kbd> 邊種類（單打 <kbd>~</kbd> 列出可選種類）；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
-      + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁、<kbd>Esc</kbd> 清空類型篩選</li>'
-      + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> 選擇專案目錄</li>'
-      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Delete</kbd> 回清單、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> 在此拓撲中尋找、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li></ul>',
+      + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁（<kbd>Delete</kbd> 反向）、<kbd>Esc</kbd> 清空類型篩選</li>'
+      + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋</li>'
+      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> 在此拓撲中尋找、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li>'
+      + '<li>體積圖：方向鍵移動方塊游標、<kbd>Enter</kbd> 鑽入、<kbd>−</kbd>／<kbd>+</kbd> 中心歷史；單擊鑽入、雙擊跳拓撲</li></ul>'
+      + '<h3>命令列工具（headless）</h3><p>除了這個網頁，coir 還有一套 <b>CLI</b>（查依賴、找重複資源、就地編輯 prefab/scene）與 <b>MCP server</b>。零執行期相依，一行安裝（把 <code>coir</code> 連到 PATH）：</p>'
+      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install.sh | sh</pre>'
+      + '<p>Cocos Creator 擴充（右鍵查依賴）— 自包含安裝進專案：</p>'
+      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install-extension.sh | sh -s -- &lt;Cocos 專案路徑&gt;</pre>',
     'help.github': '在 GitHub 上查看 ↗',
     // banner / status
     'stats': '{assets} 資源 · {edges} 邊 · {orphans} 孤兒參照',
@@ -142,18 +151,27 @@ const MESSAGES = {
     'palette.hint': '<b>@</b> sprite-frame　<b>#</b> type　<b>&gt;</b> usage/node　<b>~</b> edge-kind　·　paste a uuid to jump',
     'welcome.tagline': 'Load a <b>Cocos Creator 3.8.x</b> project to explore asset <b>usage</b> and the <b>dependency topology</b>.<br>Everything runs in your browser — <b>no files are uploaded</b>.',
     'welcome.note': 'Requires Chrome / Edge (File System Access API)',
+    'welcome.recent': 'Recent projects',
+    'err.perm': 'Permission to read this folder was not granted',
     'help.btn': 'Help',
     'help.title': 'Help',
     'help.close': 'Close',
+    'help.copy': 'Copy',
     'help.body': '<h3>What it is</h3><p>Load a <b>Cocos Creator 3.8.x</b> project to analyze asset <b>usage</b> and the <b>dependency topology</b>. Everything runs in your browser — no files are uploaded.</p>'
-      + '<h3>Three tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click to select, double-click (or <kbd>Enter</kbd>) to centre the topology on it; <kbd>↑</kbd> <kbd>↓</kbd> move between rows.</li>'
-      + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window, with grey parent→child connectors and the selected node\'s chain (ancestors) + direct children highlighted. Selecting a node auto-shows where it is used. The top bar: a <b>filter box</b> on the left that hides non-matching nodes (clear or <kbd>Esc</kbd> restores), and a <b>breadcrumb</b> on the right showing the chain to the centre (fixed dependents → dependencies, each crumb clickable, with a button to copy the whole chain).</li>'
-      + '<li><b>Reports</b> — unused, orphan refs, atlas utilization, asset size, source-less metas.</li></ul>'
-      + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports, and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
+      + '<h3>Four tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click to select, double-click (or <kbd>Enter</kbd>) to set it as the centre; <kbd>↑</kbd> <kbd>↓</kbd> move between rows.</li>'
+      + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window, with grey parent→child connectors and the selected node\'s chain (ancestors) + direct children highlighted. Selecting a node auto-shows where it is used. The top bar: a <b>filter box</b> on the left that hides non-matching nodes (clear or <kbd>Esc</kbd> restores), and a <b>breadcrumb</b> on the right showing the chain to the centre (fixed dependents → dependencies, each crumb clickable, with buttons to copy the chain / a snapshot link).</li>'
+      + '<li><b>Size map</b> — a treemap of asset bytes (cell area ∝ size, coloured by type), <b>scoped to the topology centre\'s dependency closure</b> (or the whole project when there\'s no centre), with image thumbnails painted in. <b>Single-click</b> a cell to drill into its dependency size, <b>double-click</b> to jump to Topology; hover for name+size, <b>pinch to zoom</b> + scroll to pan, arrows to move + <kbd>Enter</kbd> to drill.</li>'
+      + '<li><b>Reports</b> (sub-tabs) — unused/orphan refs, atlas utilization, asset size, source-less metas, plus a plugin-contributed <b>cross-atlas duplicate</b> view (the same art baked into multiple Spine/.plist atlases — side-by-side thumbnails + pixel confirmation).</li></ul>'
+      + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports/Size map (the Size-map counts also track the current scope), and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
       + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node, <kbd>~</kbd> edge-kind (type <kbd>~</kbd> to list them); <kbd>#</kbd>/<kbd>~</kbd> are two-part (<code>#type query</code>, <code>~kind query</code>). Paste a uuid to jump.</p>'
-      + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab, <kbd>Esc</kbd> clear type filter</li>'
-      + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>R</kbd> choose project folder</li>'
-      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Delete</kbd> to list, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> find in this topology, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li></ul>',
+      + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab (<kbd>Delete</kbd> reverse), <kbd>Esc</kbd> clear type filter</li>'
+      + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search</li>'
+      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> find in this topology, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li>'
+      + '<li>Size map: arrows move the cell cursor, <kbd>Enter</kbd> drill, <kbd>−</kbd>/<kbd>+</kbd> centre history; single-click drills, double-click jumps to Topology</li></ul>'
+      + '<h3>Command-line tools (headless)</h3><p>Besides this web UI, coir ships a <b>CLI</b> (query deps, find duplicate assets, edit prefabs/scenes in place) and an <b>MCP server</b>. Zero runtime deps — install in one line (links <code>coir</code> onto your PATH):</p>'
+      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install.sh | sh</pre>'
+      + '<p>Cocos Creator extension (right-click dependency lookup) — self-contained install into a project:</p>'
+      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install-extension.sh | sh -s -- &lt;cocos-project-path&gt;</pre>',
     'help.github': 'View on GitHub ↗',
     'stats': '{assets} assets · {edges} edges · {orphans} orphan refs',
     'err.noFsApi': 'This browser lacks the File System Access API — use Chrome / Edge over http://localhost',

@@ -3,7 +3,7 @@
 //   list.js  topo.js  usage.js  palette.js  reports.js  filterbar.js  copy.js
 // and the shared state + helpers in state.js. Three banner tabs (清單 / 拓撲 /
 // 報告) over one content area; "/" opens quick-open.
-import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus, CHECK_ICON } from './state.js';
+import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus, CHECK_ICON, COPY_ICON } from './state.js';
 import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
 import { summary } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure } from '../core/graph.js';
@@ -28,9 +28,12 @@ export function initUI({ onPick }) {
   if (ls) { ls.value = getLocale(); ls.onchange = () => { setLocale(ls.value); relocalize(); }; }
   $('pickBtn').onclick = onPick;
   $('welcomeBtn').onclick = onPick;
-  $('helpBtn').onclick = () => { $('help').hidden = false; };
+  $('helpBtn').onclick = () => { $('help').hidden = false; addHelpCopyButtons(); };
   $('helpClose').onclick = () => { $('help').hidden = true; };
-  $('help').onclick = (e) => { if (e.target === $('help')) $('help').hidden = true; }; // backdrop closes
+  $('help').onclick = (e) => { if (e.target === $('help')) { $('help').hidden = true; return; } // backdrop closes
+    const b = e.target.closest('.cmdcopy'); // copy a curl command block
+    if (b) { const pre = b.parentElement.querySelector('pre'); const orig = b.innerHTML;
+      copyToClipboard(pre.textContent, () => { b.innerHTML = CHECK_ICON; b.classList.add('ok'); setTimeout(() => { b.innerHTML = orig; b.classList.remove('ok'); }, 1200); }); } };
   $('search').oninput = () => { saveFilter(); renderTable(); };
   for (const b of document.querySelectorAll('.btabs button')) b.onclick = () => setTab(b.dataset.tab);
   // Back-to-top (清單 / 報告): show once the active tab's scroller is past a screenful.
@@ -97,6 +100,18 @@ export function initUI({ onPick }) {
     else if (S.tab === 'sizemap') { clearTimeout(smResizeT); smResizeT = setTimeout(renderSizemap, 200); } // debounce (re-decodes thumbs)
   });
   return { setScan, onProgress, setStatus };
+}
+
+// Give each curl command block in the help modal a hover copy button (idempotent).
+function addHelpCopyButtons() {
+  for (const pre of document.querySelectorAll('.help-body pre')) {
+    if (pre.parentElement.classList.contains('cmd')) continue;
+    const wrap = document.createElement('div'); wrap.className = 'cmd';
+    pre.parentNode.insertBefore(wrap, pre); wrap.appendChild(pre);
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'cmdcopy';
+    btn.title = t('help.copy'); btn.innerHTML = COPY_ICON;
+    wrap.appendChild(btn);
+  }
 }
 
 export function setTab(name) {
@@ -228,7 +243,6 @@ function onKey(e) {
   if ((e.key === 'p' || e.key === 'P') && mod) { e.preventDefault(); openPalette(); return; }        // Ctrl/⌘+P = "/"
   if ((e.key === 'f' || e.key === 'F') && mod && S.tab === 'topo' && S.treeRoot) { e.preventDefault(); openTopoFind(); return; } // Ctrl/⌘+F find in the (virtualized) topology
 
-  if ((e.key === 'r' || e.key === 'R') && mod) { e.preventDefault(); $('pickBtn').click(); return; }  // Ctrl/⌘+R 選擇目錄
   if ((e.key === 'c' || e.key === 'C') && mod) {                                                      // Ctrl/⌘+C 複製名稱
     if (typing) return;                                            // copying inside an input
     if (window.getSelection && window.getSelection().toString()) return; // a text selection exists → let the browser copy it
@@ -245,6 +259,7 @@ function onKey(e) {
   if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
   if (typing) return;
   if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; } // Tab 切分頁
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); cycleTab(-1); return; } // Delete = 反向切分頁
   // − / + step the shared centre history in any centred view (清單/拓撲/體積圖; not 報告).
   if (e.key === '-' && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navBack(); return; }
   if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navForward(); return; }
@@ -254,15 +269,13 @@ function onKey(e) {
     if (e.key === 'Enter' && S.listSel) { e.preventDefault(); focus(S.listSel); return; }
     return;
   }
-  if (S.tab === 'sizemap') {                              // 體積圖：←→↑↓ 移動方塊游標、Enter 鑽入、Del 回整個專案
+  if (S.tab === 'sizemap') {                              // 體積圖：←→↑↓ 移動方塊游標、Enter 鑽入
     const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
     if (d) { e.preventDefault(); sizemapMove(d); return; }
     if (e.key === 'Enter') { e.preventDefault(); sizemapEnter(); return; }
-    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); sizemapClearCenter(); return; }
     return;
   }
   if (S.tab !== 'topo' || !S.treeRoot) return;
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); setTab('list'); return; }  // 回清單
   if (e.key === 'Enter') { const u = selectedUuid(); if (u) { e.preventDefault(); focus(u); } return; }
   const dir = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.key];
   if (!dir) return;
