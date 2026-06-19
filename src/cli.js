@@ -35,6 +35,7 @@ import { makeFsProvider } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareData } from './seam/shared.js';
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
+import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from './core/rules.js';
 import { cmdEdit } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -66,11 +67,13 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir find    <query> [--type T] [-o json] [--limit N]
   coir info    <asset> [-o json]
   coir share   <asset> [--depth N] [--base <url>] [--blob] [-o json]   shareable #topo= snapshot link of its neighbourhood
-  coir analyze [section] [-o json]   project-wide audit; section = stats|unused|orphans|atlas|size (none = all)
+  coir analyze [section] [-o json]   project-wide audit; section = stats|unused|orphans|atlas|size|bundles (none = all)
                                      stats=counts/edge-kinds/health  unused=0-referrer assets  orphans [--dropped]
-                                     atlas=frame utilization  size [--type T] [--list]=per-type/largest totals
+                                     atlas=frame utilization  size [--type T] [--list]  bundles=cross-bundle deps/cycles/dup
   coir duplicates [files|configs] [--type T] [-o json]   redundant assets: byte-identical files / structurally
                                      identical prefab·material·anim (none = both). Pair with edit --all swap-uuid.
+  coir check [--rules <file>] [-o json]   declarative CI gate — evaluates coir.rules.json (no-bundle-cycle,
+                                     max-duplication, no-dangling-refs, no-orphans, …); EXITS 1 on error, 2 on bad config.
 
 Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup, --force overrides the concurrent-change guard):
   coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
@@ -162,6 +165,8 @@ function parseArgs(argv) {
     else if (a === '--base') { if (argv[i + 1] !== undefined) flags.base = argv[++i]; } // share: viewer base URL
     else if (a.startsWith('--base=')) flags.base = a.slice(7);
     else if (a === '--blob') flags.blob = true; // share: output the bare #topo= blob, not the full URL
+    else if (a === '--rules') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.rules = argv[++i]; } // check: rules file path
+    else if (a.startsWith('--rules=')) flags.rules = a.slice(8);
     else if (a === '--index') { const v = parseInt(argv[++i], 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a.startsWith('--index=')) { const v = parseInt(a.slice(8), 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a === '--with') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.with = argv[++i]; } // edit tree: keep nodes with this component
@@ -358,6 +363,7 @@ function cmdInfo(scan, uuid, flags) {
   row('ext', a.ext || '—');
   row('importer', a.importer);
   row('size', a.size ? kb(a.size) : '—');
+  row('bundle', a.bundle || '—');
   row('resources', a.inResources ? 'yes' : 'no');
   row('degree', `used-by ${a.in}  depends-on ${a.out}`);
   if (a.subAssets.length) {
@@ -389,10 +395,15 @@ function renderStats(d, lines) {
   lines.push(`  edge kinds: ${histo(d.edgeKinds)}`);
 }
 function renderUnused(d, lines) {
-  lines.push(`unused: ${d.total} assets, ${kb(d.totalSize)}  (non-resources, 0 referrers)`);
+  lines.push(`unused: ${d.total} assets, ${kb(d.totalSize)}  (unbundled, 0 referrers)`);
   if (d.total) lines.push(`  ${histo(d.byType)}`);
   for (const i of d.items) lines.push(`   ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}`);
   if (d.total > d.items.length) lines.push(M.moreItems(d.total - d.items.length));
+  if (d.candidatesTotal) { // 0-referrer assets inside a bundle — runtime-load candidates, not flagged
+    lines.push(`  bundle assets with 0 static referrers (loaded by path? — not flagged): ${d.candidatesTotal}`);
+    for (const i of d.candidates) lines.push(`   ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}  [${i.bundle}]`);
+    if (d.candidatesTotal > d.candidates.length) lines.push(M.moreItems(d.candidatesTotal - d.candidates.length));
+  }
 }
 function renderOrphans(d, lines) {
   lines.push(`orphans: ${d.total} dangling refs (${d.missingSourceCount} missing-source)`);
@@ -417,7 +428,26 @@ function renderSize(d, lines) {
   if (d.items) for (const i of d.items) lines.push(`     ${kb(i.size).padStart(10)}  ${i.type.padEnd(8)} ${i.path}`);
   else lines.push(M.listHint);
 }
-const RENDER = { stats: renderStats, unused: renderUnused, orphans: renderOrphans, atlas: renderAtlas, size: renderSize };
+function renderBundles(d, lines) {
+  if (!d.total) { lines.push('bundles: none (no Asset Bundles configured)'); return; }
+  lines.push(`bundles: ${d.total}${d.cycles.length ? `, ${d.cycles.length} cycle(s) ⚠` : ''}`);
+  for (const b of d.bundles) lines.push(`   ${kb(b.size).padStart(11)}  ${String(b.members).padStart(4)} files  ${b.name.padEnd(16)} (deps ${b.out}, dependents ${b.in})`);
+  if (d.cycles.length) { lines.push('  cycles (linked both ways — a leaky boundary):'); for (const c of d.cycles) lines.push(`   ${c.a} ⇄ ${c.b}`); }
+  if (d.dup && d.dup.totalWasted > 0) {
+    lines.push(`  duplication: ${kb(d.dup.totalWasted)} wasted across ${d.dup.total} assets copied into ≥2 same-priority bundles`);
+    for (const i of d.dup.items) lines.push(`   ${kb(i.wasted).padStart(11)}  ×${i.copies}  ${i.type.padEnd(8)} ${i.path}  [${i.bundles.join(', ')}]`);
+    if (d.dup.total > d.dup.items.length) lines.push(M.moreItems(d.dup.total - d.dup.items.length));
+  }
+  if (d.links.length) {
+    lines.push('  cross-bundle references:');
+    for (const l of d.links) {
+      lines.push(`   ${l.from} → ${l.to}  (${l.refsTotal})${l.cycle ? '  ⇄' : ''}`);
+      for (const r of l.refs) lines.push(`      ${r.from}  --${r.kind}-->  ${r.to}`);
+      if (l.refsTotal > l.refs.length) lines.push(M.moreItems(l.refsTotal - l.refs.length));
+    }
+  }
+}
+const RENDER = { stats: renderStats, unused: renderUnused, orphans: renderOrphans, atlas: renderAtlas, size: renderSize, bundles: renderBundles };
 
 function cmdAnalyze(scan, section, flags) {
   if (section && !ANALYZE_SECTIONS.includes(section)) { console.error(M.unknownSection(section, ANALYZE_SECTIONS)); process.exit(1); }
@@ -461,6 +491,41 @@ async function cmdDuplicates(scan, fp, section, flags) {
   if (!d.files && !d.configs) lines.push('nothing to check');
   lines.push('', `total reclaimable: ${kb(d.summary.reclaimable)}  ·  merge with: coir edit --all swap-uuid <drop> <keep>`);
   console.log(lines.join('\n'));
+}
+
+// check: declarative CI gate. Loads coir.rules.json (or --rules <file>, else a
+// default health ruleset at warn level), evaluates the pure rule engine, prints
+// each violation, and EXITS non-zero on failure (error → 1, config error → 2) so
+// it can gate CI. -o json emits { violations, errors, warns, configErrors }.
+async function cmdCheck(scan, fp, projectDir, flags, plugins) {
+  const rulesPath = flags.rules || path.join(projectDir, 'coir.rules.json');
+  let raw = null, usedDefault = false;
+  try { raw = JSON.parse(readFileSync(rulesPath, 'utf8')); }
+  catch (e) { if (flags.rules) { console.error(`✗ cannot read rules file: ${rulesPath}`); process.exit(2); } }
+  let rules = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.rules) ? raw.rules : null);
+  if (!rules) { rules = DEFAULT_RULES; usedDefault = true; }
+
+  const ctx = {};
+  if (needsDuplicates(rules)) {
+    const readers = { readBytes: fp.bytes ? (p) => fp.bytes(p) : undefined, readText: (p) => fp.readText(p) };
+    ctx.duplicates = await duplicatesData(scan, readers, {});
+  }
+  const res = evaluateRules(scan, rules, ctx, collectPluginCheckers(plugins));
+  if (flags.json) { console.log(JSON.stringify(res)); }
+  else {
+    const ICON = { error: '✗', warn: '⚠', config: '⚙' };
+    if (usedDefault) console.log('(no coir.rules.json — default health checks at warn level; add rules to gate CI)');
+    for (const v of res.violations) console.log(`${ICON[v.level] || '·'} ${v.rule.padEnd(18)} ${v.message}`);
+    if (!res.violations.length) console.log('✓ all rules passed');
+    else {
+      const parts = [];
+      if (res.errors) parts.push(`${res.errors} error(s)`);
+      if (res.warns) parts.push(`${res.warns} warning(s)`);
+      if (res.configErrors) parts.push(`${res.configErrors} config error(s)`);
+      console.log(`\n${parts.join(', ')}`);
+    }
+  }
+  process.exit(res.configErrors ? 2 : res.errors ? 1 : 0);
 }
 
 // --- Plugin-contributed commands -------------------------------------------
@@ -546,6 +611,7 @@ async function main() {
   if (command === 'find') { cmdFind(scan, target, flags); return; }
   if (command === 'analyze') { cmdAnalyze(scan, target, flags); return; } // project-wide; target = the section (or none)
   if (command === 'duplicates') { await cmdDuplicates(scan, fp, target, flags); return; } // redundant assets (byte / structural)
+  if (command === 'check') { await cmdCheck(scan, fp, projectDir, flags, plugins); return; } // declarative CI gate (exits non-zero on failure)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
 
   // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).

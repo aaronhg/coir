@@ -13,6 +13,7 @@ export const TYPE_COLOR = {
   scene: '#ff8a65', script: '#90a4ae', audio: '#a1887f', anim: '#4db6ac',
   material: '#9575cd', effect: '#7e57c2',
   json: '#b0bec5', text: '#b0bec5', orphan: '#ef5350',
+  bundle: '#ffd54f', // Asset Bundle pseudo-node (parallel bundle graph)
 };
 export const typeColor = (ty) => TYPE_COLOR[ty] || '#b0bec5';
 export const $ = (id) => document.getElementById(id);
@@ -26,6 +27,7 @@ export const COLS = [
   { key: 'base', labelKey: 'col.base', cls: 'cnm' },
   { key: 'dir', labelKey: 'col.dir', cls: 'cdir' },
   { key: 'type', labelKey: 'col.type', cls: 'ctype' },
+  { key: 'bundle', labelKey: 'col.bundle', cls: 'cbundle', titleKey: 'col.bundle.t' },
   { key: 'size', labelKey: 'col.size', cls: 'cnum', num: true },
   { key: 'in', labelKey: 'col.in', cls: 'cnum', num: true, titleKey: 'col.in.t' },
   { key: 'cin', labelKey: 'col.cin', cls: 'cnum cclo', num: true, titleKey: 'col.cin.t' },
@@ -41,6 +43,12 @@ export const CHECK_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill=
 export const S = {
   scan: null,
   adj: null,
+  bundleAdj: null,    // parallel bundle graph (contains + bundle-dep) — topology nav only
+  bundleDepAdj: null, // bundle → bundle only — for bundle degree/closure in the list
+  bundleDepRefs: null, // Map `fromBundleKey>toBundleKey` → the asset edges behind it (usage popup)
+  bundleDupMap: null,  // Map assetUuid → {copies,wasted,bundles} for the size-map red overlay (axis D)
+  hasBundles: false,   // project has real bundles → show the 體積圖 group-by toggle
+  sizemapGroup: 'type', // 體積圖 grouping: 'type' | 'bundle'
   byTypeCache: {},
   nodeIndex: [],
   closureByUuid: new Map(), // uuid -> nodeIndex entry, for the palette's ∑ columns

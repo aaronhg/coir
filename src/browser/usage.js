@@ -5,6 +5,7 @@
 import { S, $, base, esc, compName, COPY_ICON } from './state.js';
 import { t } from './i18n.js';
 import { copyToClipboard, flashCopied } from './copy.js';
+import { isBundleKey } from '../core/bundleGraph.js';
 
 export function showUsage() {
   const pop = $('usagePopup');
@@ -17,6 +18,9 @@ export function showUsage() {
   const to = side === 'R' ? a : p;   // the asset being used
   const fromA = S.scan.assets.get(from);
   if (!fromA) { pop.hidden = true; return; }
+  // A bundle → bundle link: explain it with the actual cross-bundle asset
+  // references behind it (the same data the CLI diagnostic prints).
+  if (isBundleKey(from) && isBundleKey(to)) { if (showBundleRefs(pop, from, to, fromA)) return; pop.hidden = true; return; }
   const matched = S.scan.edges.filter((e) => e.from === from && e.to === to);
   const locs = matched.flatMap((e) => e.locations || []);
   if (!locs.length) {
@@ -58,6 +62,37 @@ export function showUsage() {
   if (cb) cb.onclick = (ev) => { ev.stopPropagation(); copyToClipboard(S.usageText, () => flashCopied(cb)); };
   positionUsage(pop);
 }
+// The asset references behind a bundle → bundle (`bundle-dep`) link, e.g. which
+// prefab/material/scene in folder-001 reaches into main. Returns false if there
+// are none (so the caller hides the popup).
+function showBundleRefs(pop, from, to, fromA) {
+  const refs = (S.bundleDepRefs && S.bundleDepRefs.get(`${from}>${to}`)) || [];
+  if (!refs.length) return false;
+  const seen = new Set(); const rows = []; const plain = [];
+  for (const ref of refs) {
+    const fa = S.scan.assets.get(ref.from), ta = S.scan.assets.get(ref.to);
+    if (!fa || !ta) continue;
+    const k = `${ref.from}>${ref.to}>${ref.kind}`;
+    if (seen.has(k)) continue; seen.add(k);
+    const loc = (ref.locations || []).map((l) => [l.nodePath, compName(l.component), l.property].filter(Boolean).join(':')).filter(Boolean)[0] || '';
+    rows.push(`<div class="up-site" title="${esc(`${fa.path} → ${ta.path}${loc ? `  @ ${loc}` : ''}`)}">` +
+      `${esc(`${base(fa.path)} → ${base(ta.path)}`)}  ·  <span class="up-click">${esc(ref.kind)}</span></div>`);
+    plain.push(`${fa.path} → ${ta.path}  (${ref.kind})${loc ? `  @ ${loc}` : ''}`);
+  }
+  if (!rows.length) return false;
+  S.usageText = plain.join('\n');
+  const toA = S.scan.assets.get(to);
+  const headHtml = t('usage.bundleHeader', { from: `<b>${esc(base(fromA.path))}</b>`, to: `<b>${esc(toA ? base(toA.path) : to)}</b>`, n: rows.length });
+  pop.innerHTML = `<div class="up-head"><span>${headHtml}</span>` +
+    `<button class="up-copy" type="button" title="${esc(t('usage.copyTitle'))}" aria-label="${esc(t('usage.copyAria'))}">${COPY_ICON}</button></div>` +
+    `<div class="up-list">${rows.join('')}</div>`;
+  pop.hidden = false;
+  const cb = pop.querySelector('.up-copy');
+  if (cb) cb.onclick = (ev) => { ev.stopPropagation(); copyToClipboard(S.usageText, () => flashCopied(cb)); };
+  positionUsage(pop);
+  return true;
+}
+
 export function closeUsage() { $('usagePopup').hidden = true; }
 
 export function positionUsage(pop) {

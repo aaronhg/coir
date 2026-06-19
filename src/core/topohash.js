@@ -5,9 +5,10 @@
 // (CompressionStream is a Web API present in both); zero runtime deps.
 //
 // payload v1:
-//   { v, t?, d, ty[], k[], n[ [path, tyIdx, bnd?] ], e[ [from, to, kIdx, use|1?] ], c }
-//     ty / k   interned type / edge-kind tables; nodes & edges reference them by index
-//     n        nodes; array position = node id; bnd=1 → real neighbours were trimmed
+//   { v, t?, d, ty[], k[], bd[], n[ [path, tyIdx, bytes, bnd, bdIdx] ], e[ [from, to, kIdx, use|1?] ], c }
+//     ty / k / bd   interned type / edge-kind / bundle-name tables (by index)
+//     n        nodes; array position = node id. tuple: [path, typeIdx, bytes,
+//              boundary(0/1 — real neighbours trimmed), bundleIdx (into bd; ''=none)]
 //     e        edges; 4th slot = array of [nodePath,comp,prop,sub] (usage detail, only
 //              within locDepth) · the number 1 (has usage, omitted) · absent (structural)
 //     c        center node id (the node to focus)
@@ -93,13 +94,14 @@ function buildPayload(scan, adj, center, depth, locDepth, title) {
   const { order, dist } = neighborhood(scan, adj, center, depth);
   const inSet = new Set(order);
   const idx = new Map(order.map((k, i) => [k, i]));
-  const tyTab = [], tyMap = new Map(), kTab = [], kMap = new Map();
+  const tyTab = [], tyMap = new Map(), kTab = [], kMap = new Map(), bdTab = [], bdMap = new Map();
   const intern = (tab, map, v) => { let i = map.get(v); if (i === undefined) { i = tab.length; tab.push(v); map.set(v, i); } return i; };
   const n = order.map((key) => {
     const a = scan.assets.get(key);
-    const row = [a ? a.path : key, intern(tyTab, tyMap, a ? a.type : 'orphan'), (a && a.size) || 0]; // [path, type, bytes]
-    for (const nb of assetNeighbors(scan, adj, key)) if (!inSet.has(nb)) { row.push(1); break; } // boundary → index 3
-    return row;
+    let bnd = 0;
+    for (const nb of assetNeighbors(scan, adj, key)) if (!inSet.has(nb)) { bnd = 1; break; } // boundary: real neighbours trimmed
+    // [path, type, bytes, boundary(0/1), bundleIdx]
+    return [a ? a.path : key, intern(tyTab, tyMap, a ? a.type : 'orphan'), (a && a.size) || 0, bnd, intern(bdTab, bdMap, (a && a.bundle) || '')];
   });
   const e = [];
   for (const ed of scan.edges) {
@@ -117,7 +119,7 @@ function buildPayload(scan, adj, center, depth, locDepth, title) {
     }
     e.push(row);
   }
-  const payload = { v: 1, d: depth, ty: tyTab, k: kTab, n, e, c: idx.get(center) };
+  const payload = { v: 1, d: depth, ty: tyTab, k: kTab, bd: bdTab, n, e, c: idx.get(center) };
   if (title) payload.t = title;
   return payload;
 }

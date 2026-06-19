@@ -179,10 +179,10 @@ async function renderRecents() {
 // no File API). The topology UI consumes it like any scan; `boundary` flags nodes
 // whose real neighbours were trimmed, `locMore` edges have usage detail not shipped.
 function scanFromPayload(p) {
-  const ty = p.ty || [], k = p.k || [];
+  const ty = p.ty || [], k = p.k || [], bd = p.bd || [];
   const assets = new Map(), byPath = new Map();
   (p.n || []).forEach((nd, i) => {
-    const a = { uuid: String(i), path: nd[0], type: ty[nd[1]] ?? 'orphan', ext: '', importer: '', size: nd[2] || 0, in: 0, out: 0, subAssets: [], hasSource: true, boundary: nd[3] === 1 };
+    const a = { uuid: String(i), path: nd[0], type: ty[nd[1]] ?? 'orphan', ext: '', importer: '', size: nd[2] || 0, bundle: bd[nd[4]] || null, in: 0, out: 0, subAssets: [], hasSource: true, boundary: nd[3] === 1 };
     assets.set(a.uuid, a); byPath.set(a.path, a);
   });
   const edges = (p.e || []).map(([from, to, kIdx, extra]) => {
@@ -192,7 +192,7 @@ function scanFromPayload(p) {
     return e;
   });
   for (const e of edges) { const f = assets.get(e.from), tA = assets.get(e.to); if (f) f.out++; if (tA) tA.in++; }
-  return { assets, byPath, edges, orphanRefs: [], metaErrors: [], missing: new Map(), missingReferenced: new Set(), files: [], rootTypes: new Set(), subOwner: new Map(), subUsage: new Map() };
+  return { assets, byPath, edges, orphanRefs: [], metaErrors: [], missing: new Map(), missingReferenced: new Set(), files: [], rootTypes: new Set(), bundles: [], subOwner: new Map(), subUsage: new Map() };
 }
 async function viewerFromHash(blob) {
   const payload = await decodeTopo(blob);

@@ -4,6 +4,7 @@
 import { S, $, typeColor, esc, FILTER_KEY } from './state.js';
 import { t } from './i18n.js';
 import { dependentClosure, dependencyClosure } from '../core/graph.js';
+import { isBundleKey } from '../core/bundleGraph.js';
 import { renderTable } from './list.js';
 import { renderTopo } from './topo.js';
 import { renderReports } from './reports.js';
@@ -14,16 +15,30 @@ export function typeAllowed(ty) { return S.selectedTypes.size === 0 || S.selecte
 function currentTypeCounts() {
   // 拓撲: 層0's neighbourhood. 體積圖: the centre's closure (or whole project) so
   // the badges match what the map shows. Everything else: the whole project.
+  // Assets in a bundle centre's neighbourhood (its members; the bundle has no
+  // asset-graph closure). Shared by the topo/sizemap branches below.
+  const bundleMembers = (key) => {
+    const name = S.scan.assets.get(key) && S.scan.assets.get(key).path;
+    return [...S.scan.assets.values()].filter((a) => a.bundle === name);
+  };
   if (S.tab === 'topo' && S.treeRoot) {
     const counts = {};
-    const nbhd = new Set([S.treeRoot, ...dependentClosure(S.adj, S.treeRoot), ...dependencyClosure(S.adj, S.treeRoot)]);
+    let nbhd;
+    if (isBundleKey(S.treeRoot)) {
+      nbhd = new Set([S.treeRoot, ...dependentClosure(S.bundleDepAdj, S.treeRoot), ...dependencyClosure(S.bundleDepAdj, S.treeRoot)]);
+      for (const a of bundleMembers(S.treeRoot)) nbhd.add(a.uuid); // depth-1 containment
+    } else {
+      nbhd = new Set([S.treeRoot, ...dependentClosure(S.adj, S.treeRoot), ...dependencyClosure(S.adj, S.treeRoot)]);
+    }
     for (const u of nbhd) { const a = S.scan.assets.get(u); if (a) counts[a.type] = (counts[a.type] || 0) + 1; }
     return counts;
   }
   if (S.tab === 'sizemap' && S.treeRoot && S.scan.assets.has(S.treeRoot)) {
     const counts = {};
-    const set = new Set([S.treeRoot, ...dependencyClosure(S.adj, S.treeRoot)]);
-    for (const u of set) { const a = S.scan.assets.get(u); if (a && a.hasSource && !a.virtual && (a.size || 0) > 0) counts[a.type] = (counts[a.type] || 0) + 1; }
+    const set = isBundleKey(S.treeRoot)
+      ? bundleMembers(S.treeRoot)
+      : [...new Set([S.treeRoot, ...dependencyClosure(S.adj, S.treeRoot)])].map((u) => S.scan.assets.get(u));
+    for (const a of set) { if (a && a.hasSource && !a.virtual && (a.size || 0) > 0) counts[a.type] = (counts[a.type] || 0) + 1; }
     return counts;
   }
   return S.byTypeCache;

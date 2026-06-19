@@ -37,9 +37,10 @@ Tool names carry no server prefix (the server name `coir` already namespaces the
 | `find(query, type?)` | Find assets by name |
 | `deps(asset, direction?, type?, limit?)` | Dependencies (who depends on it / what it depends on) + usage-site selectors |
 | `closure(asset, type?, list?)` | Bundle closure (blast radius) |
-| `info(asset)` | A single asset's record |
-| `analyze(section?, type?, dropped?, list?)` | Project-wide audit: `stats`/`unused`/`orphans`/`atlas`/`size`/`all` (default `stats`) |
+| `info(asset)` | A single asset's record (incl. its owning `bundle`) |
+| `analyze(section?, type?, dropped?, list?)` | Project-wide audit: `stats`/`unused`/`orphans`/`atlas`/`size`/`bundles`/`all` (default `stats`). `bundles` = per-bundle size/degree + cross-bundle dependency links (with the contributing asset refs) + cycles + duplication (axis D). |
 | `duplicates(section?)` | Redundant assets to merge; `section` = `files` (byte-identical source files, different uuids) or `configs` (structurally-identical prefab/material/anim); each group returns a suggested canonical + redundant + mergeable flag + reclaimable bytes. Pair with `edit_swap_uuid` (`all:true`). |
+| `check(rules?, rulesPath?)` | Run the declarative CI rules → `{ violations, errors, warns, configErrors }` (the same gate `coir check` uses; no exit code — you decide). `rules` inline overrides the file. Checkers: `max-meta-errors`/`no-dangling-refs`/`no-orphans`/`no-bundle-cycle`/`max-duplication`/`no-duplicate-files`/`forbid-dep`/`no-cross-bundle`/`atlas-min-util` (+ any plugin-contributed). |
 | **`tree(file, with?, under?, depth?)`** | Structure discovery: node hierarchy + a ready `nodePath:Type` selector for every component |
 | `get(file, selector)` | Read the value/node/component at a selector (can be fed back into `edit_set`) |
 | `status` / `rescan` | Server status / force a rescan |

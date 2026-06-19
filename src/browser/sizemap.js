@@ -10,6 +10,7 @@
 import { S, $, typeColor, esc, base, kb, dirOf, setStatus } from './state.js';
 import { t } from './i18n.js';
 import { sizeReport, closureReport } from '../core/analyze.js';
+import { isBundleKey } from '../core/bundleGraph.js';
 import { typeAllowed, renderTypeFilters } from './filterbar.js';
 import { squarify } from './treemap.js';
 import { setCenter, focus } from './topo.js';
@@ -31,6 +32,11 @@ function dim(hex, f = DIM) {
   const c = (i) => Math.round(parseInt(m[i], 16) * f).toString(16).padStart(2, '0');
   return `#${c(1)}${c(2)}${c(3)}`;
 }
+// A stable per-bundle hue (group-by-bundle backdrops) — bundles read apart at a glance.
+function bundleColor(name) {
+  let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 50% 55%)`;
+}
 
 // A filename label sized to fit the cell (full name, no truncation) — tiny on a
 // small cell, magnified to readability by pinch-zoom. Skips microscopic cells.
@@ -45,10 +51,17 @@ function nameLabel(rc, nm) {
 // Map: "what makes this thing heavy"); null scope → whole project. `filter` keeps
 // only cells whose path contains it. Returns `{ svg, total, count }` so the bar
 // can show the total. The root's own file is added since closureReport strips it.
-export function sizeMapBody(scan, scopeUuid, filter = '', vw = DEFAULT_W, vh = DEFAULT_H) {
+export function sizeMapBody(scan, scopeUuid, filter = '', vw = DEFAULT_W, vh = DEFAULT_H, groupBy = 'type', dup = null) {
   const W = Math.max(50, Math.round(vw)), H = Math.max(50, Math.round(vh)); // viewBox = the container's px, so it fills it
   let src;
-  if (scopeUuid && scan.assets.has(scopeUuid)) {
+  if (scopeUuid && isBundleKey(scopeUuid) && scan.assets.has(scopeUuid)) {
+    // A bundle centre → its contained assets (the bundle's shipped contents),
+    // not a dependency closure (a bundle has no asset-graph edges).
+    const name = scan.assets.get(scopeUuid).path;
+    src = [...scan.assets.values()]
+      .filter((a) => !a.virtual && a.hasSource && a.bundle === name)
+      .map((a) => ({ uuid: a.uuid, path: a.path, type: a.type, size: a.size || 0 }));
+  } else if (scopeUuid && scan.assets.has(scopeUuid)) {
     const r = scan.assets.get(scopeUuid);
     src = [{ uuid: r.uuid, path: r.path, type: r.type, size: r.size || 0 }, ...closureReport(scan, scopeUuid).items];
   } else {
@@ -59,16 +72,21 @@ export function sizeMapBody(scan, scopeUuid, filter = '', vw = DEFAULT_W, vh = D
   const total = items.reduce((s, i) => s + (i.size || 0), 0);
   if (!items.length) return { svg: `<div class="empty">${esc(t('rep.none'))}</div>`, total: 0, count: 0 };
 
-  const byType = new Map();
-  for (const i of items) { let g = byType.get(i.type); if (!g) byType.set(i.type, (g = { type: i.type, size: 0, items: [] })); g.size += i.size; g.items.push(i); }
-  const groups = [...byType.values()].sort((a, b) => b.size - a.size);
+  // Outer cells group by TYPE (default) or BUNDLE (a3); inner cells are always
+  // coloured by their own type. A bundle CENTRE always groups by type (its members
+  // are one bundle). For type mode the output is byte-identical to before.
+  const gb = (scopeUuid && isBundleKey(scopeUuid)) ? 'type' : groupBy;
+  const groupKey = gb === 'bundle' ? (i) => { const a = scan.assets.get(i.uuid); return (a && a.bundle) || 'main'; } : (i) => i.type;
+  const byGroup = new Map();
+  for (const i of items) { const k = groupKey(i); let g = byGroup.get(k); if (!g) byGroup.set(k, (g = { key: k, size: 0, items: [] })); g.size += i.size; g.items.push(i); }
+  const groups = [...byGroup.values()].sort((a, b) => b.size - a.size);
 
   const outer = squarify(groups.map((g) => ({ item: g, area: (g.size * W * H) / total })), 0, 0, W, H);
   let cells = ''; // backdrops + asset rects (+ filenames / others labels)
   for (const cell of outer) {
     const g = cell.item;
-    const col = typeColor(g.type);
-    cells += `<rect x="${r3(cell.x)}" y="${r3(cell.y)}" width="${r3(cell.w)}" height="${r3(cell.h)}" fill="${col}" fill-opacity="0.08"/>`;
+    const back = gb === 'bundle' ? bundleColor(g.key) : typeColor(g.key);
+    cells += `<rect x="${r3(cell.x)}" y="${r3(cell.y)}" width="${r3(cell.w)}" height="${r3(cell.h)}" fill="${back}" fill-opacity="0.08"/>`;
 
     const sorted = g.items.slice().sort((a, b) => b.size - a.size);
     const shown = sorted.slice(0, CAP);
@@ -82,19 +100,24 @@ export function sizeMapBody(scan, scopeUuid, filter = '', vw = DEFAULT_W, vh = D
       const it = rc.item;
       const x = r3(rc.x + GAP), y = r3(rc.y + GAP), bw = r3(Math.max(0, rc.w - 2 * GAP)), bh = r3(Math.max(0, rc.h - 2 * GAP));
       if (it.others) { // the tail of small files, aggregated — label it so it doesn't read as a void
-        cells += `<rect class="tmother" x="${x}" y="${y}" width="${bw}" height="${bh}" rx="2" fill="${dim(col)}" fill-opacity="0.55"><title>${esc(t('sizemap.others', { n: it.count, size: kb(it.size) }))}</title></rect>`;
+        const oc = dim(gb === 'bundle' ? '#78909c' : typeColor(g.key));
+        cells += `<rect class="tmother" x="${x}" y="${y}" width="${bw}" height="${bh}" rx="2" fill="${oc}" fill-opacity="0.55"><title>${esc(t('sizemap.others', { n: it.count, size: kb(it.size) }))}</title></rect>`;
         if (rc.w > 56 && rc.h > 22) cells += `<text class="tmotherl" x="${r3(rc.x + rc.w / 2)}" y="${r3(rc.y + rc.h / 2)}" text-anchor="middle" dominant-baseline="middle">${esc(t('sizemap.othersShort', { n: it.count }))}</text>`;
         continue;
       }
+      const col = dim(typeColor(it.type));
       const isImg = it.type === 'image' && rc.w >= THUMB_MIN && rc.h >= THUMB_MIN;
       const img = isImg ? ` data-img="${esc(it.path)}"` : '';
-      cells += `<rect class="tmrect" data-uuid="${esc(it.uuid)}"${img} x="${x}" y="${y}" width="${bw}" height="${bh}" rx="1.5" fill="${dim(col)}" fill-opacity="0.95"><title>${esc(it.path)}\n${esc(kb(it.size))}</title></rect>`;
+      const dd = dup && dup.get(it.uuid); // axis D: duplicated into ≥2 bundles → red-tint the cell
+      const dupTitle = dd ? `\n${t('sizemap.dup', { copies: dd.copies, size: kb(dd.wasted) })}` : '';
+      cells += `<rect class="tmrect${dd ? ' tmdup' : ''}" data-uuid="${esc(it.uuid)}"${img} x="${x}" y="${y}" width="${bw}" height="${bh}" rx="1.5" fill="${col}" fill-opacity="0.95"><title>${esc(it.path)}\n${esc(kb(it.size))}${esc(dupTitle)}</title></rect>`;
       // Filename sized to the cell — small cells get small text, so a pinch-zoom
       // magnifies it into readability (the SVG text is vector). Outlined (paint-order)
       // so it stays legible over a thumbnail. Placed right after the rect so a
       // thumbnail (injected via rect.after) sits UNDER it.
       cells += nameLabel(rc, base(it.path));
     }
+    if (gb === 'bundle' && cell.w > 44 && cell.h > 16) cells += `<text class="tmgroup" x="${r3(cell.x + 2.5)}" y="${r3(cell.y + 9)}" stroke-width="0.7">${esc(g.key)}</text>`;
   }
   return { svg: `<svg class="sizemap" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${cells}</svg>`, total, count: items.length };
 }
@@ -111,7 +134,7 @@ export function renderSizemap() {
   const scope = (S.treeRoot && S.scan.assets.has(S.treeRoot)) ? S.treeRoot : null;
   const view = $('sizemapView');
   if (!view) return;
-  const { svg, total, count } = sizeMapBody(S.scan, scope, sizemapFilterText(), view.clientWidth, view.clientHeight);
+  const { svg, total, count } = sizeMapBody(S.scan, scope, sizemapFilterText(), view.clientWidth, view.clientHeight, S.sizemapGroup || 'type', S.bundleDupMap);
   view.innerHTML = svg;
   S.sizemapTotal = total; S.sizemapCount = count; S.sizemapSel = null;
   renderSizemapBar(scope);
@@ -130,6 +153,15 @@ function sizemapFilterText() { const i = $('smFilterInput'); return i ? i.value 
 // Bar (right side): [selected name + size ·] centre-name total · n 項 · 複製 · 回最上層.
 function renderSizemapBar(scope) {
   const cur = scope ? S.scan.assets.get(scope) : null;
+  // group-by toggle (型別 ↔ Bundle) — only when the project has real bundles, and
+  // not while a single bundle is the centre (its members are all one bundle).
+  const gbtn = $('smGroup');
+  if (gbtn) {
+    const show = S.hasBundles && !(scope && isBundleKey(scope));
+    gbtn.hidden = !show;
+    gbtn.textContent = (S.sizemapGroup === 'bundle') ? t('sizemap.groupBundle') : t('sizemap.groupType');
+    gbtn.onclick = () => { S.sizemapGroup = S.sizemapGroup === 'bundle' ? 'type' : 'bundle'; renderSizemap(); };
+  }
   const cenName = cur ? base(cur.path) : t('sizemap.all');
   const sc = $('smScope');
   sc.textContent = `${cenName} ${kb(S.sizemapTotal || 0)} · ${t('sizemap.nItems', { n: S.sizemapCount || 0 })}`;

@@ -9,6 +9,7 @@ import { setTab } from './ui.js';
 import { showUsage, positionUsage } from './usage.js';
 import { copyToClipboard } from './copy.js';
 import { encodeTopo } from '../core/topohash.js';
+import { isBundleKey } from '../core/bundleGraph.js';
 
 // ---- in-topo find (Ctrl/⌘+F) state ----------------------------------------
 // Virtualization keeps off-screen cells out of the DOM, so the browser's native
@@ -53,12 +54,13 @@ function computeSelPath() {
 // A node's neighbours (the topology shows the TRUE structure; the 清單 type
 // badges filter only the list, not the tree).
 function neighborsOf(uuid, dir) {
-  const list = dir === 'out' ? (S.adj.out.get(uuid) || []) : (S.adj.inc.get(uuid) || []);
   const m = new Map();
-  for (const n of list) {
-    const other = dir === 'out' ? n.to : n.from;
-    if (S.scan.assets.has(other) && !m.has(other)) m.set(other, true);
-  }
+  const take = (list) => { for (const n of list) { const other = dir === 'out' ? n.to : n.from; if (S.scan.assets.has(other) && !m.has(other)) m.set(other, true); } };
+  take(dir === 'out' ? (S.adj.out.get(uuid) || []) : (S.adj.inc.get(uuid) || []));
+  // Bundle nodes ALSO expose the parallel bundle graph (contained assets +
+  // bundle→bundle). Only bundles do — an asset never shows its container, so the
+  // asset-level tree stays uncluttered.
+  if (S.bundleAdj && isBundleKey(uuid)) take(dir === 'out' ? (S.bundleAdj.out.get(uuid) || []) : (S.bundleAdj.inc.get(uuid) || []));
   return m;
 }
 function sortByTypeName(a, b) {

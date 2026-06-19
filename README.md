@@ -42,7 +42,7 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 介面是 **banner 上四個分頁（清單 / 拓撲 / 體積圖 / 報告）共用一個內容區**，banner 下方一條**全域「類型篩選」bar**（同時作用於各分頁）。
 
 ### 清單（＝層0）
-- 可排序資源表：名稱／目錄／類型／大小／**被依賴**／**被依賴∑**／**依賴**／**依賴∑**。「目錄」欄只顯示資料夾（`a/b/c.prefab` → `a/b/`）。
+- 可排序資源表：名稱／目錄／類型／**Bundle**／大小／**被依賴**／**被依賴∑**／**依賴**／**依賴∑**。「目錄」欄只顯示資料夾（`a/b/c.prefab` → `a/b/`）；「Bundle」欄是該資源所屬的 Asset Bundle（`main`＝未分包、`resources`＝動態載入；見下「Asset Bundle 分析」）。
 - `被依賴` / `依賴` 是**直接**度數；帶 `∑` 的兩欄是**傳遞閉包**大小——`依賴∑` = 載入它會被帶進的資源總數（打包量）、`被依賴∑` = 改它會牽動的資源總數（影響範圍）。
 - **單擊**＝選中（該列高亮）、**雙擊**（或 `Enter`）＝設為拓撲中心；`↑↓` 在列間切換。搜尋框可即時過濾路徑。
 
@@ -60,16 +60,18 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 
 ### 體積圖（Size map）
 - **Squarified treemap**：每個方塊面積 ∝ 資源 bytes、外層按型別分群、顏色用型別色——**最肥的資源一眼看出**。`image` 型別的方塊直接貼上**實際貼圖縮圖**（範圍內圖少時用原圖、整個專案時降採樣），方塊夠大就疊上檔名。
-- **範圍 = 拓撲中心**：在清單／拓撲挑一個資源當中心，體積圖就只看它的**依賴 closure**（對標 Unreal 的 Size Map：「這東西多重」）；沒中心則看整個專案。bar 顯示「選中項 體積 · 中心名 總體積 · 項數」，可複製中心路徑、一鍵回最上層。
+- **分組切換（型別 ↔ Bundle）**：bar 上的 `分組` 鈕（專案有 bundle 時才出現）可把外層改成**按 Asset Bundle 分群**（每包一個色調背景＋包名標籤、內格仍按型別上色）——一眼看每包多大。會被 build **跨 bundle 重複打包**的資源（見「Asset Bundle 分析」的 axis D）方塊加**紅框**＋ tooltip 標「×N 份 · 冗餘 Y」。
+- **範圍 = 拓撲中心**：在清單／拓撲挑一個資源當中心，體積圖就只看它的**依賴 closure**（對標 Unreal 的 Size Map：「這東西多重」）；沒中心則看整個專案；中心若是一個 **bundle 節點**則看該包的**成員**。bar 顯示「選中項 體積 · 中心名 總體積 · 項數」，可複製中心路徑、一鍵回最上層。
 - **互動**：**單擊**方塊鑽入它的依賴體積（重設中心、留在體積圖）、**雙擊**跳到拓撲；hover 即時顯示名稱＋體積；**兩指 pinch 縮放**＋拖曳／滾動平移、`←→↑↓` 移動方塊游標、`Enter` 鑽入、`−`/`+` 走中心歷史。
 
 ### 報告
-> 報告分成**子分頁**（未使用／孤兒參照／圖集利用率／資源體積／缺來源檔 meta），外加每個外掛貢獻的報告頁（如下「跨圖集重複圖」）。
+> 報告分成**子分頁**（未使用／孤兒參照／圖集利用率／資源體積／**跨 bundle 依賴**／缺來源檔 meta），外加每個外掛貢獻的報告頁（如下「跨圖集重複圖」）。
 
-- **未使用 / 孤兒資源**：`resources/` 以外、零參照的資源（`resources/` 一律略過，視為執行期動態載入）。
+- **未使用 / 孤兒資源**：**未分包**（`a.bundle === 'main'`）且零參照的資源。任何 bundle（`resources` 與自訂 Asset Bundle）的資源都視為執行期以路徑動態載入，其零參照者另列為**候選**（資訊性、不算未使用）——所以從自訂 bundle 動態載入的 prefab 不再被誤報。
 - **孤兒參照**：指向不存在 uuid 的失效參照；若那個 uuid 來自一個「來源被刪、只剩 `.meta`」的資源，會以**檔名 + 「缺來源檔」**標示（而非裸 uuid）。
 - **圖集利用率**：每個 plist 有多少 sprite-frame 實際被個別引用；整圖被當 `SpriteAtlas` 動態取用者另標「整圖動態取用」（無法靜態判定）。
 - **資源體積**：各類型總量與最大檔案排行（含目錄欄）。
+- **跨 bundle 依賴**：把資源層的跨包參照聚合到 bundle 粒度——每條 `A → B` 連結可展開看造成它的實際資產參照（點即聚焦），**循環**（雙向相連、邊界沒切乾淨）紅框置頂，外加 **axis D 冗餘**（會被 build 重複打包的位元組）。詳見「Asset Bundle 分析」。
 - **缺來源檔的 meta（已略過）**：列出所有「只剩 `.meta`、來源檔已刪」而被忽略的項目，標示「仍被引用」（斷掉的依賴要修）或「無人引用」（殘留可刪）。
 - **跨圖集重複圖（外掛貢獻）**：同一張美術被打進多個 **Spine `.atlas`**（spine-dup）或 **Cocos `.plist`**（atlas-dup）圖集——這種「各自打包同一張圖」的浪費，整檔比對抓不到。報告頁以**並排縮圖**呈現、並用旋轉不變的感知雜湊**逐像素確認**（升級為「已確認／實際不同」）。同樣的查詢也有 CLI／MCP 版（`coir spine-dup` / `coir atlas-dup`）。
 
@@ -82,6 +84,14 @@ npm run typecheck # tsc --noEmit：JSDoc 型別檢查（無產出、無執行期
 ### 解析原則
 - **只收錄 Component 腳本**：`.ts` 僅保留 Cocos component（class `extends Component`／被序列化 `__type__` 引用／extends 鏈傳遞閉包），純工具模組（utils／enums／config）不納入拓撲；component 之間以**類別繼承 `extends` 邊**相連。
 - **缺來源檔的 meta 不索引**：來源檔已刪、只剩 `.meta` 的資源不視為真資源（同資料夾 meta 的處理），但仍記住其 `uuid→path`，讓還在引用它的 prefab/scene 浮現為具名的「缺來源檔」斷線。
+
+### Asset Bundle 分析
+
+每個資源都標上**所屬 Asset Bundle**（`a.bundle`）：取它路徑最深的 bundle 根（巢狀內層勝），否則 `main`；`resources` 為內建 bundle。bundle 設定來自資料夾 `.meta` 的 `userData.isBundle`/`bundleName`/`priority`。
+
+- **bundle 是一級節點**：合成的 bundle 節點（`type:'bundle'`）以**平行圖**呈現——清單 `bundle` 型別列（大小＝包成品體積、度數＝包間依賴）、拓撲點 bundle 看「包含的資產 + 依賴的 bundle」、體積圖按 bundle 分組。**包含關係刻意不進主依賴圖**，所以未使用／closure／影響範圍完全不受污染。
+- **跨 bundle 依賴洩漏**：某包的資源參照到另一包的資源；coir 聚合成 bundle→bundle 邊，雙向相連即**循環**（邊界沒切乾淨，常見成因：材質與其貼圖被切到不同包）。報告頁／`coir analyze bundles` 把每條連結展開到具體檔案。
+- **冗餘成本（axis D）**：被 ≥2 個**同（最高）優先級** bundle 觸及的共享資源，Cocos build 會**各複製一份** → `冗餘 = size × (份數−1)`。體積圖把這些方塊染紅，`analyze bundles` 報出總浪費。（不同優先級則放最高那包、其餘存 stub，是「載入順序契約」而非複製。靜態近似，main/resources 視為優先級 0。）
 
 ## 分析的資料模型（3.8.x）
 
@@ -119,7 +129,9 @@ export default {
 };
 ```
 
-`edges(ctx)` 只用 `ctx`（資源索引＋`addEdge(from,to,kind,loc?,label?)`（`label`＝人類可讀的邊描述，供顯示／搜尋）／**`addNode({path,type,…})`**＝加**虛擬節點**（事件／通知／路由等無檔節點，進圖與度數但 `virtual:true`，資源健康報告會略過）／`resolveUuid`／`noteSub`／**`files`**（FileProvider 列出的所有資源相對路徑，配 `readText` 讀任意來源）／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），**不 import 任何東西** → 第三方 plugin 零 build step。
+`edges(ctx)` 只用 `ctx`（資源索引＋`addEdge(from,to,kind,loc?,label?)`（`label`＝人類可讀的邊描述，供顯示／搜尋）／**`addNode({path,type,…})`**＝加**虛擬節點**（事件／通知／路由等無檔節點，進圖與度數但 `virtual:true`，資源健康報告會略過）／`resolveUuid`／`noteSub`／**`bundles`**（Asset Bundle 描述子，供 bundle 相對路徑解析）／**`files`**（FileProvider 列出的所有資源相對路徑，配 `readText` 讀任意來源）／`readText`／`mapLimit`／`uuid.*`／唯讀 `scripts`），**不 import 任何東西** → 第三方 plugin 零 build step。**動態載入邊**（`resources.load('x')` 等靜態看不到的）就靠這套自己補——coir 不烤任何 load 啟發式，現成的 `resources-load` 範本與寫法見 **[docs/DYNAMIC-EDGES.md](docs/DYNAMIC-EDGES.md)** 與 [coir-plugins](https://github.com/aaronhg/coir-plugins)。
+
+plugin 還能加 **CI 規則 checker**（`rules: [{ name, check(scan, rule, ctx) }]`）供 `coir check`（見「CI 規則」），讓專案自訂的把關規則不必 fork coir。
 
 **註冊方式**（優先序：內建 → 全域 → 專案 → `--plugin`／`use()`；同名由更 specific 的覆蓋，`dedupePlugins`）：
 
@@ -137,7 +149,7 @@ export default {
 
 plugin 除了型別／邊，還能加**命令**：`commands: [{ name, usage?, description?, inputSchema?, positional?, run(ctx) }]`。一個命令**登記一次**就同時：在 **CLI** 跑 `coir <name> …`（列在 `coir --help` 的「Plugin commands」）；帶了 `inputSchema` 的話**也自動成為 MCP 工具**（`coir mcp`）。（命令是 headless 的，只在 CLI／MCP，不在瀏覽器。）
 
-內建命令（`deps`/`uses`/`closure`/`find`/`info`/`analyze`/`edit`/`mcp`）永遠優先，撞名的 plugin 命令會被忽略＋警告。`run(ctx)` **回傳**結果、**從不印**——`{ data, text? }` 或 `{ error, candidates? }`：CLI 印 `text`（`-o json` 印 `data`）、MCP 回 `data`，所以同一個 `run` 兩邊通用。`ctx` 跨宿主一致：`env`（'cli'｜'mcp'）、`args`（具名物件——CLI positionals 經 `positional` 對映、MCP 是 JSON arguments）、`scan`、`readText`、`resolveAsset`（path/basename/uuid→uuid；CLI 撞名印候選 + `exit 2`、MCP throw → 乾淨 tool error）、`edgeMaps`、`uuid.*`、`util.{base,kb}`（CLI 另有 `flags`/`argv`）。
+內建命令（`deps`/`uses`/`closure`/`find`/`info`/`analyze`/`duplicates`/`check`/`share`/`edit`/`mcp`）永遠優先，撞名的 plugin 命令會被忽略＋警告。`run(ctx)` **回傳**結果、**從不印**——`{ data, text? }` 或 `{ error, candidates? }`：CLI 印 `text`（`-o json` 印 `data`）、MCP 回 `data`，所以同一個 `run` 兩邊通用。`ctx` 跨宿主一致：`env`（'cli'｜'mcp'）、`args`（具名物件——CLI positionals 經 `positional` 對映、MCP 是 JSON arguments）、`scan`、`readText`、`resolveAsset`（path/basename/uuid→uuid；CLI 撞名印候選 + `exit 2`、MCP throw → 乾淨 tool error）、`edgeMaps`、`uuid.*`、`util.{base,kb}`（CLI 另有 `flags`/`argv`）。
 
 例如一個外部 plugin 可以這樣加 `coir timeline <prefab>`（也是 `timeline` MCP 工具），用一個 `run` 同時服務 CLI 與 agent，而不必 fork coir。註冊表在 `src/seam/pluginCommands.js`，契約見 `types/index.d.ts`（`PluginCommand`/`CommandContext`/`CommandResult`）。
 
@@ -229,9 +241,12 @@ coir find    <查詢> [--type T]                       # 依名稱找候選
 coir info    <資源>                                  # 印單一資源的 record（型別/uuid/度數/子資源/userData）
 coir share   <資源> [--depth N] [--base <url>] [--blob] [-o json]   # 產生可分享的 #topo= 拓撲快照連結（見「嵌入/整合」）
 coir analyze [section] [-o json]                     # 專案級稽核（= node-run.js 報告的 CLI 版）
-#   section = stats（總覽/邊種類/健康）| unused（未使用）| orphans [--dropped] | atlas（圖集利用率）| size [--type T][--list]；無 section = 全部
+#   section = stats（總覽/邊種類/健康）| unused（未使用）| orphans [--dropped] | atlas（圖集利用率）
+#           | size [--type T][--list] | bundles（跨 bundle 依賴/循環/冗餘）；無 section = 全部
 coir duplicates [files|configs] [--type T] [-o json] # 重複資源：位元組相同的檔 / 結構相同的 prefab·material·anim
 #   每組附建議的正本 + 冗餘清單 + 可省空間，接 `coir edit --all swap-uuid <冗餘> <正本>` 一鍵合併
+coir check [--rules <檔>] [-o json]                  # 宣告式 CI 守門員：依 coir.rules.json 評估規則
+#   違規即 exit 1（error）/ 2（設定錯）/ 0（全過）→ 可掛 CI；見下「CI 規則」
 ```
 
 `<資源>` 可用完整路徑／basename／uuid／`uuid@sub`（撞名印候選並 `exit 2`）。`--where` 把每條邊的使用位置印成**可直接貼回 `edit` 的 selector**（`nodePath:Comp.prop`，與瀏覽器「用在哪」彈窗共用一套）。`--type` 只保留指定型別：`deps`/`uses` 樹保留通往該型別的中間路徑，`closure`/`find` 過濾平面清單。輸出預設 text，`-o json` 給機器讀。
@@ -249,6 +264,25 @@ coir edit <檔> rename|set-active|set-pos|set-rot|set-parent|add-node|rm-node|ad
 `tree` 是結構探索:不必 parse JSON 就拿到任何 prefab 的全部可貼 selector(`tree`→`get`→`set` 三段式)。selector 同上（`nodePath:Type.prop`，`[i]` 消歧、`#N` 絕對索引）；`swap-uuid` 是最小 diff 文字補丁,其餘 parse-rewrite；**真刪會做索引壓縮**（不留軟刪垃圾）、新增走 **template-by-example**（複製同檔骨架→跨版本正確）；scene 裡的巢狀 prefab 實例會被偵測擋下；寫入是 atomic + **mtime guard**（檔案自讀取後被改過就中止，`--force` 覆寫）。完整設計見 **[docs/EDITING.md](docs/EDITING.md)**。
 
 **MCP server**（給 AI agent / 沒有 shell 的 host）：`coir mcp` 啟一個**手刻、零依賴**的 JSON-RPC/stdio MCP server,把上面的查詢 + 編輯包成型別化工具（讀工具如 `tree`/`get`、寫工具 `edit_*`,逐一可核准；host 裡顯示為 `coir__<工具>`），跟 CLI **同一套邏輯**。帶 `fs.watch` 失效快取 + 工具序列化 + mtime 寫入護欄。host 設定與安全細節見 **[docs/MCP.md](docs/MCP.md)**。
+
+### CI 規則（`coir check`）
+
+把上面那些「報告」變成**會擋 CI 的守門員**。`coir check` 讀專案根的 **`coir.rules.json`**（committed，團隊政策；或 `--rules <檔>`；沒檔則跑一組 warn 級健康預設），評估純規則引擎，印出違規，並 **exit 1（有 error）/ 2（設定錯）/ 0（全過）**。引擎只是把現成的稽核資料（`analyze`／`bundleReport`／`duplicates`）拿來比對宣告的紅線——**零新解析**。
+
+```jsonc
+// <專案>/coir.rules.json
+{ "rules": [
+  { "name": "no-bundle-cycle",  "level": "error" },
+  { "name": "max-duplication",  "level": "error", "maxBytes": 1048576 },   // 跨 bundle 冗餘上限
+  { "name": "no-dangling-refs", "level": "error" },
+  { "name": "no-orphans",       "level": "warn",  "type": ["image"] },
+  { "name": "forbid-dep",       "level": "error", "from": { "type": "scene" }, "to": { "pathStartsWith": "dev/" } },
+  { "name": "no-cross-bundle",  "level": "error", "from": "ui", "to": "battle" },
+  { "name": "atlas-min-util",   "level": "warn",  "min": 0.5 }
+] }
+```
+
+內建 checker：`max-meta-errors`、`no-dangling-refs`、`no-orphans`、`no-bundle-cycle`、`max-duplication`、`no-duplicate-files`、`forbid-dep`（dependency-cruiser 風格的 `from`/`to` 比對：`type`/`bundle`/`pathStartsWith`/`pathContains`/`basename`）、`no-cross-bundle`、`atlas-min-util`。同一套引擎也驅動 **MCP `check` 工具**（內聯 `rules` 或 `rulesPath`，回傳結果不退場）；**外掛可加 checker**（`Plugin.rules: [{ name, check }]`）。
 
 外掛在 CLI 也生效：`<coir 根>/coir.plugins.mjs`（全域）與 `<專案>/coir.plugins.mjs`（該專案）會自動載入，或用 `--plugin <檔>` 指定（見「外掛」）。
 
@@ -309,7 +343,7 @@ tsconfig.json      # 型別檢查設定（allowJs/checkJs，tsc --noEmit）
 
 ## 已知限制
 
-- **動態載入灰區**：以字串路徑於執行期載入者（`resources/` 下的 `loadDir`、或程式碼自行 `load('xxx')`）無法靜態追蹤。故未使用判定一律略過 `resources/`；但 `resources/` 外、純由程式載入的資源（例如某些以程式挑選的點陣數字圖集）可能被列為「未使用」——這是靜態掃描的本質盲區，不一定是真的沒用到。若有固定慣例（如 `audioPlay('x')`、`load('dir/x')`），可寫一個 plugin 把這類字串呼叫解析成邊（見「外掛」），把部分灰區補回。
+- **動態載入灰區**：以字串路徑於執行期載入者（`resources.load('x')`、`bundle.load('x')` 等）無法靜態追蹤——這是靜態掃描的**本質盲區**。coir 因此把任何 bundle（`resources` 與自訂包）的資源都當動態載入根（不報未使用、零參照者只列為候選）。要把這條補回成真實依賴邊，寫一個 plugin 掃**字面**載入字串解析成邊即可（coir 不烤任何 load 啟發式）——現成範本 `resources-load` 見 **[docs/DYNAMIC-EDGES.md](docs/DYNAMIC-EDGES.md)**；計算路徑（`load('ui/'+name)`）仍補不全，需在 plugin 內明確宣告。
 - 整圖被當 `SpriteAtlas` 取用時，個別框的使用情形無法靜態得知（已標記「整圖動態取用」）。
 - 目前針對 **3.8.x** 格式；3.5.2 序列化格式相容，核心可直接套用（如遇差異於 `meta.js` / `scan.js` 微調）。**不**支援 2.x（`.fire` 場景、舊版 meta）。
 - 圖集利用率的位元組級「浪費面積」尚未計算（目前以框數比例呈現）。

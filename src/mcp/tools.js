@@ -5,9 +5,12 @@
 // of the MCP exit). Each tool's `run(ctx, args)` returns { data } on success or
 // { error, candidates? } on failure; ctx = the live server state (scan/projectDir
 // /markDirty/forceRescan). Writes commit here (respecting dryRun/backup/force).
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
+import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from '../core/rules.js';
 import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
@@ -97,7 +100,7 @@ export const TOOLS = [
   },
   {
     name: 'analyze',
-    description: 'Project-wide audit. section: stats (counts/edge-kinds/metaErrors health), unused (0-referrer non-resources assets), orphans (dangling refs; +dropped for source-less metas), atlas (per-atlas frame utilization), size (per-type totals), or all. Default stats.',
+    description: 'Project-wide audit. section: stats (counts/edge-kinds/metaErrors health), unused (0-referrer non-resources assets), orphans (dangling refs; +dropped for source-less metas), atlas (per-atlas frame utilization), size (per-type totals), bundles (per-bundle size/degree + cross-bundle dependency links with the contributing asset refs + cycles), or all. Default stats.',
     inputSchema: { type: 'object', additionalProperties: false,
       properties: {
         section: { type: 'string', enum: [...ANALYZE_SECTIONS, 'all'], description: 'Which report (default stats).' },
@@ -121,6 +124,26 @@ export const TOOLS = [
         type: { type: 'string', description: 'Restrict to one asset type.' },
       } },
     run: async (ctx, a) => ({ data: await duplicatesData(ctx.scan, { readBytes: ctx.bytes, readText: ctx.readText }, { section: a.section, types: setOf(a.type) }) }),
+  },
+  {
+    name: 'check',
+    description: 'Run the declarative CI rules and return { violations, errors, warns, configErrors } — the same gate `coir check` uses (no exit code; the agent decides). Rules come from the inline `rules` arg, else `rulesPath`, else <project>/coir.rules.json, else a warn-only default health set. Built-in checkers: max-meta-errors, no-dangling-refs, no-orphans, no-bundle-cycle, max-duplication, no-duplicate-files, forbid-dep, no-cross-bundle, atlas-min-util (+ any plugin-contributed).',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: {
+        rules: { type: 'array', items: { type: 'object' }, description: 'Inline ruleset (overrides the file): [{ name, level?, ...params }].' },
+        rulesPath: { type: 'string', description: 'Path to a rules JSON file (default <project>/coir.rules.json).' },
+      } },
+    run: async (ctx, a) => {
+      let rules = Array.isArray(a.rules) ? a.rules : null;
+      if (!rules) {
+        const p = a.rulesPath || path.join(ctx.projectDir, 'coir.rules.json');
+        try { const raw = JSON.parse(readFileSync(p, 'utf8')); rules = Array.isArray(raw) ? raw : (raw && raw.rules); } catch { /* none → default */ }
+      }
+      if (!Array.isArray(rules)) rules = DEFAULT_RULES;
+      const c = {};
+      if (needsDuplicates(rules)) c.duplicates = await duplicatesData(ctx.scan, { readBytes: ctx.bytes, readText: ctx.readText }, {});
+      return { data: evaluateRules(ctx.scan, rules, c, collectPluginCheckers(ctx.plugins)) };
+    },
   },
   {
     name: 'tree',

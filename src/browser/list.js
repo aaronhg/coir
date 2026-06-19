@@ -26,6 +26,7 @@ export function renderTable() {
     `<td class="cnm"><span class="dot" style="background:${typeColor(n.type)}"></span>${esc(n.base)}</td>` +
     `<td class="cdir" title="${esc(n.dir)}">${esc(n.dir || '/')}</td>` +
     `<td class="ctype">${n.type}</td>` +
+    `<td class="cbundle" title="${esc(n.bundle || '')}">${esc(n.bundle || '—')}</td>` +
     `<td class="cnum">${kb(n.size)}</td>` +
     `<td class="cnum">${n.in}</td><td class="cnum cclo">${n.cin}</td>` +
     `<td class="cnum">${n.out}</td><td class="cnum cclo">${n.cout}</td></tr>`).join('');

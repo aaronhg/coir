@@ -24,21 +24,6 @@ const MESSAGES = {
     'help.title': '說明',
     'help.close': '關閉',
     'help.copy': '複製',
-    'help.body': '<h3>這是什麼</h3><p>載入一個 <b>Cocos Creator 3.8.x</b> 專案，分析資源的<b>使用情形</b>與<b>依賴拓撲</b>。全程在瀏覽器端執行，不上傳任何檔案。</p>'
-      + '<h3>四個分頁</h3><ul><li><b>清單</b> — 可排序資源表。<code>被依賴</code>／<code>依賴</code> 是直接度數，帶 <code>∑</code> 的是傳遞閉包（影響範圍／打包量）。單擊＝選中、雙擊（或 <kbd>Enter</kbd>）＝設為中心；<kbd>↑</kbd> <kbd>↓</kbd> 切換項目。</li>'
-      + '<li><b>拓撲</b> — 以選中資源為中心的雙向依賴樹：<code>←</code> 被依賴往左、<code>→</code> 依賴往右，固定 5 欄滑動視窗，父子間以灰色連線相連、選中時整條鏈（祖先）與直接子節點會加亮。選一個節點會自動顯示它「用在哪」。頂端 bar：左邊<b>篩選框</b>直接隱藏不相符的節點（清空或 <kbd>Esc</kbd> 即還原），右邊<b>麵包屑</b>顯示到中心的整條鏈（方向固定「被依賴 → 依賴」，每節可點跳選，旁邊按鈕複製整條鏈／拓撲快照連結）。</li>'
-      + '<li><b>體積圖</b> — 把資源依大小攤成 treemap（方塊面積 ∝ bytes、按型別上色），<b>範圍＝拓撲中心的依賴 closure</b>（沒中心則整個專案），圖檔直接貼縮圖。<b>單擊</b>方塊鑽入它的依賴體積、<b>雙擊</b>跳到拓撲；hover 看名稱＋體積、<b>兩指縮放</b>＋滑動平移、方向鍵移動＋<kbd>Enter</kbd> 鑽入。</li>'
-      + '<li><b>報告</b>（子分頁）— 未使用／孤兒參照、圖集利用率、資源體積、缺來源檔的 meta，以及外掛貢獻的<b>跨圖集重複圖</b>（同一張美術被打進多個 Spine／.plist 圖集，並排縮圖＋逐像素確認）。</li></ul>'
-      + '<h3>型別篩選</h3><p>banner 下方的型別徽章各分頁共用：篩清單／報告／體積圖（體積圖的徽章數量還會跟著目前範圍變動）；在拓撲上保留「通往該型別」的路徑、剪掉無關的分支。</p>'
-      + '<h3>快速搜尋 <kbd>/</kbd></h3><p>模糊比對檔名／路徑／uuid，命中字會高亮。範圍前綴：<kbd>@</kbd> sprite-frame、<kbd>#</kbd> 型別、<kbd>&gt;</kbd> 引用處/節點、<kbd>~</kbd> 邊種類（單打 <kbd>~</kbd> 列出可選種類）；<kbd>#</kbd>/<kbd>~</kbd> 可兩段式（<code>#型別 關鍵字</code>、<code>~kind 關鍵字</code>）。貼上 uuid 直接跳。</p>'
-      + '<h3>快捷鍵</h3><ul><li><kbd>Tab</kbd> 切換分頁（<kbd>Delete</kbd> 反向）、<kbd>Esc</kbd> 清空類型篩選</li>'
-      + '<li><kbd>/</kbd> 或 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> 快速搜尋</li>'
-      + '<li>拓撲：<kbd>↑</kbd> <kbd>↓</kbd> 同欄、<kbd>←</kbd> <kbd>→</kbd>（或兩指橫滑）跨欄、<kbd>Enter</kbd> 設為新中心、<kbd>−</kbd> 上一動、<kbd>+</kbd> 下一動、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> 在此拓撲中尋找、<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> 複製名稱</li>'
-      + '<li>體積圖：方向鍵移動方塊游標、<kbd>Enter</kbd> 鑽入、<kbd>−</kbd>／<kbd>+</kbd> 中心歷史；單擊鑽入、雙擊跳拓撲</li></ul>'
-      + '<h3>命令列工具（headless）</h3><p>除了這個網頁，coir 還有一套 <b>CLI</b>（查依賴、找重複資源、就地編輯 prefab/scene）與 <b>MCP server</b>。零執行期相依，一行安裝（把 <code>coir</code> 連到 PATH）：</p>'
-      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install.sh | sh</pre>'
-      + '<p>Cocos Creator 擴充（右鍵查依賴）— 自包含安裝進專案：</p>'
-      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install-extension.sh | sh -s -- &lt;Cocos 專案路徑&gt;</pre>',
     'help.github': '在 GitHub 上查看 ↗',
     // banner / status
     'stats': '{assets} 資源 · {edges} 邊 · {orphans} 孤兒參照',
@@ -55,6 +40,7 @@ const MESSAGES = {
     'filter.all': '✕ 全部',
     // 清單 columns
     'col.base': '名稱', 'col.dir': '目錄', 'col.type': '類型', 'col.size': '大小',
+    'col.bundle': 'Bundle', 'col.bundle.t': '所屬 Asset Bundle（main＝未分包；resources＝動態載入）',
     'col.in': '被依賴', 'col.cin': '被依賴∑', 'col.out': '依賴', 'col.cout': '依賴∑',
     'col.in.t': '直接被引用的資源數',
     'col.cin.t': '被依賴閉包：直接或間接會被牽連的資源總數',
@@ -81,6 +67,7 @@ const MESSAGES = {
     'copy.link': '已複製拓撲連結',
     'usage.more': '此處有引用 · 未載入完整專案',
     'usage.header': '在 {file} 內 · {n} 處',
+    'usage.bundleHeader': '{from} → {to} · {n} 處跨 bundle 參照',
     'usage.root': '(根節點)',
     'usage.copyTitle': '複製全部到剪貼簿',
     'usage.copyAria': '複製使用位置',
@@ -100,10 +87,20 @@ const MESSAGES = {
     'rep.orphanMissing': '· {n} 個缺來源檔',
     'rep.atlas': '圖集利用率',
     'rep.atlasSub': '{n} 個圖集',
+    'rep.bundle': '跨 bundle 依賴',
+    'rep.bundleSub': '{n} 個 bundle',
+    'rep.bundleCyc': '{n} 個循環 ⚠',
+    'rep.bundleDup': '冗餘 {size}（{n} 項資產被打進 ≥2 個同優先級 bundle）',
+    'rep.bundleDupList': '冗餘資產（會被重複打包）',
+    'rep.bundleDupTag': '冗餘 {size}',
+    'rep.unusedCand': 'bundle 內 · {n} 項零靜態引用（可能由路徑動態載入）',
     'rep.size': '資源體積',
     'rep.sizemap': '體積圖',
     'sizemap.others': '其他 {n} 項 · {size}',
     'sizemap.othersShort': '其他 {n} 項',
+    'sizemap.dup': '×{copies} 份 · 冗餘 {size}（跨 bundle 重複打包）',
+    'sizemap.groupType': '分組：型別',
+    'sizemap.groupBundle': '分組：Bundle',
     'sizemap.total': '體積 {size} · {n} 項',
     'sizemap.nItems': '{n} 項',
     'sizemap.copyName': '複製中心路徑',
@@ -157,21 +154,6 @@ const MESSAGES = {
     'help.title': 'Help',
     'help.close': 'Close',
     'help.copy': 'Copy',
-    'help.body': '<h3>What it is</h3><p>Load a <b>Cocos Creator 3.8.x</b> project to analyze asset <b>usage</b> and the <b>dependency topology</b>. Everything runs in your browser — no files are uploaded.</p>'
-      + '<h3>Four tabs</h3><ul><li><b>List</b> — sortable asset table. <code>Used by</code>/<code>Uses</code> are direct degrees; the <code>∑</code> columns are transitive closures (blast radius / bundle). Click to select, double-click (or <kbd>Enter</kbd>) to set it as the centre; <kbd>↑</kbd> <kbd>↓</kbd> move between rows.</li>'
-      + '<li><b>Topology</b> — a bidirectional dependency tree around the selected asset: <code>←</code> dependents fan left, <code>→</code> dependencies fan right, in a fixed 5-column sliding window, with grey parent→child connectors and the selected node\'s chain (ancestors) + direct children highlighted. Selecting a node auto-shows where it is used. The top bar: a <b>filter box</b> on the left that hides non-matching nodes (clear or <kbd>Esc</kbd> restores), and a <b>breadcrumb</b> on the right showing the chain to the centre (fixed dependents → dependencies, each crumb clickable, with buttons to copy the chain / a snapshot link).</li>'
-      + '<li><b>Size map</b> — a treemap of asset bytes (cell area ∝ size, coloured by type), <b>scoped to the topology centre\'s dependency closure</b> (or the whole project when there\'s no centre), with image thumbnails painted in. <b>Single-click</b> a cell to drill into its dependency size, <b>double-click</b> to jump to Topology; hover for name+size, <b>pinch to zoom</b> + scroll to pan, arrows to move + <kbd>Enter</kbd> to drill.</li>'
-      + '<li><b>Reports</b> (sub-tabs) — unused/orphan refs, atlas utilization, asset size, source-less metas, plus a plugin-contributed <b>cross-atlas duplicate</b> view (the same art baked into multiple Spine/.plist atlases — side-by-side thumbnails + pixel confirmation).</li></ul>'
-      + '<h3>Type filter</h3><p>The type badges under the banner are shared by all tabs: they filter List/Reports/Size map (the Size-map counts also track the current scope), and on Topology they keep the paths that reach the chosen type and prune dead branches.</p>'
-      + '<h3>Quick search <kbd>/</kbd></h3><p>Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>&gt;</kbd> usage/node, <kbd>~</kbd> edge-kind (type <kbd>~</kbd> to list them); <kbd>#</kbd>/<kbd>~</kbd> are two-part (<code>#type query</code>, <code>~kind query</code>). Paste a uuid to jump.</p>'
-      + '<h3>Shortcuts</h3><ul><li><kbd>Tab</kbd> switch tab (<kbd>Delete</kbd> reverse), <kbd>Esc</kbd> clear type filter</li>'
-      + '<li><kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search</li>'
-      + '<li>Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> find in this topology, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name</li>'
-      + '<li>Size map: arrows move the cell cursor, <kbd>Enter</kbd> drill, <kbd>−</kbd>/<kbd>+</kbd> centre history; single-click drills, double-click jumps to Topology</li></ul>'
-      + '<h3>Command-line tools (headless)</h3><p>Besides this web UI, coir ships a <b>CLI</b> (query deps, find duplicate assets, edit prefabs/scenes in place) and an <b>MCP server</b>. Zero runtime deps — install in one line (links <code>coir</code> onto your PATH):</p>'
-      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install.sh | sh</pre>'
-      + '<p>Cocos Creator extension (right-click dependency lookup) — self-contained install into a project:</p>'
-      + '<pre>curl -fsSL https://raw.githubusercontent.com/aaronhg/coir/main/install-extension.sh | sh -s -- &lt;cocos-project-path&gt;</pre>',
     'help.github': 'View on GitHub ↗',
     'stats': '{assets} assets · {edges} edges · {orphans} orphan refs',
     'err.noFsApi': 'This browser lacks the File System Access API — use Chrome / Edge over http://localhost',
@@ -185,6 +167,7 @@ const MESSAGES = {
     'filter.labelTopo': 'Type filter · layer-0 neighbourhood',
     'filter.all': '✕ all',
     'col.base': 'Name', 'col.dir': 'Folder', 'col.type': 'Type', 'col.size': 'Size',
+    'col.bundle': 'Bundle', 'col.bundle.t': 'Owning Asset Bundle (main = unbundled; resources = loaded by path)',
     'col.in': 'Used by', 'col.cin': 'Used by∑', 'col.out': 'Uses', 'col.cout': 'Uses∑',
     'col.in.t': 'Assets that directly reference this',
     'col.cin.t': 'Dependent closure: total assets transitively affected if this changes',
@@ -210,6 +193,7 @@ const MESSAGES = {
     'copy.link': 'Topology link copied',
     'usage.more': 'Referenced here · open the full project to see where',
     'usage.header': 'in {file} · {n} sites',
+    'usage.bundleHeader': '{from} → {to} · {n} cross-bundle refs',
     'usage.root': '(root node)',
     'usage.copyTitle': 'Copy all to clipboard',
     'usage.copyAria': 'Copy usage sites',
@@ -227,10 +211,20 @@ const MESSAGES = {
     'rep.orphanMissing': '· {n} missing-source',
     'rep.atlas': 'Atlas utilization',
     'rep.atlasSub': '{n} atlases',
+    'rep.bundle': 'Cross-bundle',
+    'rep.bundleSub': '{n} bundles',
+    'rep.bundleCyc': '{n} cycle(s) ⚠',
+    'rep.bundleDup': '{size} wasted — {n} assets baked into ≥2 same-priority bundles',
+    'rep.bundleDupList': 'Duplicated assets (shipped more than once)',
+    'rep.bundleDupTag': '{size} wasted',
+    'rep.unusedCand': 'In a bundle · {n} with 0 static referrers (maybe loaded by path)',
     'rep.size': 'Asset size',
     'rep.sizemap': 'Size map',
     'sizemap.others': '{n} more · {size}',
     'sizemap.othersShort': '+{n} more',
+    'sizemap.dup': '×{copies} copies · {size} wasted (duplicated across bundles)',
+    'sizemap.groupType': 'Group: type',
+    'sizemap.groupBundle': 'Group: bundle',
     'sizemap.total': '{size} · {n} assets',
     'sizemap.nItems': '{n} assets',
     'sizemap.copyName': 'Copy centre path',

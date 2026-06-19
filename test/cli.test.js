@@ -424,6 +424,12 @@ test('info: resources flag, and resolves by uuid@sub to the owning asset', () =>
   assert.equal(json(cli('info', `${U.coin}@6c48a`, '-o', 'json')).path, 'coin.png'); // sub → owner
 });
 
+test('info: bundle field — resources/ → resources, an unbundled asset → main', () => {
+  assert.equal(json(cli('info', 'resources/dyn.png', '-o', 'json')).bundle, 'resources');
+  assert.equal(json(cli('info', 'unused.png', '-o', 'json')).bundle, 'main');
+  assert.match(cli('info', 'resources/dyn.png').stdout, /bundle +resources/); // text output too
+});
+
 // ---- --type filter: prune to branches reaching the chosen type(s) ----------
 test('deps --type: keeps the path to a matching type, prunes dead branches', () => {
   // Game.scene → Shop.prefab → ui.plist → coin.png(image); the ShopCtrl.ts
@@ -1004,6 +1010,27 @@ test('deps --kind keeps only the chosen edge kinds (drops other kinds + orphans)
   assert.match(cli('deps', 'Shop.prefab', '--out', '--kind', 'sprite-frame').stdout, /\[kind: sprite-frame\]/);
 });
 
+// ---- check: declarative CI gate (exit codes) -------------------------------
+test('check: default = warn-only (exit 0); an error rule gates (exit 1); a bad rule (exit 2)', () => {
+  const def = cli('check'); // no coir.rules.json in the fixture → default health checks, warn level
+  assert.equal(def.status, 0);
+  assert.match(def.stdout, /default health checks/);
+
+  const rpErr = path.join(projectDir, 'rules-err.json');
+  fsSync.writeFileSync(rpErr, JSON.stringify([{ name: 'no-orphans', level: 'error' }]));
+  const err = cli('check', '--rules', rpErr);
+  assert.equal(err.status, 1, 'an error-level violation fails CI');
+  assert.match(err.stdout, /no-orphans/);
+  assert.match(err.stdout, /unused\.png/); // the fixture's unbundled 0-referrer asset
+
+  const rpBad = path.join(projectDir, 'rules-bad.json');
+  fsSync.writeFileSync(rpBad, JSON.stringify([{ name: 'no-such-rule' }]));
+  assert.equal(cli('check', '--rules', rpBad).status, 2, 'an unknown rule is a config error');
+
+  const j = json(cli('check', '--rules', rpErr, '-o', 'json'));
+  assert.ok(j.errors >= 1 && Array.isArray(j.violations));
+});
+
 // ---- analyze: project-wide audit sections ----------------------------------
 test('analyze stats: counts + edge-kinds + health (text + json)', () => {
   assert.match(cli('analyze', 'stats').stdout, /stats: \d+ assets.*metaErrors=0\s+✓ healthy/s);
@@ -1021,6 +1048,9 @@ test('analyze unused: lists 0-referrer non-resources assets (incl. unused.png); 
   assert.ok(d.byType && typeof d.totalSize === 'number');
   const imgs = json(cli('analyze', 'unused', '--type', 'image', '-o', 'json'));
   assert.ok(imgs.items.length && imgs.items.every((i) => i.type === 'image'));
+  // a2: resources/dyn.png (a bundle, 0 referrers) is a candidate, NOT a flagged unused
+  assert.ok(!d.items.some((i) => /dyn\.png/.test(i.path)), 'a bundle asset is never flagged unused');
+  assert.ok(d.candidates.some((i) => /dyn\.png/.test(i.path) && i.bundle === 'resources'), 'it is a runtime-load candidate');
 });
 
 test('analyze orphans: dangling refs; --dropped adds the source-less-meta audit', () => {
@@ -1047,10 +1077,19 @@ test('analyze size: per-type totals; --list adds the largest files', () => {
 
 test('analyze (no section) = full report of every section; a bogus section exits 1', () => {
   const d = json(cli('analyze', '-o', 'json'));
-  assert.deepEqual(Object.keys(d).sort(), ['atlas', 'orphans', 'size', 'stats', 'unused']);
+  assert.deepEqual(Object.keys(d).sort(), ['atlas', 'bundles', 'orphans', 'size', 'stats', 'unused']);
   const r = cli('analyze', 'bogus');
   assert.equal(r.status, 1);
   assert.match(r.stderr, /unknown analyze section/);
+});
+
+test('analyze bundles: resources is a built-in bundle (fixture has no custom bundles)', () => {
+  const d = json(cli('analyze', 'bundles', '-o', 'json'));
+  // the fixture has a resources/ asset → resources + main bundles, no cross-bundle links
+  assert.ok(d.bundles.some((b) => b.name === 'resources'));
+  assert.ok(d.bundles.some((b) => b.name === 'main'));
+  assert.deepEqual(d.cycles, []);
+  assert.match(cli('analyze', 'bundles').stdout, /bundles: \d+/);
 });
 
 // ---- cross-version (3.5.2 vs 3.8.x): template-by-example, one code path ------

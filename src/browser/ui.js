@@ -5,8 +5,9 @@
 // 報告) over one content area; "/" opens quick-open.
 import { S, $, base, dirOf, esc, TYPE_COLOR, setStatus, CHECK_ICON, COPY_ICON } from './state.js';
 import { t, setLocale, getLocale, applyStaticI18n, registerMessages } from './i18n.js';
-import { summary } from '../core/analyze.js';
-import { dependencyClosure, dependentClosure } from '../core/graph.js';
+import { summary, bundleDuplication } from '../core/analyze.js';
+import { dependencyClosure, dependentClosure, buildAdjacency } from '../core/graph.js';
+import { buildBundleGraph, isBundleKey } from '../core/bundleGraph.js';
 import { PLUGINS } from '../core/plugins/index.js';
 import { renderTable, moveListSel, scrollListToSelection } from './list.js';
 import { renderTopo, reflowTopo, focus, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, copyCrumbLink, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
@@ -16,6 +17,21 @@ import { renderTypeFilters, toggleType, restoreFilter, saveFilter } from './filt
 import { renderReports } from './reports.js';
 import { renderSizemap, sizemapMove, sizemapEnter, sizemapClearCenter } from './sizemap.js';
 import { copyName, copyToClipboard } from './copy.js';
+import { mdToHtml } from './md.js';
+
+// In-app help is authored as Markdown (src/browser/help/*.md) and rendered on
+// open for the current locale — so updating the help means editing a .md file,
+// not an escaped HTML string buried in the i18n catalog. Loaded via a dynamic
+// import in `eager` mode: webpack bundles it inline (no extra chunk, single
+// dist file preserved), yet the import() isn't evaluated at module-load — so
+// Node-run unit tests that transitively import ui.js don't choke on `.md`.
+async function renderHelp() {
+  const b = $('helpBody'); if (!b) return;
+  const mod = getLocale() === 'en'
+    ? await import(/* webpackMode: "eager" */ './help/help.en.md')
+    : await import(/* webpackMode: "eager" */ './help/help.zh-Hant.md');
+  b.innerHTML = mdToHtml(mod.default);
+}
 
 export function initUI({ onPick }) {
   applyStaticI18n(); // localize the static shell for the detected/saved locale
@@ -28,7 +44,7 @@ export function initUI({ onPick }) {
   if (ls) { ls.value = getLocale(); ls.onchange = () => { setLocale(ls.value); relocalize(); }; }
   $('pickBtn').onclick = onPick;
   $('welcomeBtn').onclick = onPick;
-  $('helpBtn').onclick = () => { $('help').hidden = false; addHelpCopyButtons(); };
+  $('helpBtn').onclick = async () => { $('help').hidden = false; await renderHelp(); addHelpCopyButtons(); };
   $('helpClose').onclick = () => { $('help').hidden = true; };
   $('help').onclick = (e) => { if (e.target === $('help')) { $('help').hidden = true; return; } // backdrop closes
     const b = e.target.closest('.cmdcopy'); // copy a curl command block
@@ -210,16 +226,30 @@ function setScan(s, name, opts = {}) {
   S.sizemapSel = null;            // clear the 體積圖 keyboard cursor for the new project
   S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;
   S.searchIndex = null;
+  // Asset Bundles: a PARALLEL graph (containment + bundle→bundle), kept out of
+  // scan.edges so reports stay pure. Inject the pseudo-nodes into the scan index
+  // (navigable + listed via every existing scan.assets lookup; reports skip them
+  // because they are virtual) and build the two adjacencies the UI navigates by.
+  const bg = buildBundleGraph(s);
+  for (const n of bg.nodes) s.assets.set(n.uuid, n);
+  S.bundleAdj = buildAdjacency([...bg.containEdges, ...bg.depEdges]); // topology: contains + bundle-dep
+  S.bundleDepAdj = buildAdjacency(bg.depEdges);                       // bundle-only: degree/closure for the list
+  S.bundleDepRefs = new Map(bg.depEdges.map((d) => [`${d.from}>${d.to}`, d.refs])); // explain a bundle→bundle link
+  S.hasBundles = bg.nodes.length > 0;                                                // gates the 體積圖 group-by toggle
+  S.bundleDupMap = new Map(bundleDuplication(s).items.map((i) => [i.uuid, i]));       // axis D: cells the size map red-tints
   $('topoFilterInput').value = ''; // a new project resets the topo text filter
   $('welcome').hidden = true; // first-run card → gone once a project is loaded
   $('filterbar').hidden = false;
   document.body.classList.toggle('viewer', viewer); // CSS hides list/reports/picker in viewer mode
-  S.nodeIndex = [...s.assets.values()].map((a) => ({
-    uuid: a.uuid, path: a.path, base: base(a.path), dir: dirOf(a.path),
-    type: a.type, size: a.size, in: a.in, out: a.out,
-    cin: dependentClosure(S.adj, a.uuid).size, // transitive dependents (blast radius)
-    cout: dependencyClosure(S.adj, a.uuid).size, // transitive deps (bundle)
-  }));
+  S.nodeIndex = [...s.assets.values()].map((a) => {
+    const adj = isBundleKey(a.uuid) ? S.bundleDepAdj : S.adj; // bundle ∑ over the bundle graph, assets over the asset graph
+    return {
+      uuid: a.uuid, path: a.path, base: base(a.path), dir: dirOf(a.path),
+      type: a.type, bundle: a.bundle, size: a.size, in: a.in, out: a.out,
+      cin: dependentClosure(adj, a.uuid).size, // transitive dependents (blast radius)
+      cout: dependencyClosure(adj, a.uuid).size, // transitive deps (bundle)
+    };
+  });
   S.closureByUuid = new Map(S.nodeIndex.map((n) => [n.uuid, n]));
   const sum = summary(s); S.byTypeCache = sum.byType;
   if (!viewer) restoreFilter(); // 還原上次的清單過濾（型別只保留專案實際有的）；快照不繼承本機篩選

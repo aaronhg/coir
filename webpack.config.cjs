@@ -35,6 +35,9 @@ module.exports = (env, argv) => {
     // No source map in the published build → the hosted bundle has no dangling
     // sourceMappingURL (so no devtools 404) and dist/ ships a single file.
     devtool: isProd ? false : 'source-map',
+    // `.md` imported as a raw string (webpack 5 built-in — no loader/dep). The
+    // in-app help is authored as Markdown and rendered by src/browser/md.js.
+    module: { rules: [{ test: /\.md$/, type: 'asset/source' }] },
     plugins: [new webpack.DefinePlugin({ __BUILD__: JSON.stringify(BUILD) })],
     devServer: {
       static: { directory: __dirname }, // serve index.html from project root

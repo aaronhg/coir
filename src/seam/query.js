@@ -4,7 +4,7 @@
 // commands and the MCP server both call these, so the query data model is one
 // place. (The CLI's text rendering stays in cli.js; this is the json substance.)
 import { mainUuid } from '../core/uuid.js';
-import { closureReport, summary, unusedReport, orphanRefReport, droppedMetaReport, atlasUtilizationReport, sizeReport } from '../core/analyze.js';
+import { closureReport, summary, unusedReport, orphanRefReport, droppedMetaReport, atlasUtilizationReport, sizeReport, bundleReport } from '../core/analyze.js';
 import { base, edgeSort, orphansOf, locJson } from './shared.js';
 
 /**
@@ -50,7 +50,7 @@ export function depsData(scan, maps, uuid, { showOut = true, showIn = true, type
 export function infoData(a) {
   return {
     path: a.path, type: a.type, uuid: a.uuid, ext: a.ext, importer: a.importer,
-    size: a.size, inResources: a.inResources, in: a.in, out: a.out,
+    size: a.size, inResources: a.inResources, bundle: a.bundle ?? null, in: a.in, out: a.out,
     subAssets: a.subAssets.map((s) => ({ subId: s.subId, uuid: s.uuid, kind: s.kind, name: s.name })),
     userData: a.userData ?? null,
   };
@@ -95,7 +95,7 @@ export function closureData(scan, uuid, { types = new Set(), list = false } = {}
 // The structured form of each node-run.js report section, over the shared
 // analyze.js builders. cli.js renders these as text; the MCP `analyze` tool
 // returns them verbatim. One logic, two front-ends.
-export const ANALYZE_SECTIONS = ['stats', 'unused', 'orphans', 'atlas', 'size'];
+export const ANALYZE_SECTIONS = ['stats', 'unused', 'orphans', 'atlas', 'size', 'bundles'];
 
 const sizeByType = (items) => { const m = {}; for (const i of items) { const t = (m[i.type] ||= { count: 0, size: 0 }); t.count++; t.size += i.size || 0; } return m; };
 
@@ -114,7 +114,8 @@ export function analyzeData(scan, section, { types = new Set(), limit = Infinity
       const items = types.size ? r.items.filter((i) => types.has(i.type)) : r.items;
       const totalSize = types.size ? items.reduce((s, i) => s + (i.size || 0), 0) : r.totalSize;
       const byType = types.size ? countByType(items) : r.byType;
-      return { items: items.slice(0, limit), total: items.length, totalSize, byType };
+      const cand = types.size ? r.candidates.filter((i) => types.has(i.type)) : r.candidates;
+      return { items: items.slice(0, limit), total: items.length, totalSize, byType, candidates: cand.slice(0, limit), candidatesTotal: cand.length };
     }
     case 'orphans': {
       const r = orphanRefReport(scan);
@@ -135,6 +136,7 @@ export function analyzeData(scan, section, { types = new Set(), limit = Infinity
       if (list) o.items = items.slice(0, limit);
       return o;
     }
+    case 'bundles': return bundleReport(scan, { limit }); // per-bundle stats + cross-bundle links + cycles
     default: return null; // unknown section
   }
 }

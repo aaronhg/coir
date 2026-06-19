@@ -3,6 +3,7 @@
 
 import { buildAdjacency, dependencyClosure } from './graph.js';
 import { mainUuid } from './uuid.js';
+import { buildBundleGraph, bundleName } from './bundleGraph.js';
 
 // Scenes are loaded by name at runtime, so they are roots, never "unused".
 // Scripts with no editor reference are flagged separately (they may be entry
@@ -11,23 +12,28 @@ import { mainUuid } from './uuid.js';
 const ROOT_TYPES = new Set(['scene']);
 const isRootType = (scan, type) => ROOT_TYPES.has(type) || !!(scan.rootTypes && scan.rootTypes.has(type));
 
-// Unused = source asset OUTSIDE the resources bundle with zero referrers.
-// Per project policy, everything under resources/ is treated as runtime-loaded
-// (by path string) and is never flagged.
+// Unused = a 0-referrer source asset that is NOT in a bundle. Any bundle's assets
+// (resources AND custom Asset Bundles) are loaded by path string at runtime, so a
+// 0-referrer asset there is a runtime-load *candidate*, not a confirmed orphan —
+// it is split into `candidates` (informational), never flagged. This generalizes
+// the old resources/-only rule (a2): a prefab loaded dynamically from a custom
+// bundle is no longer a false "unused". `main` (= unbundled) is still checked.
 export function unusedReport(scan) {
-  const items = [];
+  const items = [];      // flagged: 0-referrer, unbundled (main / no bundle)
+  const candidates = []; // 0-referrer but inside a bundle → maybe loaded by path, maybe dead
   for (const a of scan.assets.values()) {
     if (a.virtual) continue; // a plugin's non-asset node is never an "unused file"
-    if (a.inResources) continue;
     if (isRootType(scan, a.type)) continue;
-    if (a.in > 0) continue;
     if (!a.hasSource) continue;
+    if (a.in > 0) continue;
+    if (a.bundle && a.bundle !== 'main') { candidates.push({ uuid: a.uuid, path: a.path, type: a.type, size: a.size, bundle: a.bundle }); continue; }
     items.push({ uuid: a.uuid, path: a.path, type: a.type, size: a.size });
   }
   items.sort((x, y) => y.size - x.size);
+  candidates.sort((x, y) => y.size - x.size);
   const totalSize = items.reduce((s, i) => s + (i.size || 0), 0);
   const byType = countBy(items, (i) => i.type);
-  return { items, totalSize, byType };
+  return { items, totalSize, byType, candidates };
 }
 
 // Dangling `__uuid__` references. Two flavours: the target uuid is in no .meta
@@ -129,6 +135,79 @@ export function closureReport(scan, rootUuid) {
   const totalSize = items.reduce((s, i) => s + (i.size || 0), 0);
   const byType = countBy(items, (i) => i.type);
   return { root: pathOf(scan, rootUuid), items, totalSize, byType, count: items.length };
+}
+
+// Cross-bundle DUPLICATION (axis D): assets the build will physically bake into
+// more than one bundle, and the bytes that wastes. Cocos places a shared asset in
+// the highest-priority bundle among those that need it; a tie at the top tier →
+// it is COPIED into each of them (different priorities → the lower ones keep a
+// stub, no copy). So an asset is duplicated when ≥2 same-(top-)priority bundles
+// reach it. `needers` = bundles whose content closure (members + their out-deps)
+// contains the asset. Static approximation of the build's dedup (main/resources
+// treated as priority 0); `wasted = size × (copies − 1)`.
+export function bundleDuplication(scan) {
+  const { nodes } = buildBundleGraph(scan);
+  if (!nodes.length) return { items: [], totalWasted: 0 };
+  const adj = scan.adjacency || (scan.adjacency = buildAdjacency(scan.edges));
+  const prio = new Map((scan.bundles || []).map((b) => [b.name, b.priority || 0]));
+  const members = new Map();
+  for (const a of scan.assets.values()) {
+    if (a.virtual || !a.bundle) continue;
+    let m = members.get(a.bundle); if (!m) members.set(a.bundle, (m = [])); m.push(a.uuid);
+  }
+  const needers = new Map(); // assetUuid -> Set(bundleName) whose content reaches it
+  for (const [name, uuids] of members) {
+    const seen = new Set(uuids); const stack = [...uuids]; // multi-source out-closure
+    while (stack.length) { const u = stack.pop(); for (const n of adj.out.get(u) || []) if (!seen.has(n.to)) { seen.add(n.to); stack.push(n.to); } }
+    for (const u of seen) { let s = needers.get(u); if (!s) needers.set(u, (s = new Set())); s.add(name); }
+  }
+  const items = []; let totalWasted = 0;
+  for (const [u, set] of needers) {
+    if (set.size < 2) continue;
+    const a = scan.assets.get(u);
+    if (!a || a.virtual || !a.hasSource) continue;
+    let top = -Infinity; for (const n of set) top = Math.max(top, prio.get(n) ?? 0);
+    const tier = [...set].filter((n) => (prio.get(n) ?? 0) === top).sort();
+    if (tier.length < 2) continue; // unique top → single home + stubs (no physical copy)
+    const wasted = (a.size || 0) * (tier.length - 1);
+    items.push({ uuid: u, path: a.path, type: a.type, size: a.size || 0, copies: tier.length, bundles: tier, wasted });
+    totalWasted += wasted;
+  }
+  items.sort((x, y) => y.wasted - x.wasted);
+  return { items, totalWasted };
+}
+
+// Asset Bundle audit: per-bundle size/members/degree + the cross-bundle
+// dependency links (each with the contributing asset references) + cycles (pairs
+// linked in both directions — a leaky boundary) + duplication (axis D). Pure over
+// the parallel bundle graph; empty for a project with no real bundles. `limit`
+// caps refs-per-link and the duplication list.
+export function bundleReport(scan, { limit = Infinity } = {}) {
+  const { nodes, depEdges } = buildBundleGraph(scan);
+  const pathOf2 = (u) => { const a = scan.assets.get(u); return a ? a.path : u; };
+  const bundles = nodes
+    .map((n) => ({ name: n.path, size: n.size, members: n.memberCount, in: n.in, out: n.out }))
+    .sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+  const linkSet = new Set(depEdges.map((d) => `${d.from} ${d.to}`));
+  const inCycle = (d) => linkSet.has(`${d.to} ${d.from}`);
+  const links = depEdges
+    .map((d) => ({
+      from: bundleName(d.from), to: bundleName(d.to), weight: d.weight, cycle: inCycle(d),
+      refsTotal: d.refs.length,
+      refs: d.refs.slice(0, limit).map((r) => ({ from: pathOf2(r.from), to: pathOf2(r.to), kind: r.kind })),
+    }))
+    .sort((a, b) => Number(b.cycle) - Number(a.cycle) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+  // Unordered bundle pairs linked in BOTH directions.
+  const seen = new Set(); const cycles = [];
+  for (const d of depEdges) {
+    if (!inCycle(d)) continue;
+    const pair = [bundleName(d.from), bundleName(d.to)].sort();
+    const k = pair.join(' ');
+    if (!seen.has(k)) { seen.add(k); cycles.push({ a: pair[0], b: pair[1] }); }
+  }
+  const dd = bundleDuplication(scan); // axis D: bytes the build copies into ≥2 same-priority bundles
+  const dup = { items: dd.items.slice(0, limit), total: dd.items.length, totalWasted: dd.totalWasted };
+  return { bundles, links, cycles, dup, total: bundles.length };
 }
 
 export function summary(scan) {

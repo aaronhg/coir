@@ -5,6 +5,12 @@
 //   /** @type {import('coir').Plugin} */
 //   export default { name: 'audio-call', async edges(ctx) { /* ctx is typed */ } };
 
+/** `.md` files are imported as raw strings (webpack asset/source) — e.g. the in-app help. */
+declare module '*.md' {
+  const content: string;
+  export default content;
+}
+
 /** Environment-agnostic file access; all paths are POSIX-relative to assets/. */
 export interface FileProvider {
   listFiles(): Promise<string[]>;
@@ -38,9 +44,20 @@ export interface Asset {
   hasSource: boolean;
   size: number;
   inResources: boolean;
+  bundle: string | null; // owning Asset Bundle name ('main' = no bundle; null for virtual nodes)
   in: number; // in-degree
   out: number; // out-degree
   virtual?: boolean; // a plugin-added non-asset node (no file); excluded from health reports
+  isBundleNode?: boolean; // a synthetic Asset Bundle pseudo-node (type 'bundle', from buildBundleGraph)
+  memberCount?: number; // bundle pseudo-node: how many assets it contains
+}
+
+/** An Asset Bundle (a folder whose directory meta has userData.isBundle). */
+export interface Bundle {
+  name: string; // bundleName, or the folder name; built-ins: 'main' / 'resources'
+  root: string; // bundle folder path, POSIX-relative to assets/ ('' for the implicit 'main')
+  priority: number; // build priority (higher wins when a shared asset must pick a home)
+  builtin?: boolean; // 'main' / 'resources' — synthesized, not from a user isBundle meta
 }
 
 /** Where/how one edge is used inside a prefab/scene (from edge.locations). */
@@ -82,6 +99,7 @@ export interface ScanResult {
   missingReferenced: Set<string>; // dropped paths something still points at
   files: string[];
   rootTypes: Set<string>; // plugin-declared never-unused types
+  bundles: Bundle[]; // Asset Bundles ('main' + 'resources' + any user isBundle folders)
   adjacency?: Adjacency; // attached post-scan by buildAdjacency
 }
 
@@ -108,6 +126,8 @@ export interface PluginContext {
    * reports skip it. Idempotent by key; returns the stable key to wire edges to.
    */
   addNode(node: { path: string; type: string; ext?: string; importer?: string; size?: number; subAssets?: SubAsset[]; userData?: any; uuid?: string }): string;
+  /** Asset Bundle descriptors (`main` + `resources` + user bundles) — resolve a bundle-relative load path against `b.root`. */
+  bundles: Bundle[];
   /** Every asset-relative path the FileProvider lists (incl. `.meta`) — the formal entry to read any source via `readText`. */
   files: string[];
   readText(path: string): Promise<string>;
@@ -175,6 +195,30 @@ export interface Plugin {
    * `spine-dup` report (the same shared-region data the `spine-dup` command finds).
    */
   reports?: ReportSection[];
+  /**
+   * CI rule checkers contributed to `coir check` (see RuleChecker). A plugin's
+   * project-specific gate (e.g. "no audio outside the audio/ bundle") lives here
+   * without forking coir; built-in checker names always win on a collision.
+   */
+  rules?: RuleChecker[];
+}
+
+/** One violation a rule checker reports (asset/locations optional). */
+export interface RuleViolation {
+  message: string;
+  asset?: string; // the offending asset's path (or uuid)
+  locations?: string[]; // paste-able nodePath:Comp.prop selectors, when the violation is an edge
+}
+
+/**
+ * A plugin-contributed CI rule (see `Plugin.rules`). `check` is pure over the
+ * scan (+ optional precomputed ctx, e.g. ctx.duplicates) and RETURNS violations
+ * (empty = pass) — it never prints or exits. The config enables it by `name`
+ * with a `level` ('error'|'warn'), exactly like a built-in checker.
+ */
+export interface RuleChecker {
+  name: string;
+  check(scan: ScanResult, rule: any, ctx: { duplicates?: any }): RuleViolation[];
 }
 
 /** A browser report section contributed by a plugin (see `Plugin.reports`). */

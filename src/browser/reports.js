@@ -2,7 +2,8 @@
 // Every section respects the ONE global type filter (the bar under the banner).
 import { S, $, base, dirOf, esc, kb, typeColor } from './state.js';
 import { t } from './i18n.js';
-import { unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, droppedMetaReport } from '../core/analyze.js';
+import { unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, droppedMetaReport, bundleDuplication } from '../core/analyze.js';
+import { buildBundleGraph, bundleName } from '../core/bundleGraph.js';
 import { typeAllowed } from './filterbar.js';
 import { visualSectionHTML, hydrateVisualSection } from './visualreport.js';
 
@@ -10,6 +11,48 @@ function refRow(uuid, path, type, right) {
   return `<div class="ref" data-uuid="${uuid}"><span class="dot" style="background:${typeColor(type)}"></span>` +
     `<span class="nm">${esc(base(path))}</span><span class="rdir" title="${esc(dirOf(path))}">${esc(dirOf(path) || '/')}</span>` +
     `<span class="meta">${right || ''}</span></div>`;
+}
+// One contributing asset reference behind a bundle→bundle link (data-uuid = the
+// referencing asset, so a click focuses it in the topology).
+function bundleRefRow(r) {
+  const fa = S.scan.assets.get(r.from), ta = S.scan.assets.get(r.to);
+  if (!fa || !ta) return '';
+  return `<div class="ref" data-uuid="${r.from}" title="${esc(`${fa.path} → ${ta.path}`)}">` +
+    `<span class="dot" style="background:${typeColor(fa.type)}"></span>` +
+    `<span class="nm">${esc(base(fa.path))} → ${esc(base(ta.path))}</span>` +
+    `<span class="meta"><span class="dyn">${esc(r.kind)}</span></span></div>`;
+}
+// The cross-bundle dependency section (built from the parallel bundle graph; null
+// when the project has no real bundles).
+function bundleSection() {
+  const bg = buildBundleGraph(S.scan);
+  if (!bg.nodes.length) return null;
+  // axis D: bytes the build copies into ≥2 same-priority bundles
+  const dup = bundleDuplication(S.scan);
+  const dupBlock = dup.totalWasted > 0
+    ? `<div class="bdl-dup">⚠ ${esc(t('rep.bundleDup', { size: kb(dup.totalWasted), n: dup.items.length }))}</div>` +
+      `<details class="bdl" open><summary>${esc(t('rep.bundleDupList'))}</summary>` +
+      dup.items.map((i) => `<div class="ref" data-uuid="${i.uuid}" title="${esc(i.path)}">` +
+        `<span class="dot" style="background:${typeColor(i.type)}"></span><span class="nm">${esc(base(i.path))}</span>` +
+        `<span class="meta">×${i.copies} · ${esc(kb(i.wasted))} · ${esc(i.bundles.join(', '))}</span></div>`).join('') +
+      `</details>`
+    : '';
+  const linkSet = new Set(bg.depEdges.map((d) => `${d.from} ${d.to}`));
+  const inCyc = (d) => linkSet.has(`${d.to} ${d.from}`);
+  const seen = new Set(); const cycPairs = [];
+  for (const d of bg.depEdges) { if (!inCyc(d)) continue; const pr = [bundleName(d.from), bundleName(d.to)].sort(); const k = pr.join(' '); if (!seen.has(k)) { seen.add(k); cycPairs.push(pr); } }
+  const cycBanner = cycPairs.length ? `<div class="bdl-cyc">⚠ ${cycPairs.map(([a, b]) => `${esc(a)} ⇄ ${esc(b)}`).join(' · ')}</div>` : '';
+  const links = bg.depEdges.slice().sort((a, b) => Number(inCyc(b)) - Number(inCyc(a))
+    || bundleName(a.from).localeCompare(bundleName(b.from)) || bundleName(a.to).localeCompare(bundleName(b.to)));
+  const linksHtml = links.map((d) => {
+    const cyc = inCyc(d);
+    return `<details class="bdl"${cyc ? ' open' : ''}><summary>${esc(bundleName(d.from))} <span class="arr">→</span> ${esc(bundleName(d.to))}` +
+      ` <span class="sub">${d.refs.length}${cyc ? ' ⇄' : ''}</span></summary>${d.refs.map(bundleRefRow).join('')}</details>`;
+  }).join('') || `<div class="empty">${esc(t('rep.none'))}</div>`;
+  const sub = t('rep.bundleSub', { n: bg.nodes.length })
+    + (cycPairs.length ? ` · ${t('rep.bundleCyc', { n: cycPairs.length })}` : '')
+    + (dup.totalWasted > 0 ? ` · ${t('rep.bundleDupTag', { size: kb(dup.totalWasted) })}` : '');
+  return { id: 'bundle', title: t('rep.bundle'), sub, body: dupBlock + cycBanner + linksHtml };
 }
 export function renderReports() {
   if (!S.scan) return;
@@ -21,9 +64,14 @@ export function renderReports() {
 
   const unusedItems = unused.items.filter((i) => typeAllowed(i.type));
   const unusedSize = unusedItems.reduce((s, i) => s + (i.size || 0), 0);
-  const unusedBody = unusedItems.length
+  const unusedCands = (unused.candidates || []).filter((i) => typeAllowed(i.type)); // 0-ref but in a bundle (a2)
+  const candBlock = unusedCands.length
+    ? `<h4 class="rsubh">${esc(t('rep.unusedCand', { n: unusedCands.length }))}</h4>`
+      + unusedCands.slice(0, 200).map((i) => refRow(i.uuid, i.path, i.type, `${kb(i.size)} · ${esc(i.bundle)}`)).join('')
+    : '';
+  const unusedBody = (unusedItems.length
     ? unusedItems.slice(0, 300).map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('')
-    : `<div class="empty">${esc(t('rep.none'))}</div>`;
+    : `<div class="empty">${esc(t('rep.none'))}</div>`) + candBlock;
 
   const orphanBody = orphans.items.length // orphans have no asset type → unfiltered
     ? orphans.items.slice(0, 200).map((i) => i.missingSource
@@ -69,6 +117,8 @@ export function renderReports() {
     { id: 'atlas', title: t('rep.atlas'), sub: t('rep.atlasSub', { n: atlasItems.length }), body: atlasBody },
     { id: 'size', title: t('rep.size'), sub: kb(sizeTotal), body: sizeBody },
   ];
+  const bundle = bundleSection();
+  if (bundle) core.push(bundle); // cross-bundle dependency audit (only when the project uses bundles)
   if (dropped.total) core.push({ id: 'dropped', title: t('rep.dropped'), sub: t('rep.droppedSub', { n: dropped.total }) + ' · ' + (dropped.referencedCount ? t('rep.droppedRefd', { n: dropped.referencedCount }) : t('rep.droppedNoRef')), body: droppedBody });
   S.reportBodies = Object.fromEntries(core.map((s) => [s.id, s]));
 

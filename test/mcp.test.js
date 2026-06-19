@@ -132,7 +132,18 @@ test('mcp: analyze tool returns audit sections (stats default + a named section)
   assert.equal(stats.metaErrors, 0);
   assert.ok(stats.assets >= 2 && stats.edgeKinds);
   assert.ok(dataOf(r[2]).byType.prefab); // size section
-  assert.deepEqual(Object.keys(dataOf(r[3])).sort(), ['atlas', 'orphans', 'size', 'stats', 'unused']);
+  assert.deepEqual(Object.keys(dataOf(r[3])).sort(), ['atlas', 'bundles', 'orphans', 'size', 'stats', 'unused']);
+});
+
+test('mcp: check tool evaluates an inline ruleset → { violations, errors, warns }', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'check', { rules: [{ name: 'max-meta-errors', level: 'error', max: 0 }, { name: 'no-orphans', level: 'warn' }] }),
+    call(2, 'check', { rules: [{ name: 'no-such-rule' }] }),
+  ]);
+  const d = dataOf(r[1]);
+  assert.ok(Array.isArray(d.violations) && typeof d.errors === 'number' && typeof d.warns === 'number');
+  assert.equal(dataOf(r[2]).configErrors, 1); // unknown rule
 });
 
 test('mcp: a bad selector comes back as an isError tool result, not a crash', async () => {
