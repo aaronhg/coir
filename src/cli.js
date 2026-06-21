@@ -36,7 +36,7 @@ import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareDa
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from './core/rules.js';
-import { cmdEdit, cmdVerify } from './editCli.js';
+import { cmdEdit, cmdVerify, cmdNativeVerify } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
 const VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return '?'; } })();
@@ -157,6 +157,8 @@ function parseArgs(argv) {
     else if (a === '--values') flags.values = true; // edit tree: inline node/component values (deep read)
     else if (a === '--diff') flags.diff = true; // edit: print a unified diff of the change (works with --dry-run)
     else if (a === '--verify') flags.verify = true; // edit: structurally validate the result before writing
+    else if (a === '--port') flags.port = parseInt(argv[++i], 10) || undefined; // native-verify: endpoint port (default: auto-probe 3789..3809)
+    else if (a.startsWith('--port=')) flags.port = parseInt(a.slice(7), 10) || undefined;
     else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
     else if (a.startsWith('--output=')) flags.json = a.slice(9) === 'json';
     else if (a === '--list') flags.list = true;
@@ -617,6 +619,7 @@ async function main() {
   if (command === 'check') { await cmdCheck(scan, fp, projectDir, flags, plugins); return; } // declarative CI gate (exits non-zero on failure)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
   if (command === 'verify') { cmdVerify(scan, projectDir, flags, [target]); return; } // offline structural validation of a prefab/scene
+  if (command === 'native-verify') { await cmdNativeVerify(scan, projectDir, flags, [target]); return; } // live-engine cross-check (needs the cocos-extension endpoint)
 
   // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).
   const pcmd = pluginCommands.get(command);

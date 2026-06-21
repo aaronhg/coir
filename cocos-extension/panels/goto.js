@@ -132,6 +132,25 @@ async function reflect(panel) {
   }
 }
 
+// ── native-verify status footer ─────────────────────────────────────────────
+// Talk to main.js (package 'coir') for the endpoint's live state + a start/stop
+// toggle. Shows the bound port + cocos version in the panel's bottom-right.
+const vstatus = async () => { try { return await Editor.Message.request('coir', 'coir-verify-status'); } catch (e) { return null; } };
+async function renderVerify(panel) {
+  if (!panel.$ || !panel.$.vinfo) return;
+  const s = await vstatus();
+  if (!s) { panel.$.vinfo.innerText = ''; if (panel.$.vtoggle) panel.$.vtoggle.style.display = 'none'; return; }
+  const ver = s.version && s.version !== '?' ? ` · cocos ${s.version}` : '';
+  panel.$.vinfo.innerText = s.running ? `native-verify :${s.port}${ver}` : `native-verify off${ver}`;
+  panel.$.vinfo.className = s.running ? 'on' : '';
+  if (panel.$.vtoggle) { panel.$.vtoggle.style.display = ''; panel.$.vtoggle.innerText = s.running ? 'stop' : 'start'; }
+}
+async function toggleVerify(panel) {
+  const s = await vstatus();
+  try { await Editor.Message.request('coir', s && s.running ? 'coir-verify-stop' : 'coir-verify-start'); } catch (e) { /* */ }
+  renderVerify(panel); // start/stop resolve after bind, so the re-query sees the new state
+}
+
 module.exports = Editor.Panel.define({
   template: `
     <div class="coir-goto">
@@ -140,19 +159,24 @@ module.exports = Editor.Panel.define({
         <ui-button id="go"></ui-button>
       </div>
       <div id="msg"></div>
+      <div class="foot"><span id="vinfo"></span><ui-button id="vtoggle" type="text"></ui-button></div>
     </div>`,
   style: `
-    .coir-goto { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .coir-goto { padding: 8px; display: flex; flex-direction: column; gap: 6px; height: 100%; box-sizing: border-box; }
     .row { display: flex; gap: 6px; align-items: center; }
     #sel { flex: 1; }
     #msg { font-size: 11px; line-height: 1.4; white-space: pre-wrap; opacity: .9; min-height: 14px; }
     #msg.err { color: var(--color-danger, #f66); }
-    #msg.ok  { color: var(--color-success, #6c6); }`,
-  $: { sel: '#sel', go: '#go', msg: '#msg' },
+    #msg.ok  { color: var(--color-success, #6c6); }
+    .foot { margin-top: auto; display: flex; justify-content: flex-end; align-items: center; gap: 4px; font-size: 10px; opacity: .65; }
+    #vinfo.on { color: var(--color-success, #6c6); opacity: .95; }`,
+  $: { sel: '#sel', go: '#go', msg: '#msg', vinfo: '#vinfo', vtoggle: '#vtoggle' },
   ready() {
     this.$.go.innerText = T('goto_go', '跳轉');
     this.$.sel.setAttribute('placeholder', T('goto_ph', '貼上 coir 節點路徑或檔名，如 Canvas/…/Node 或 xxx.prefab'));
     this.$.go.addEventListener('confirm', () => jump(this));   // 點按鈕
+    this.$.vtoggle.addEventListener('confirm', () => toggleVerify(this)); // native-verify 開關
+    renderVerify(this); // 顯示 endpoint 狀態 + port
     // 用原生 keydown 抓 Enter——比 ui-input 的 confirm 可靠（confirm 只在值有變動時才在 Enter 觸發，
     // 沒改再按就不發 → 之前「第二次 Enter 沒反應」的原因）。
     this.$.sel.addEventListener('keydown', (e) => { if (e.key === 'Enter') jump(this); });

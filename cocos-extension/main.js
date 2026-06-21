@@ -6,6 +6,7 @@
 // layers locally. `open-topo` encodes the neighborhood into the viewer URL hash.
 const path = require('path');
 const fs = require('fs');
+const http = require('node:http'); // native-verify control endpoint (zero-dep)
 const { shell } = require('electron'); // open the OS browser
 
 // coir's embedder API (package.json "exports" → src/index.js). After the
@@ -137,6 +138,63 @@ async function broadcastAssetMenus() {
 let invT = null;
 function invalidate() { scanP = null; clearTimeout(invT); invT = setTimeout(() => { broadcastGraph(); broadcastAssetMenus(); }, 300); } // debounce a burst of changes
 
+// ── native-verify control endpoint (opt-in) ─────────────────────────────────
+// A tiny localhost HTTP server exposing exactly the THREE primitives a coir-owned
+// native verify needs — reimport · scene readback · fixture I/O — so coir's own
+// edits (written via `coir edit`/`coir mcp`, the existing front doors) can be
+// confirmed against the LIVE engine without the ~50-tool third-party MCP. Pure
+// Editor API here; NO coir-edit code runs in this endpoint (editing stays in the
+// CLI/MCP front doors → coir's public API is untouched). 127.0.0.1 only, unref'd.
+// NOTE: the asset-db message names below are the 3.8 set — confirm for 3.5.x.
+let verifyServer = null;
+let verifyPort = null; // the actually-bound port (auto-incremented from VERIFY_PORT if taken)
+const VERIFY_PORT = Number(process.env.COIR_VERIFY_PORT) || 3789;
+const VERIFY_PORT_MAX = VERIFY_PORT + 20; // try 3789..3809 before giving up
+const cocosVersion = () => { try { return Editor.App.version || '?'; } catch (e) { return '?'; } };
+const sendJson = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+const readBody = (req) => new Promise((ok) => { let s = ''; req.on('data', (d) => { s += d; }); req.on('end', () => ok(s || '{}')); });
+
+// Bind `server` from `port` upward, skipping ports in use (EADDRINUSE). Calls
+// done(boundPort) on success, done(null) if none in [port, VERIFY_PORT_MAX] free.
+function listenFrom(server, port, done) {
+  const onErr = (e) => {
+    if (e && e.code === 'EADDRINUSE' && port < VERIFY_PORT_MAX) { listenFrom(server, port + 1, done); return; }
+    console.error('[coir] native-verify listen failed:', e); verifyServer = null; verifyPort = null; if (done) done(null);
+  };
+  server.once('error', onErr);
+  server.listen(port, '127.0.0.1', () => {
+    server.removeListener('error', onErr);
+    server.on('error', (e) => console.error('[coir] native-verify server error:', e));
+    verifyPort = port;
+    console.log(`[coir] native-verify on http://127.0.0.1:${port}  (/reimport /read /fixture /ready /uuid)`);
+    if (done) done(port);
+  });
+}
+
+async function fixtureOp(A, b) {
+  if (b.action === 'copy') await A('copy-asset', b.src, b.dst);
+  else if (b.action === 'create') await A('create-asset', b.url, b.content == null ? null : b.content);
+  else if (b.action === 'delete') await A('delete-asset', b.url);
+  else return { error: `unknown fixture action "${b.action}"` };
+  try { await A('refresh-asset', b.dst || b.url || 'db://assets'); } catch (e) { /* refresh best-effort */ }
+  let uuid = null; try { uuid = await A('query-uuid', b.dst || b.url); } catch (e) { /* */ }
+  return { ok: true, uuid };
+}
+
+async function handleVerify(req, res) {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'POST only' });
+  let b; try { b = JSON.parse(await readBody(req)); } catch (e) { return sendJson(res, 400, { error: 'bad JSON body' }); }
+  const A = (m, ...a) => Editor.Message.request('asset-db', m, ...a);
+  switch (req.url) {
+    case '/reimport': await A('reimport-asset', b.url); return sendJson(res, 200, { ok: true }); // engine re-reads from disk; malformed → import error
+    case '/read':     return sendJson(res, 200, await Editor.Message.request('scene', 'execute-scene-script', { name: 'coir', method: 'coirRead', args: [b.uuid, b.selectors] })); // instantiate + read selectors (scene.js)
+    case '/fixture':  return sendJson(res, 200, await fixtureOp(A, b)); // copy/create/delete + refresh → isolated test assets
+    case '/ready':    { let ready = true; try { ready = await A('query-ready'); } catch (e) { /* */ } return sendJson(res, 200, { ready, version: cocosVersion(), project: Editor.Project.path }); }
+    case '/uuid':     return sendJson(res, 200, { uuid: await A('query-uuid', b.url).catch(() => null) });
+    default:          return sendJson(res, 404, { error: `unknown route ${req.url}` });
+  }
+}
+
 exports.methods = {
   // The (sync) asset menu primes its graph cache from this on load.
   async allGraph() { try { return await graphSnapshot(); } catch (e) { console.error('[coir] allGraph failed:', e); return { uuids: [], names: [], out: [], inc: [] }; } },
@@ -158,6 +216,19 @@ exports.methods = {
     try { await Editor.Panel.open('coir.goto'); }
     catch (e) { console.error('[coir] openGoto failed:', e); }
   },
+  // Start/stop the native-verify endpoint (opt-in; menu Coir ▸ native-verify, or
+  // the goto panel toggle). Resolves to the live status so a caller gets the port.
+  startVerify() {
+    if (verifyServer) return { running: true, port: verifyPort, version: cocosVersion(), project: Editor.Project.path };
+    verifyServer = http.createServer((req, res) =>
+      handleVerify(req, res).catch((e) => { try { sendJson(res, 200, { error: String((e && e.message) || e) }); } catch (_) { /* */ } }));
+    verifyServer.unref();
+    return new Promise((resolve) => listenFrom(verifyServer, VERIFY_PORT, (port) =>
+      resolve({ running: port != null, port, version: cocosVersion(), project: Editor.Project.path })));
+  },
+  stopVerify() { if (verifyServer) { try { verifyServer.close(); } catch (e) { /* */ } verifyServer = null; verifyPort = null; console.log('[coir] native-verify stopped'); } return { running: false }; },
+  // Current endpoint status — for the goto panel's footer.
+  verifyStatus() { return { running: !!verifyServer, port: verifyPort, version: cocosVersion(), project: Editor.Project.path }; },
 };
 
 exports.load = function () {
@@ -173,4 +244,5 @@ exports.unload = function () {
   for (const ev of ['asset-add', 'asset-change', 'asset-delete']) {
     try { Editor.Message.removeBroadcastListener(`asset-db:${ev}`, invalidate); } catch (e) { /* */ }
   }
+  if (verifyServer) { try { verifyServer.close(); } catch (e) { /* */ } verifyServer = null; } // stop the native-verify endpoint
 };

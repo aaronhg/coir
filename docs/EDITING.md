@@ -95,6 +95,13 @@ Shared flags: `--dry-run` (locate only, don't write) · `--backup` (save a `.bak
 
 > `verify` closes the loop that otherwise needs the editor: coir's edits are already structurally careful (index compaction, the guards below), and `verify` lets you confirm the result is sound **without opening Cocos Creator**. The only thing it can't judge is pure engine *semantics* (a `cc.*` builtin's own rules) — everything structural is knowable here.
 
+### Validation — `native-verify` (verify's LIVE twin, needs the editor)
+| Command | Effect |
+|---|---|
+| `native-verify <file> [--port N]` | Cross-check coir's read of a file against the **live Cocos engine**. Asks the running editor (via the `cocos-extension/` native-verify endpoint) to **reimport + instantiate the SAME file**, then confirms every node/component coir parses is one the engine actually builds (node name/active match; each component present). Catches engine-*semantic* breakage `verify` can't: a file that fails to import, a component the engine silently **drops** (e.g. a bogus `cc.*` type — coir trusts `cc.*`, the engine doesn't), a missing script. Expected values **are coir's own read** — no assertions to supply, just like `verify`. `-o json` for `{ valid, nodes, components, engine, fails[] }`. Exits `0` match / `1` mismatch / `2` endpoint-unreachable-or-wrong-project. `--port`/`$COIR_VERIFY_PORT` pins the port (default: auto-probe 3789..3809). |
+
+> The endpoint is **opt-in** inside the coir editor extension (menu *Coir ▸ native-verify: start*, or the goto-panel toggle) and binds `127.0.0.1` only. `connect()` probes 3789..3809 and returns the endpoint whose **open project matches** `-C` — so you can have several Cocos windows open and it finds the right one (rather than locking onto the first port). The three escalating checks share one `<file>` argument: `edit` (write, front door) → `verify` (offline structural, fast) → `native-verify` (live-engine cross-check). Design + the gotchas (`execute-scene-script` for scene methods, dotted-type readback, reimport-before-read) in DEVELOPMENT.md §11.27–§11.29 and `cocos-extension/README.md`.
+
 ### Batch — `batch` (atomic multi-op)
 | Command | Effect |
 |---|---|
@@ -216,8 +223,9 @@ coir edit <file> <op> <selector|args…> [value flag] [--dry-run] [--backup] [--
 coir edit --all swap-uuid <oldAsset> <newAsset> [--dry-run] [--backup] [-o json]
 coir edit <file> batch <ops.json>          # atomic multi-op (all-or-nothing)
 coir verify <file> [-o json]               # offline structural validation (also: edit <file> verify)
+coir native-verify <file> [--port N]       # live-engine cross-check (needs the cocos-extension endpoint)
 ```
-(`--force` skips the pre-write mtime guard; `--diff` previews the change; `--verify` validates the result before writing; the same set of ops + `verify`/`batch` is also exposed via `coir mcp`'s MCP tools — see [docs/MCP.md](MCP.md).)
+(`--force` skips the pre-write mtime guard; `--diff` previews the change; `--verify` validates the result before writing; the same set of ops + `verify`/`batch` is also exposed via `coir mcp`'s MCP tools — see [docs/MCP.md](MCP.md). `native-verify` is CLI-only — it needs the live editor.)
 
 ## 9. Examples
 
@@ -255,6 +263,10 @@ coir edit Shop.prefab set-active "Canvas/Debug" --bool false --diff --dry-run
 coir verify Shop.prefab
 coir edit Shop.prefab set-pos "Canvas/Player" --vec3 1 2 3 --verify   # validate the result before writing
 
+# Live-engine cross-check: the running editor reimports+instantiates the SAME file
+# and confirms the engine builds what coir parsed (catches a silently-dropped cc.* etc.)
+coir native-verify Shop.prefab                 # → "✓ engine matches coir's read" / exit 0
+
 # Atomic multi-op: rename + add a node + rotate, all-or-nothing, one write
 coir edit Shop.prefab batch '[
   {"op":"rename","selector":"Canvas/Old","value":"New"},
@@ -279,6 +291,7 @@ coir edit Shop.prefab batch '[
 | Project-level | `--all swap-uuid` + nested-instance guardrail | ✅ |
 | Exploration | `tree` (structure discovery + ready selectors; `--with`/`--under`/`--depth`/`--values` deep read) | ✅ |
 | Validation | `verify` (offline structural check) — command + `edit … verify` + `--verify` write gate + MCP tool | ✅ |
+| Live validation | `native-verify` (verify's live twin) — cross-check vs the running engine via the `cocos-extension/` endpoint; project-aware multi-editor probe | ✅ |
 | Batch | `batch` — atomic multi-op (load once → apply N → one write; all-or-nothing) | ✅ |
 | Diff | `--diff` (unified-diff preview, dependency-free LCS) | ✅ |
 | Shared seam | extract `src/edit/ops.js` (`runEdit`/`applyArrayOp`/`runBatch`/`verifyData`…) + `src/seam/query.js`, one source for CLI + MCP; atomic+mtime write guardrail | ✅ |

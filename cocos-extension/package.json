@@ -22,8 +22,14 @@
         "assetMenu": "onAssetMenu"
       }
     },
+    "scene": {
+      "script": "./scene.js",
+      "methods": ["coirRead"]
+    },
     "menu": [
-      { "path": "i18n:menu.panel/Coir", "label": "i18n:coir.goto_open", "message": "open-goto" }
+      { "path": "i18n:menu.panel/Coir", "label": "i18n:coir.goto_open", "message": "open-goto" },
+      { "path": "i18n:menu.panel/Coir", "label": "native-verify: start", "message": "coir-verify-start" },
+      { "path": "i18n:menu.panel/Coir", "label": "native-verify: stop", "message": "coir-verify-stop" }
     ],
     "shortcuts": [
       { "message": "open-goto", "win": "ctrl+alt+g", "mac": "ctrl+alt+g" }
@@ -32,7 +38,10 @@
       "open-topo": { "methods": ["openTopo"] },
       "all-graph": { "methods": ["allGraph"] },
       "all-asset-menus": { "methods": ["allAssetMenus"] },
-      "open-goto": { "methods": ["openGoto"] }
+      "open-goto": { "methods": ["openGoto"] },
+      "coir-verify-start": { "methods": ["startVerify"] },
+      "coir-verify-stop": { "methods": ["stopVerify"] },
+      "coir-verify-status": { "methods": ["verifyStatus"] }
     }
   }
 }

@@ -68,6 +68,40 @@ also loads `coir.plugins.mjs` from the **coir repo root** (global) and the
 custom plugin edges (e.g. audio-call `audioPlay('x')` → `x.mp3`); the active
 plugins are logged as `source.name` (`global.audio-call`, `project.…`).
 
+## Native-verify endpoint (for `coir native-verify`)
+
+A tiny **opt-in** localhost HTTP server that lets coir cross-check its read of a
+prefab/scene against the **live engine** — the headless `coir verify` checks
+structure offline; `coir native-verify <file>` asks *this* running editor to
+reimport + instantiate the same file and confirm the engine builds what coir
+parsed (catching a file that won't import, a silently-dropped `cc.*` component, a
+missing script). It exposes exactly the **three primitives** a native verify needs
+— and skips the rest of a general MCP bridge:
+
+```
+POST /reimport {url}                 asset-db reimport-asset      (validity gate)
+POST /read     {uuid, selectors[]}   scene readback (scene.js)    (terse — only the asked selectors)
+POST /fixture  {action,…}            asset-db copy/create/delete  (isolated test assets)
+POST /ready                          → { ready, version, project }
+POST /uuid     {url}                 → { uuid }
+```
+
+**Start it**: menu **Coir ▸ native-verify: start** (or the **toggle in the 跳轉
+panel's footer**, which also shows the bound port + cocos version). 127.0.0.1
+only, `unref`'d; it auto-increments from **3789** if the port is taken, so
+several editor windows each get their own. The CLI client (`coir native-verify`)
+probes 3789..3809 and picks the endpoint whose **open project matches** `-C`.
+
+Implementation: `main.js` (the HTTP server + `asset-db` calls, runs in the editor
+process where coir-core already lives) + **`scene.js`** (the readback — the one
+piece that must run in the *scene* process, invoked via `execute-scene-script`).
+`scene.js` resolves a component selector by **longest class-name match**
+(`cc.js.getClassName`), so a dotted type like `cc.SkinnedMeshRenderer._enabled`
+parses correctly. **Gotchas** (the reasons it's built this way): scene methods are
+called via `Editor.Message.request('scene','execute-scene-script',{name,method,args})`
+— NOT a bare `request('scene', method)`; **reimport must precede read** (asset-db
+caches the imported version). See coir's DEVELOPMENT.md §11.27–§11.29.
+
 ## How it works
 
 ```

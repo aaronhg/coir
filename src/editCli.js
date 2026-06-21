@@ -13,7 +13,9 @@ import { componentName } from './core/selector.js';
 import { resolveAsset, edgeMaps, locText } from './seam/shared.js';
 import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyText } from './edit/ops.js';
 import { unifiedDiff } from './edit/diff.js';
+import * as nv from './verify/nativeClient.js';
 import fs from 'node:fs';
+import path from 'node:path';
 
 // CLI-only messages: usage + value-flag errors. Operation errors (bad selector,
 // instance guard, not-a-prefab, …) come back from ops.js verbatim and are printed
@@ -215,6 +217,72 @@ export function cmdVerify(scan, projectDir, flags, pos) {
   for (const e of r.errors) console.log(`  ✗ [${e.code}] ${e.msg}`);
   for (const w of r.warnings) console.log(`  ⚠ [${w.code}] ${w.msg}`);
   process.exit(r.valid ? 0 : 1); // non-zero on structural errors → CI-gateable
+}
+
+// ---- native-verify: cross-check coir's read against the LIVE engine ----------
+// verify's twin: `verify` checks structure offline; `native-verify` asks the
+// running Cocos editor (via the coir extension's localhost endpoint) to reimport
+// + instantiate the SAME file, then confirms every node/component coir parses is
+// one the engine actually builds. Catches engine-semantic issues offline verify
+// can't: an import-rejecting file, a component the engine silently drops (e.g. a
+// bogus cc.* type), a missing script. Expected values ARE coir's own read — no
+// assertions to supply: just `native-verify <file>`, like `verify <file>`.
+export async function cmdNativeVerify(scan, projectDir, flags, pos) {
+  const r = treeData(scan, projectDir, pos[0]); // coir's view (also resolves + checks it's a prefab/scene)
+  if (r.error) failExit(r);
+  // connect() probes ALL endpoints (3789..3809) and returns the one serving THIS
+  // project — so with several Cocos windows open it finds the right one instead
+  // of locking onto the first port and aborting on a project mismatch.
+  let conn;
+  try { conn = await nv.connect({ port: flags.port, project: projectDir }); }
+  catch (e) {
+    console.error(`✗ native-verify: ${e instanceof Error ? e.message : e}`);
+    console.error(`  start the endpoint for THIS project in Cocos Creator (Coir ▸ native-verify: start),`);
+    console.error("  or point coir -C at the editor's open project.");
+    process.exit(2);
+  }
+  if (!flags.json) console.error(`• endpoint :${conn.port} — ${path.basename(conn.project || projectDir)} @ cocos ${conn.version || '?'}`);
+  const url = `db://assets/${r.file}`;
+  let uuid = null;
+  try { uuid = await nv.uuidOf(conn.base, url); } catch (e) { /* */ }
+  if (!uuid) { console.error(`✗ the editor has no asset for ${r.file} (is it imported?)`); process.exit(2); }
+
+  // Strongest signal first: reimport — the engine re-reads from disk; a malformed
+  // file fails to import here (the validity gate offline verify can't give).
+  let importErr = null;
+  try { const ri = await nv.reimport(conn.base, url); if (ri && ri.error) importErr = ri.error; }
+  catch (e) { importErr = e instanceof Error ? e.message : String(e); }
+
+  // Selectors from coir's tree: every node + every NAMED component (skip #index —
+  // an absolute file-array index has no live-scene equivalent).
+  const named = (n) => n.components.filter((c) => c.selector.includes(':'));
+  const sels = [];
+  for (const n of r.nodes) { sels.push(n.path); if (!n.instance) for (const c of named(n)) sels.push(c.selector); }
+  let values = {};
+  if (!importErr) {
+    let rd; try { rd = await nv.read(conn.base, uuid, sels); } catch (e) { rd = { error: e instanceof Error ? e.message : String(e) }; }
+    if (rd && rd.error) importErr = `read failed: ${rd.error}`; else values = (rd && rd.values) || {};
+  }
+
+  const fails = [];
+  if (importErr) fails.push({ code: 'import', sel: r.file, msg: importErr });
+  else for (const n of r.nodes) {
+    const g = values[n.path];
+    if (!g || g.missing) { fails.push({ code: 'node-missing', sel: n.path, msg: 'coir parses this node; engine did not build it' }); continue; }
+    if (g.name !== n.name) fails.push({ code: 'node-name', sel: n.path, msg: `name engine="${g.name}" ≠ coir="${n.name}"` });
+    if (g.active !== n.active) fails.push({ code: 'node-active', sel: n.path, msg: `active engine=${g.active} ≠ coir=${n.active}` });
+    if (!n.instance) for (const c of named(n)) {
+      const gc = values[c.selector];
+      if (!gc || gc.missing) fails.push({ code: 'comp-missing', sel: c.selector, msg: `coir has ${c.type}; engine dropped it (not instantiable)` });
+    }
+  }
+
+  const ncomp = r.nodes.reduce((s, n) => s + (n.instance ? 0 : named(n).length), 0);
+  const ok = fails.length === 0;
+  if (flags.json) { console.log(JSON.stringify({ file: r.file, nodes: r.nodes.length, components: ncomp, engine: { version: conn.version, port: conn.port }, valid: ok, fails })); process.exit(ok ? 0 : 1); }
+  console.log(`${r.file} — ${r.nodes.length} nodes, ${ncomp} components @ cocos ${conn.version || '?'} (:${conn.port}): ${ok ? "✓ engine matches coir's read" : `✗ ${fails.length} mismatch`}`);
+  for (const f of fails) console.log(`  ✗ [${f.code}] ${f.sel} — ${f.msg}`);
+  process.exit(ok ? 0 : 1); // non-zero on any mismatch → CI-gateable
 }
 
 // ---- batch: apply many ops to one file atomically (all-or-nothing) -----------

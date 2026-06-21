@@ -90,7 +90,7 @@
   #welcome[hidden] { display:none; }
   .welcome-box { width:520px; max-width:92vw; background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 16px 48px rgba(0,0,0,.45); padding:34px 30px; text-align:center; }
   .welcome-box h1 { margin:0 0 10px; font-size:26px; color:#fff; font-weight:700; }
-  .welcome-box .tagline { color:var(--mut); font-size:14px; line-height:1.7; margin:0 0 22px; }
+  .welcome-box .tagline { color:var(--mut); font-size:14px; line-height:1.7; margin:0 0 10px; }
   .welcome-box .tagline b { color:var(--fg); font-weight:600; }
   .welcome-box .wbtn { background:var(--acc); color:#04222f; border:0; padding:12px 22px; border-radius:8px; font-weight:600; font-size:15px; cursor:pointer; }
   .welcome-box .wbtn:hover { filter:brightness(1.08); }
@@ -100,6 +100,9 @@
   .recents .rbtn { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:var(--acc); color:#04222f; border:0; border-radius:7px; padding:8px 14px; cursor:pointer; font-size:14px; font-weight:600; }
   .recents .rbtn:hover { filter:brightness(1.08); }
   .welcome-box .note { color:var(--mut); font-size:12px; margin:16px 0 0; }
+  .welcome-box .example { color:var(--acc); font-size:14px; line-height:1.7; margin:0 0 22px; }
+  .welcome-box .example a { color:inherit; text-decoration:none; }
+  .welcome-box .example a:hover { text-decoration:underline; }
   .welcome-box .werr { color:#ef5350; font-size:13px; line-height:1.5; margin:16px 0 0; }
   .welcome-box .werr[hidden] { display:none; }
   .welcome-box .ver { margin:12px 0 0; opacity:.75; }
@@ -329,6 +332,7 @@
     <div class="welcome-box">
       <h1>🥥 Coir</h1>
       <p class="tagline" data-i18n-html="welcome.tagline"></p>
+      <p class="example"><a id="exampleSnap" href="https://aaronhg.github.io/coir/#topo=H4sIAAAAAAAAE-2abY-jNhDHv8rJr3rShNgY85B3vTtdW6mtqt2rehKKIjY4WRowCMh1V6f77idjQ9hseEqqvilSFBkYfv57mDEw5iv6glYEUIhWDFD5jFY-KrZccAQoy_kueECAoiTYyx1JUPI8CmIEaPfwhNaADtK-sSv5U3nMzyz3cblbJLx4rNvFgce8TEW9HYgoCcqo2sHzbKEpi-3xgcs-BFr5WtQyCSJhaH0YqGM7bA0-StKQx8tHHsfpX2keh8uoiAMRFkYtjYBpEkou2hZpHEY8b9lSzzEvc_d5UBTq_6f0mLXOIZQ4pitPKg7PD-nTsjgK8Xx_eH6XPhl_Z3sEJjDMPFeBtX-WBQ92cZrmRlLGCCg4zOwd0Md3nxFYYDLiacuGVKaC1xhiWe6Lo2XOuw_WHjg_3uUpLYK6JrPxS9JjxOOwAWHlkd_TkLdcZTPHG_JujWDMGTTVclzHMq3LuivX6IvgMo9eZlY-ykRlRahFsd0fL8qSUpsRfNlSeUN3TChzB6Pq1D_Gw05qhR_2MF6vAXGZLcQEEzD4yvUI0HZr_FHZ_iJ2KQIUFAUvUX1tug3Wa_AJAeLKLtbge0Ac3XSAMN00MRAqReu2Ja9907ZabVa1XSC2PpVQIJ5uM5B7fR8hkL9NlqdZYWBDJv2nZmppMqaebSqRVCnwfdQkp_bUXZqWcpBqUw31_hAJwcPfePF4x0XIc57LDuswLgxc-WZGzagZNRWl01FOAjemo35oUPcDuXGrzBk4A2fgdcAmra0b07r1_P-nEEHCw3u9x2gO3Sh_7mLuYu7if91FM12xC9NVjZfGQfxjqwCx2caRfOlAgD4FB_4GY2KcChQXhPegQr4LjnH5Po6yfwM3K5uVzcpmZbOyWdl_oqwq_gFTZTVdgD7dp7M4EBwT1cNgQYCAreoBEznqPUTbLPDp5eYVpyry9mOUyYL0UGQNuB9SWSzMIcYPm01wLNM9F2_o2xFAOgFojQFaE4BsDJBNANpjgPYEoDMG6EwAumOA7gSgNwbotV6mCTgdqdUbyq8zy-3A9MXyWe3v-hieCuqM3amgzpidCuqM1amgzhidCuqMzamgzpg8DyITPBVEenGrFYtqx6RK8mtItRB2I-OfNJ-AUKMiWN11rhuWvmvUq6P1VHDV8DRLr492o4ZHqUnScFBTfV8dowqT1uRUuc662nXdr-gL_LIOcI0ze-hkiD7o3x64OUr6gM97-PSsfmECIV1pOeryXkwI1gLe8qg5jBj3iImBqLVquc7bvxSN62XtMaZ0vKkF9kvT--obDm264eJLEmQ_f7g7fePyXn2cMnTO5BN-fd2J1Ii2aIUBlWiFWp_AfPsOJ8Ritr4jAAA" data-i18n="welcome.example">看範例快照（免選專案、任何瀏覽器）</a></p>
       <button id="welcomeBtn" class="wbtn" data-i18n="btn.pick">選擇 Cocos 專案目錄</button>
       <div id="recentProjects" class="recents" hidden></div>
       <p class="werr" id="welcomeErr" hidden></p>

@@ -409,6 +409,24 @@ The native-verification work (§11.27) surfaced what coir was *missing to be tru
 
 Suite green throughout (node:test; `tree --values`/`verify`/`batch`/`--diff` + the fixes all have cli + mcp cases); the `batch`+`verify` output was additionally native-regressed (editor reimport + instantiate accept it).
 
+### 11.29 Self-hosted native verify: the `cocos-extension/` bridge + `coir native-verify` — SHIPPED
+
+§11.27 concluded coir could own its native verification with just three primitives (reimport · instantiate+readback · fixture I/O), the natural home being the existing `cocos-extension/` (it already runs coir-core in-process), skipping the third-party server's other ~45 tools. This shipped it, end-to-end, live-verified against a 3.8.6 editor.
+
+**The bridge (in `cocos-extension/`)** — a tiny **opt-in** localhost HTTP server, pure Editor API, **zero change to coir's public API** (editing stays the existing front doors `coir edit`/`coir mcp`):
+- `main.js` — `node:http` server (127.0.0.1, `unref`'d, **auto-increments from 3789** if taken so several editor windows coexist). Routes: `/reimport` (asset-db validity gate), `/fixture` (copy/create/delete + refresh → isolated test assets), `/ready` (→ `{ ready, version, project }`), `/uuid`, and `/read` → the scene process.
+- `scene.js` (**new**, scene-process) — the one piece that must run where the engine lives: `coirRead(uuid, selectors)` loads the prefab, `cc.instantiate`s it, reads back **only the asked selectors** (terse — vs the editor's ~25 KB inspector dumps), destroys the instance. Resolves a component selector by **longest class-name match** (`cc.js.getClassName`) so a dotted type (`cc.SkinnedMeshRenderer._enabled`) parses right.
+- `package.json` — registers `contributions.scene` + start/stop messages; the **跳轉 panel footer** got a status line (bound port + cocos version) + a start/stop toggle.
+
+**The CLI (`coir native-verify <file>`)** — `verify`'s LIVE twin, deliberately as simple as `verify` (one file, no assertions): the expected values **are coir's own read** of the file (`treeData`), the actual values come from the engine. `src/verify/nativeClient.js` (zero-dep `node:http`) + `cmdNativeVerify`. Flow: reimport → read every node+component selector → compare (node name/active + component presence) → exit 0 match / 1 mismatch / 2 unreachable. It catches exactly the engine-*semantic* gap offline `verify` can't — proven live by injecting a bogus `cc.Nope`: `coir edit add-component` writes it (coir trusts `cc.*`), `verify` passes (structurally fine), `native-verify` reports `✗ [comp-missing] … engine dropped it`.
+
+**Three gotchas the live runs surfaced** (each cost a reload cycle, now documented in `cocos-extension/README.md`):
+1. **`execute-scene-script`** — a contributed scene method is invoked as `request('scene','execute-scene-script',{name,method,args})`, NOT a bare `request('scene', method)` (which errors `Message does not exist`).
+2. **dotted component types** — splitting a selector on the first `.` breaks `cc.SkinnedMeshRenderer._x` (type became `"cc"`); fixed with the longest-class-name match above.
+3. **multi-editor / wrong-project** — the first responding port may be a *different* open project. `connect({project})` now probes **all** of 3789..3809 and returns the endpoint whose open project matches `-C` (realpath compare; lists the other-project endpoints on failure) — instead of locking onto the first port and aborting. (`/ready` returns `version` + `project` precisely to enable this.)
+
+Reimport must precede read (asset-db caches the imported version) — the same ordering §11.27 established. `npm test` 173/173 + typecheck clean; `native-verify` itself is CLI-only and needs the live editor, so it's intentionally out of the CI suite. Full how-to in `cocos-extension/README.md`; CLI surface in [docs/EDITING.md](docs/EDITING.md).
+
 ---
 
 ## 12. Declarative CI Rules Layer (`coir check`) — SHIPPED (§11.23–§11.24)
