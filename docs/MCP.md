@@ -26,7 +26,7 @@ The `coir mcp` subcommand (using the same `-C`/cwd and the same plugin compositi
 ```
 (If you've `npm link`'d / installed globally you can use `coir` directly; inside the project directory you can omit `-C`. Hand-rolled and zero-dependency — no `@modelcontextprotocol/sdk` needed.)
 
-## Tool surface (10 built-in read + 12 write, plus plugin commands)
+## Tool surface (11 built-in read + 13 write, plus plugin commands)
 
 Tool names carry no server prefix (the server name `coir` already namespaces them — in the host they show as `coir__<tool>`, e.g. `coir__tree`). Read tools are plain `find`/`deps`/… (a host can allow them all); write tools are always `edit_*` (gated one by one).
 
@@ -41,15 +41,18 @@ Tool names carry no server prefix (the server name `coir` already namespaces the
 | `analyze(section?, type?, dropped?, list?)` | Project-wide audit: `stats`/`unused`/`orphans`/`atlas`/`size`/`bundles`/`all` (default `stats`). `bundles` = per-bundle size/degree + cross-bundle dependency links (with the contributing asset refs) + cycles + duplication (axis D). |
 | `duplicates(section?)` | Redundant assets to merge; `section` = `files` (byte-identical source files, different uuids) or `configs` (structurally-identical prefab/material/anim); each group returns a suggested canonical + redundant + mergeable flag + reclaimable bytes. Pair with `edit_swap_uuid` (`all:true`). |
 | `check(rules?, rulesPath?)` | Run the declarative CI rules → `{ violations, errors, warns, configErrors }` (the same gate `coir check` uses; no exit code — you decide). `rules` inline overrides the file. Checkers: `max-meta-errors`/`no-dangling-refs`/`no-orphans`/`no-bundle-cycle`/`max-duplication`/`no-duplicate-files`/`forbid-dep`/`no-cross-bundle`/`atlas-min-util` (+ any plugin-contributed). |
-| **`tree(file, with?, under?, depth?)`** | Structure discovery: node hierarchy + a ready `nodePath:Type` selector for every component |
+| **`tree(file, with?, under?, depth?, values?)`** | Structure discovery: node hierarchy + a ready `nodePath:Type` selector for every component. `values:true` is a **deep read** — inline each node's + component's raw value (structure AND values in one call, no per-node `get`) |
 | `get(file, selector)` | Read the value/node/component at a selector (can be fed back into `edit_set`) |
+| `verify(file)` | **Offline structural validation** (no live engine): `{__id__}` refs resolve, node↔child↔parent + component back-refs, null gaps, orphans, `__type__` resolvability → `{ valid, entries, errors[], warnings[] }`. Run after an `edit_*` (or before relying on a file) to catch corruption the engine would reject |
 | `status` / `rescan` | Server status / force a rescan |
 
-**Write (`edit_*`, all with `dryRun?`/`backup?`/`force?`)**
+**Write (`edit_*`, all with `dryRun?`/`backup?`/`force?`/`verify?`/`diff?`)**
 
-`set` · `set_uuid` · `swap_uuid` (`all?` project-wide) · `rename` · `set_active` · `set_layer` · `transform` (pos/scale/rot) · `set_parent` · `add_node` · `rm_node` · `add_component` · `rm_component`
+`set` · `set_uuid` · `swap_uuid` (`all?` project-wide) · `rename` · `set_active` · `set_layer` · `transform` (pos/scale/rot) · `set_parent` · `add_node` · `rm_node` · `add_component` · `rm_component` · **`edit_batch(file, ops[])`** — apply many ops **atomically** (load once → apply each → one write; any failure writes nothing). `ops` = `[{op, …params}]` in seam shape (`selector`/`value`/`parent`/`name`/`type`/`asset`); `swap-uuid` not allowed in a batch.
 
-> Typical agent flow: **`tree` to explore → `get` to read closely → `edit_*` to change**, never parsing the file. `set`'s `value` takes full JSON (scalar / wrapper object / `{"__uuid__"}` / a custom type with a class-name `__type__`); `get`'s output can be fed straight back in.
+> Per-write flags: `verify:true` validates the result before committing (refuses on a structural error); `diff:true` returns a unified diff of the change in the result (great with `dryRun:true`).
+
+> Typical agent flow: **`tree` (or `tree values:true`) to explore → `get` to read closely → `edit_*`/`edit_batch` to change → `verify` to confirm**, never parsing the file. `set`'s `value` takes full JSON (scalar / wrapper object / `{"__uuid__"}` / a custom type with a class-name `__type__`); a host that sends `value` as a **JSON string** (e.g. `false`→`"false"`, an object→its stringified JSON) is handled — coir parses a JSON-shaped string back to its type (pass `raw:true` to set a *literal* JSON-shaped string like `"true"`/`"42"`). `add_component` validates the type (a project-script class name → its compressed token; an unknown non-`cc.` name is refused). `get`'s output can be fed straight back in.
 
 > **Plugin commands are tools too**: any plugin's `commands` (see the README's "Plugins") that carries an `inputSchema` is **automatically registered into `tools/list`/`tools/call`** at startup (built-in tool names always win; a name clash is ignored with a warning). The same `run(ctx)` serves the `coir <name>` CLI and this MCP tool, returning `data`; `ctx` provides `scan` / `readText` / `resolveAsset` (not-found / clash → throws into a clean tool error) / `edgeMaps` / `uuid.*` / `util`. The built-in plugins now ship such tools too: `spine-dup` and `atlas-dup` (cross-atlas duplicate frames/regions). Example: after `coir mcp -C <proj> --plugin .../coir-plugin/index.mjs` loads, `timeline` shows up in the tool table. Registry in `src/seam/pluginCommands.js`, contract in `types/index.d.ts`.
 

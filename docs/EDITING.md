@@ -84,9 +84,21 @@ Shared flags: `--dry-run` (locate only, don't write) · `--backup` (save a `.bak
 ### Exploration — `tree` (read-only, structure discovery)
 | Command | Effect |
 |---|---|
-| `tree [--with <Type>] [--under <sel>] [--depth N]` | List the node hierarchy + each node's components, **with every path / selector already disambiguated and ready to paste back into another op** (same-name siblings auto-get `[i]`, multiple same-type components get `[i]`, custom scripts show the class name). `-o json` for agents (each component carries a ready `nodePath:Type` selector); `--with` keeps only nodes carrying a given component, `--under` restricts to a subtree, `--depth` limits the depth (default: the whole tree). Marks `(off)` for disabled nodes and `[prefab instance]` for nested instances |
+| `tree [--with <Type>] [--under <sel>] [--depth N] [--values]` | List the node hierarchy + each node's components, **with every path / selector already disambiguated and ready to paste back into another op** (same-name siblings auto-get `[i]`, multiple same-type components get `[i]`, custom scripts show the class name). `-o json` for agents (each component carries a ready `nodePath:Type` selector); `--with` keeps only nodes carrying a given component, `--under` restricts to a subtree, `--depth` limits the depth (default: the whole tree). `--values` is a **deep read** — inline each node's and component's raw serialized value, so you get structure AND values in one call (no per-node `get` round-trips). Marks `(off)` for disabled nodes and `[prefab instance]` for nested instances |
 
-> `tree` is the solution for "blind editing": an agent can obtain every editable selector of any prefab without parsing JSON (`tree` to explore → `get` to read in detail → `set`/structural ops to change, a three-stage flow). `--with` also turns "edit across files by type" into a clean pipeline (`find .prefab` → per-file `tree --with cc.Label -o json` → `set`).
+> `tree` is the solution for "blind editing": an agent can obtain every editable selector of any prefab without parsing JSON (`tree` to explore → `get` to read in detail → `set`/structural ops to change, a three-stage flow). `--with` also turns "edit across files by type" into a clean pipeline (`find .prefab` → per-file `tree --with cc.Label -o json` → `set`). `tree --values -o json` collapses explore+read into one call.
+
+### Validation — `verify` (read-only, offline structural check)
+| Command | Effect |
+|---|---|
+| `verify <file>` | **Offline** structural validation — no live engine needed. Checks: every `{__id__}` reference is in range and points at a typed entry; node↔child↔parent and component→node back-refs are consistent; no null gaps or unreferenced (orphan) entries; `__type__` resolves to a known builtin/class. Prints `✗`-tagged errors + `⚠` warnings and **exits non-zero on any structural error** (CI-gateable). `-o json` for `{ valid, entries, errors[], warnings[] }`. Also available as `edit <file> verify`, and as the **`--verify` flag** on any write (validate the result before committing; refuse to write on errors). |
+
+> `verify` closes the loop that otherwise needs the editor: coir's edits are already structurally careful (index compaction, the guards below), and `verify` lets you confirm the result is sound **without opening Cocos Creator**. The only thing it can't judge is pure engine *semantics* (a `cc.*` builtin's own rules) — everything structural is knowable here.
+
+### Batch — `batch` (atomic multi-op)
+| Command | Effect |
+|---|---|
+| `batch <ops.json>` | Apply **many** ops to one file **atomically**: load once, apply each op in order (selectors re-resolve against the running state), write **once**. If any op fails, **nothing is written** (all-or-nothing) — the right tool for a multi-step structural refactor instead of N separate invocations. `ops.json` is a path to a JSON file *or* inline JSON: an array of `{ op, …params }` where `params` are that op's fields **minus `file`** (e.g. `{"op":"rename","selector":"A/B","value":"C"}`, `{"op":"add-node","parent":"A","name":"D"}`, `{"op":"set-rot","selector":"A","value":{"__type__":"cc.Vec3","x":30,"y":60,"z":90}}`). `swap-uuid` is not allowed in a batch (it's a text patch — use `swap-uuid` / `--all`). |
 
 ### Tier 1 — property-value layer (parse-rewrite)
 | Command | Effect |
@@ -114,7 +126,7 @@ Each node op checks the value flag's type (`set-pos` only takes `--vec3`…), er
 |---|---|
 | `add-node <parentSel> <name> [--index i]` | Append a node (clone the same-file skeleton) + its PrefabInfo (reset root/asset/…) |
 | `rm-node <nodeSel>` | **Real-delete** the subtree + each component + Prefab/CompPrefabInfo + orphaned sub-objects, remapping all `__id__` |
-| `add-component <nodeSel> <ccType>` | Add a minimal component (+ a CompPrefabInfo for a prefab file) |
+| `add-component <nodeSel> <ccType>` | Add a minimal component (+ a CompPrefabInfo for a prefab file). The type is **validated/resolved** via `typeToken`: a `cc.*` builtin passes through, a **project-script class name** is written as its compressed uuid token (so the engine resolves it — a bare name would become a MissingScript), and an unknown non-`cc.` name is **refused** (exit 1) |
 | `rm-component <sel:Type>` | Real-delete the component + its CompPrefabInfo + orphaned sub-objects |
 
 ### Project-level (`--all`)
@@ -148,11 +160,16 @@ keep = arr filtered to drop set;  remapIds: each {__id__:N} → oldToNew[N]
 ## 7. Safety mechanisms
 
 - `--dry-run`: preview before writing (prints locations / the value to be written).
+- `--diff`: print a unified diff of the planned change (dependency-free LCS, `src/edit/diff.js`). Works with `--dry-run` (the preview) and on a real write; text-mode only so it never corrupts `-o json`.
+- `--verify`: run the offline structural validator (`verify`) on the *result* before committing; on any structural error the write is **refused** (exit 2). A belt-and-suspenders gate on top of the guards below.
 - **Format check**: `loadDoc` confirms it's a 3.x array-of-objects (blocks 2.x `.fire`, non-arrays).
 - **Unique selector resolution**: ambiguity → exit 2 listing candidates.
 - **Value-type check**: a node op given the wrong type flag, an invalid hex for `--color`, a missing asset for `--uuid`, an unknown class name for `--json` → all error out **without writing the file**.
+- **Array-bounds check**: `set`/`set-uuid` into an out-of-range array index is **refused** (replace `< len` and append `== len` are allowed; a gap `> len` would silently null-pad the array, so it's blocked).
+- **Component-type check**: `add-component` refuses an unknown non-`cc.` type (a project-script name resolves to its compressed token; see Tier 3).
 - **Nested prefab instance guardrail**: a selector op detects the target (`assertEditable`); `rm-node` detects whether the **entire subtree** (`subtreeHasInstance`) has any `PrefabInfo.instance ≠ null`, and if so blocks it and points the way (edit it in the source prefab). `swap-uuid` is exempt (pure repoint, safe at any position).
-- **Write**: atomic write (temp → rename); `--backup` saves `<file>.bak`.
+- **Write**: atomic write (temp → rename); `--backup` saves `<file>.bak`; concurrent-change **mtime guard** (refuses if the file changed on disk since it was read, e.g. Cocos Creator saved it; `--force` overrides).
+- **Atomicity**: `batch` applies all ops to one in-memory doc and emits a single write — a failing op writes **nothing**.
 - **rm-component safeguard**: only accepts a real component with a `node` back-ref; a `#N` pointing at a PrefabInfo/CompPrefabInfo/ClickEvent is blocked.
 
 **Nested-prefab scope decided**: when A.prefab contains a B.prefab instance, only "editing A's non-B parts" and "editing `B.prefab` directly" are supported; that B instance inside A (and the subtree containing it) is always blocked. **Does not touch** `propertyOverrides` override editing.
@@ -195,10 +212,12 @@ src/mcp/tools.js       ← typed tool table → ops/query
 
 CLI entry:
 ```
-coir edit <file> <op> <selector|args…> [value flag] [--dry-run] [--backup] [--force] [-o json]
+coir edit <file> <op> <selector|args…> [value flag] [--dry-run] [--backup] [--force] [--diff] [--verify] [-o json]
 coir edit --all swap-uuid <oldAsset> <newAsset> [--dry-run] [--backup] [-o json]
+coir edit <file> batch <ops.json>          # atomic multi-op (all-or-nothing)
+coir verify <file> [-o json]               # offline structural validation (also: edit <file> verify)
 ```
-(`--force` skips the pre-write mtime guard; the same set of ops is also exposed via `coir mcp`'s MCP tools — see [docs/MCP.md](MCP.md).)
+(`--force` skips the pre-write mtime guard; `--diff` previews the change; `--verify` validates the result before writing; the same set of ops + `verify`/`batch` is also exposed via `coir mcp`'s MCP tools — see [docs/MCP.md](MCP.md).)
 
 ## 9. Examples
 
@@ -225,11 +244,28 @@ coir edit Main.scene set-parent "Canvas/A" "Canvas/B" --index 0
 # Tier3: real-delete a node (subtree + components + bookkeeping, compacting the index) / add a component
 coir edit Shop.prefab rm-node "Canvas/Debug" --backup
 coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
+
+# Deep read: structure + every node/component value in one call
+coir edit Shop.prefab tree --values -o json
+
+# Preview a change as a unified diff without writing it
+coir edit Shop.prefab set-active "Canvas/Debug" --bool false --diff --dry-run
+
+# Offline structural validation (no editor); exits non-zero on a broken file → CI-gateable
+coir verify Shop.prefab
+coir edit Shop.prefab set-pos "Canvas/Player" --vec3 1 2 3 --verify   # validate the result before writing
+
+# Atomic multi-op: rename + add a node + rotate, all-or-nothing, one write
+coir edit Shop.prefab batch '[
+  {"op":"rename","selector":"Canvas/Old","value":"New"},
+  {"op":"add-node","parent":"Canvas","name":"Extra"},
+  {"op":"set-rot","selector":"Canvas/Player","value":{"__type__":"cc.Vec3","x":0,"y":90,"z":0}}
+]'
 ```
 
 ## 10. Tests
 
-`test/cli.test.js` (node:test, subprocess against a self-built temp fixture, 97 cases): covers every op, each selector form (`[i]`/`#N`/array/allowlist, and the "multiple same-type components with no `[i]`" error), each value flag type, `--json` custom types, `tree` structure discovery (round-trip of the disambiguated path/selector, `--with`/`--under`/`--depth`, instance marking), each `analyze` section, the **cross-version dual fixture** (one 3.5.2-style and one 3.8.6-style, locking down template-by-example), real-delete + index compaction (`refIntegrity`, equivalent to `validate_scene`), `ownedClosure` (a ClickEvent removed along with it), the instance guardrail, `--all`, and the edge cases caught in a round of code review (invalid hex, type mismatch, missing `--uuid` value, the `rm-component` safeguard, empty-name rename, `swap old===new` no-op…). `test/mcp.test.js` additionally actually spawns `coir mcp`, speaks JSON-RPC, and verifies the MCP tools (read, `set` dry-run vs real write, structural edit, errors returning `isError`).
+`test/cli.test.js` (node:test, subprocess against a self-built temp fixture): covers every op, each selector form (`[i]`/`#N`/array/allowlist, and the "multiple same-type components with no `[i]`" error), each value flag type, `--json` custom types, `tree` structure discovery (round-trip of the disambiguated path/selector, `--with`/`--under`/`--depth`, instance marking) **+ `--values` deep read**, each `analyze` section, the **cross-version dual fixture** (one 3.5.2-style and one 3.8.6-style, locking down template-by-example), real-delete + index compaction (`refIntegrity`, equivalent to `validate_scene`), `ownedClosure` (a ClickEvent removed along with it), the instance guardrail, `--all`, and the edge cases caught in code review (invalid hex, type mismatch, missing `--uuid` value, the `rm-component` safeguard, empty-name rename, `swap old===new` no-op…). Newer coverage: **`verify`** (sound vs a dangling `__id__`), **`batch`** (multi-op applied + atomic abort writing nothing), **`--diff`** (dry-run hunk, no write), **`add-component` type validation** (unknown refused / project-script → compressed token), and the **`set` array-bounds** guard. `test/mcp.test.js` additionally spawns `coir mcp`, speaks JSON-RPC, and verifies the MCP tools (read, `set` dry-run vs real write, structural edit, `verify`, `edit_batch` + atomicity, `tree values`, `edit_set` JSON-string value parse, errors returning a single-`✗` `isError`).
 
 **Cross-version lock-down**: there is a dedicated dual-version fixture (`XV35.prefab` carrying `_level`, `XV38.prefab` carrying `_mobility`+`__editorExtras__`, built to the format of real 3.5.2 / 3.8.6 projects) — testing that `add-node` uses **the same code path** to produce the version-correct field set in each version (template-by-example, zero version branches), and that both versions pass `refIntegrity` after the add.
 
@@ -241,10 +277,13 @@ coir edit Shop.prefab add-component "Canvas/Icon" cc.Widget
 | Tier 1/2 | `set`/`set-uuid`/`rename`/`set-active`/`set-layer`/transform/`set-rot`/`set-parent` | ✅ |
 | Tier 3 | `add/rm-node`, `add/rm-component` + index compaction + template-by-example | ✅ |
 | Project-level | `--all swap-uuid` + nested-instance guardrail | ✅ |
-| Exploration | `tree` (structure discovery + ready selectors; `--with`/`--under`/`--depth`) | ✅ |
-| Shared seam | extract `src/edit/ops.js` (`runEdit`…) + `src/seam/query.js`, one source for CLI + MCP; atomic+mtime write guardrail | ✅ |
-| MCP server | `coir mcp`: hand-rolled zero-dependency JSON-RPC/stdio, typed tools (reads unprefixed / writes `edit_*`; `coir__<tool>` in a host) (see [docs/MCP.md](MCP.md)) | ✅ |
-| Hardening | `--json` custom types, `[i]` unification, display↔selector unification, code-review fixes | ✅ |
+| Exploration | `tree` (structure discovery + ready selectors; `--with`/`--under`/`--depth`/`--values` deep read) | ✅ |
+| Validation | `verify` (offline structural check) — command + `edit … verify` + `--verify` write gate + MCP tool | ✅ |
+| Batch | `batch` — atomic multi-op (load once → apply N → one write; all-or-nothing) | ✅ |
+| Diff | `--diff` (unified-diff preview, dependency-free LCS) | ✅ |
+| Shared seam | extract `src/edit/ops.js` (`runEdit`/`applyArrayOp`/`runBatch`/`verifyData`…) + `src/seam/query.js`, one source for CLI + MCP; atomic+mtime write guardrail | ✅ |
+| MCP server | `coir mcp`: hand-rolled zero-dependency JSON-RPC/stdio, typed tools (reads unprefixed / writes `edit_*` + `edit_batch`; `coir__<tool>` in a host) (see [docs/MCP.md](MCP.md)) | ✅ |
+| Hardening | `--json` custom types, `[i]` unification, display↔selector unification, code-review fixes; `add-component` type validation, `set` array-bounds check, MCP `edit_set` value-type parse | ✅ |
 
 ## 12. Under discussion / future
 

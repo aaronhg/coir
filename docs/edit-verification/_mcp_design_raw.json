@@ -1,0 +1,935 @@
+[
+ {
+  "id": "DA-R01",
+  "category": "dispatch",
+  "tool": "status",
+  "args": "{}",
+  "expect": "OK tool result (no isError); data = { project:<projectDir abspath>, assets:<int>, edges:<int> } — assets≈ fixture count, edges>0. JSON parseable from content[0].text.",
+  "verify": "mcp-result",
+  "notes": "MCP-only tool (no CLI equivalent). Baseline for cache specs — record assets/edges to compare after rescan."
+ },
+ {
+  "id": "DA-R02",
+  "category": "dispatch",
+  "tool": "find",
+  "args": "{\"query\":\"soldier_t\"}",
+  "expect": "data = ARRAY of {path,type,uuid}; includes assets/_coirtest/soldier_t.prefab with type:'prefab'. Ranked by basename match position.",
+  "verify": "cli-reread",
+  "notes": "Confirm same set as `coir find soldier_t`. arg shape: {query, type?}."
+ },
+ {
+  "id": "DA-R03",
+  "category": "dispatch",
+  "tool": "find",
+  "args": "{\"query\":\"t\",\"type\":\"prefab\"}",
+  "expect": "data = ARRAY filtered to type:'prefab' only (soldier_t.prefab, nested_t.prefab present; no .ts/.mtl). Proves the `type` single-string arg → setOf filter.",
+  "verify": "mcp-result",
+  "notes": "Distinct from DA-R02: exercises the optional `type` arg-shape (CLI uses --type)."
+ },
+ {
+  "id": "DA-R04",
+  "category": "dispatch",
+  "tool": "find",
+  "args": "{\"query\":\"zzz_no_such_asset_zzz\"}",
+  "expect": "OK result (NOT isError) with data = [] (empty array). find returns candidates, never an error for a miss.",
+  "verify": "mcp-result",
+  "notes": "Happy-path empty — distinguishes find (no-match=empty list) from deps/info (no-match=error). Important for the dispatch lens."
+ },
+ {
+  "id": "DA-R05",
+  "category": "dispatch",
+  "tool": "info",
+  "args": "{\"asset\":\"soldier_t.prefab\"}",
+  "expect": "data = {path,type:'prefab',uuid,ext,importer,size,inResources,bundle,in,out,subAssets:[],userData}. Resolves basename→uuid then dumps record.",
+  "verify": "cli-reread",
+  "notes": "arg: {asset}. Confirm uuid/size match `coir info soldier_t.prefab`."
+ },
+ {
+  "id": "DA-R06",
+  "category": "dispatch",
+  "tool": "deps",
+  "args": "{\"asset\":\"soldier_t.prefab\"}",
+  "expect": "data = {node,type,uuid, dependsOn:[{path,type,via,weight,locations:[...]}], usedBy:[...]} — BOTH sides (default direction:'both'). dependsOn includes material/script refs with paste-able selector locations.",
+  "verify": "cli-reread",
+  "notes": "arg: {asset, direction?, type?, kind?, limit?}. Default both. Compare to `coir deps`."
+ },
+ {
+  "id": "DA-R07",
+  "category": "dispatch",
+  "tool": "deps",
+  "args": "{\"asset\":\"soldier_t.prefab\",\"direction\":\"out\",\"limit\":3}",
+  "expect": "data has dependsOn (capped at 3) and NO usedBy key (showIn=false). Proves direction enum + limit arg-shapes.",
+  "verify": "mcp-result",
+  "notes": "direction:'out'→showOut only; limit caps per side. CLI uses --out/--depth/--limit; this is the MCP arg mapping."
+ },
+ {
+  "id": "DA-R08",
+  "category": "dispatch",
+  "tool": "deps",
+  "args": "{\"asset\":\"soldier_t.prefab\",\"kind\":\"texture\"}",
+  "expect": "data dependsOn/usedBy filtered to edges of kind 'texture' only. Proves `kind` single-string→setOf. (Use a kind known present in the fixture, else expect empty sides.)",
+  "verify": "mcp-result",
+  "notes": "Pick a kind actually on the edge set (run deps first); the point is the kind arg dispatches to kinds filter."
+ },
+ {
+  "id": "DA-R09",
+  "category": "dispatch",
+  "tool": "closure",
+  "args": "{\"asset\":\"soldier_t.prefab\",\"list\":true}",
+  "expect": "data = {root, count, totalSize, byType:{...}, items:[{path,type,size}...]}. list:true adds items array; root's own file stripped per dependencyClosure.",
+  "verify": "cli-reread",
+  "notes": "arg: {asset, type?, list?}. Compare count/totalSize to `coir closure --list`."
+ },
+ {
+  "id": "DA-R10",
+  "category": "dispatch",
+  "tool": "tree",
+  "args": "{\"file\":\"soldier_t.prefab\"}",
+  "expect": "data = {file, nodeCount:34, nodes:[...]} — each node carries disambiguated nodePath + components with ready nodePath:Type selectors (e.g. soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer).",
+  "verify": "cli-reread",
+  "notes": "arg: {file, with?, under?, depth?}. nodeCount must be 34. This selector list seeds every write spec."
+ },
+ {
+  "id": "DA-R11",
+  "category": "dispatch",
+  "tool": "tree",
+  "args": "{\"file\":\"soldier_t.prefab\",\"with\":\"cc.SkinnedMeshRenderer\",\"depth\":3}",
+  "expect": "data.nodes pruned to nodes carrying cc.SkinnedMeshRenderer, ≤3 levels. Proves with/depth arg-shapes (CLI --with/--depth).",
+  "verify": "mcp-result",
+  "notes": "depth as number (Infinity when omitted via depth==null). under? not tested here (covered by selector existence)."
+ },
+ {
+  "id": "DA-R12",
+  "category": "dispatch",
+  "tool": "get",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\"}",
+  "expect": "data = {value:true, kind:'value'} (bool scalar). value round-trips directly into edit_set value.",
+  "verify": "cli-reread",
+  "notes": "arg: {file, selector}. Confirm value matches `coir get` for same selector. Read-back basis for write specs."
+ },
+ {
+  "id": "DA-R13",
+  "category": "dispatch",
+  "tool": "get",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer\"}",
+  "expect": "data = {value:<full component object>, kind:'component'}. Proves a component (not .prop) selector returns the whole record.",
+  "verify": "mcp-result",
+  "notes": "Distinct kind path from DA-R12 (value vs component). Useful to capture _materials[0] uuid for swap specs."
+ },
+ {
+  "id": "DA-R14",
+  "category": "dispatch",
+  "tool": "analyze",
+  "args": "{}",
+  "expect": "data = stats (default section): {assets, edges, orphanRefs, metaErrors:0, byType:{...}, edgeKinds:{...}}. metaErrors MUST be 0 on a healthy scan.",
+  "verify": "cli-reread",
+  "notes": "arg default section='stats'. Compare to `coir analyze stats`."
+ },
+ {
+  "id": "DA-R15",
+  "category": "dispatch",
+  "tool": "analyze",
+  "args": "{\"section\":\"size\",\"type\":\"prefab\",\"list\":true,\"limit\":5}",
+  "expect": "data = {byType:{prefab:{count,size}}, totalSize, total, items:[≤5 largest prefab files]}. Proves section enum + type/list/limit args together.",
+  "verify": "mcp-result",
+  "notes": "Exercises multiple optional args in one call; section enum includes 'all'."
+ },
+ {
+  "id": "DA-R16",
+  "category": "dispatch",
+  "tool": "analyze",
+  "args": "{\"section\":\"all\"}",
+  "expect": "data = {stats, unused, orphans, atlas, size, bundles} — every section keyed. Proves the 'all' branch (analyzeAll).",
+  "verify": "mcp-result",
+  "notes": "section:'all' is NOT in ANALYZE_SECTIONS but allowed by the enum [...SECTIONS,'all']; routes to analyzeAll."
+ },
+ {
+  "id": "DA-R17",
+  "category": "dispatch",
+  "tool": "duplicates",
+  "args": "{}",
+  "expect": "data = both axes (files+configs): groups each with {canonical, redundant[], mergeable, reclaimable bytes}. async tool — uses ctx.bytes/readText. May be empty on the test fixture (OK).",
+  "verify": "mcp-result",
+  "notes": "arg: {section?, type?}. Confirms the async read tool dispatches and returns a structured (possibly empty) result, not an error."
+ },
+ {
+  "id": "DA-R18",
+  "category": "dispatch",
+  "tool": "check",
+  "args": "{}",
+  "expect": "data = {violations, errors, warns, configErrors}. With no rules arg/file → DEFAULT_RULES (warn-only health set). NO exit code in MCP (unlike CLI). Likely warns only, errors:0.",
+  "verify": "mcp-result",
+  "notes": "Proves the default-rules fallback + that check NEVER exits the MCP process. arg: {rules?, rulesPath?}."
+ },
+ {
+  "id": "DA-R19",
+  "category": "dispatch",
+  "tool": "check",
+  "args": "{\"rules\":[{\"name\":\"max-meta-errors\",\"max\":0,\"level\":\"error\"}]}",
+  "expect": "data with the inline rule evaluated; on a healthy scan (metaErrors=0) violations empty, errors:0. Proves inline `rules` array arg overrides the file.",
+  "verify": "mcp-result",
+  "notes": "Distinct from DA-R18: exercises the inline-rules arg-shape (CLI uses --rules <file>)."
+ },
+ {
+  "id": "DA-R20",
+  "category": "dispatch",
+  "tool": "share",
+  "args": "{\"asset\":\"soldier_t.prefab\",\"depth\":3}",
+  "expect": "OK; data = {url (a #topo= link), blob, depth, nodes, ...}. async; depth auto-shrinks to fit MAX_BLOB_CHARS. Proves the only async read with side-effect-free encode.",
+  "verify": "mcp-result",
+  "notes": "arg: {asset, depth?, base?}. depth is the REQUESTED max. Just confirm url contains '#topo='."
+ },
+ {
+  "id": "DA-W01",
+  "category": "dispatch",
+  "tool": "edit_set",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\",\"value\":false,\"dryRun\":true}",
+  "expect": "OK; data = {file:'_coirtest/soldier_t.prefab', ...json, dryRun:true}. RAW scalar value (bool), NOT a --flag. dryRun:true → file NOT written, markDirty NOT called.",
+  "verify": "mcp-result",
+  "notes": "Core arg-shape proof: value is raw JSON. dryRun keeps fixture clean. Re-get afterward must still show true (DA-R12)."
+ },
+ {
+  "id": "DA-W02",
+  "category": "dispatch",
+  "tool": "edit_set",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._shadowCastingMode\",\"value\":2}",
+  "expect": "OK; data.dryRun:false, file committed. value=2 raw int. Re-get → {value:2}. markDirty fired (status.dirty path).",
+  "verify": "cli-reread",
+  "notes": "A real committed write via MCP raw int value. Pair with native cross-check (G4 read _shadowCastingMode==2). Restore after."
+ },
+ {
+  "id": "DA-W03",
+  "category": "dispatch",
+  "tool": "edit_set",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"<a cc.Color prop selector>\",\"value\":{\"__type__\":\"cc.Color\",\"r\":255,\"g\":0,\"b\":0,\"a\":255},\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true. value is a WRAPPER object {__type__:'cc.Color',...} passed raw — resolveRawTypes passes cc.* through unchanged. Proves wrapper-object value arg-shape.",
+  "verify": "mcp-result",
+  "notes": "THE distinctive edit_set case (vs CLI --color). Pick any cc.Color prop from tree/get; dryRun so no commit needed even if the prop is unusual."
+ },
+ {
+  "id": "DA-W04",
+  "category": "dispatch",
+  "tool": "edit_set_uuid",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.0\",\"asset\":\"tree.mtl\",\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true. Resolves tree.mtl→uuid, writes {__uuid__}. arg: {file,selector,asset}. Distinct from edit_set (asset name, not raw {__uuid__}).",
+  "verify": "mcp-result",
+  "notes": "Confirm the written json shows _materials[0] = {__uuid__:<tree.mtl uuid>}. dryRun keeps fixture clean."
+ },
+ {
+  "id": "DA-W05",
+  "category": "dispatch",
+  "tool": "edit_rename",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"name\":\"soldierX\",\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; written _name='soldierX'. arg: {file, node, name} (node not selector; name '' allowed).",
+  "verify": "mcp-result",
+  "notes": "Maps op 'rename', selector=node, value=name. dryRun avoids mutating the 34-node fixture."
+ },
+ {
+  "id": "DA-W06",
+  "category": "dispatch",
+  "tool": "edit_set_active",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"active\":false,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; written _active=false. arg: {file,node,active:boolean} → op set-active, value=!!active.",
+  "verify": "mcp-result",
+  "notes": "Boolean arg coerced via !!. dryRun."
+ },
+ {
+  "id": "DA-W07",
+  "category": "dispatch",
+  "tool": "edit_set_layer",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"layer\":33554432,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; written _layer=33554432 (Math.trunc applied). arg: {file,node,layer:number}.",
+  "verify": "mcp-result",
+  "notes": "MCP collapses CLI --int/--num/--enum to a single numeric `layer` (Math.trunc). dryRun."
+ },
+ {
+  "id": "DA-W08",
+  "category": "dispatch",
+  "tool": "edit_transform",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"kind\":\"pos\",\"x\":1,\"y\":2,\"z\":3,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; _lpos set to {__type__:'cc.Vec3',x:1,y:2,z:3}. kind:'pos'→op set-pos. Proves the COLLAPSED transform arg-shape (kind+x/y/z vs CLI set-pos).",
+  "verify": "mcp-result",
+  "notes": "edit_transform is MCP-unique (collapses set-pos/set-scale/set-rot). Value built internally as cc.Vec3."
+ },
+ {
+  "id": "DA-W09",
+  "category": "dispatch",
+  "tool": "edit_transform",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"kind\":\"rot\",\"x\":30,\"y\":60,\"z\":90,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true. kind:'rot'→op set-rot: writes _euler={30,60,90} AND the matching _lrot quaternion (euler→quat). Proves the rot branch of the collapse + dual-field write.",
+  "verify": "mcp-result",
+  "notes": "Distinct from DA-W08: rot path is the load-bearing one (euler→quat). Native cross-check candidate (G3 read back {30,60,90})."
+ },
+ {
+  "id": "DA-W10",
+  "category": "dispatch",
+  "tool": "edit_transform",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"kind\":\"scale\",\"x\":2,\"y\":2,\"z\":2,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; _lscale set to {__type__:'cc.Vec3',x:2,y:2,z:2}. kind:'scale'→op set-scale. Third arm of the collapse.",
+  "verify": "mcp-result",
+  "notes": "Confirms all three `kind` enum values dispatch correctly. dryRun."
+ },
+ {
+  "id": "DA-W11",
+  "category": "dispatch",
+  "tool": "edit_add_node",
+  "args": "{\"file\":\"soldier_t.prefab\",\"parent\":\"soldier_t/RootNode\",\"name\":\"NewChild\",\"index\":0,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; a new node 'NewChild' cloned from a same-file skeleton, spliced at child index 0 of RootNode. arg: {file,parent,name,index?}.",
+  "verify": "mcp-result",
+  "notes": "index:0 exercises the splice arg (CLI --index). dryRun. nodeCount would be 35 if committed."
+ },
+ {
+  "id": "DA-W12",
+  "category": "dispatch",
+  "tool": "edit_add_component",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"type\":\"cc.Widget\",\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; a cc.Widget component appended to the node's _components. arg: {file,node,type}. Builtin cc.* type accepted.",
+  "verify": "mcp-result",
+  "notes": "Happy path for add-component with a known cc type. (Unknown-type + project-script-token cases belong to the error/native lenses.)"
+ },
+ {
+  "id": "DA-W13",
+  "category": "dispatch",
+  "tool": "edit_set_parent",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"<a leaf node sel>\",\"newParent\":\"soldier_t/RootNode\",\"index\":0,\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; node detached from old parent _children, inserted at RootNode child index 0. arg: {file,node,newParent,index?} (note newParent, not parent).",
+  "verify": "mcp-result",
+  "notes": "Arg name newParent differs from CLI --parent. Pick a node whose move is not a cycle/root. dryRun."
+ },
+ {
+  "id": "DA-W14",
+  "category": "dispatch",
+  "tool": "edit_rm_node",
+  "args": "{\"file\":\"soldier_t.prefab\",\"node\":\"<a leaf node sel>\",\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; node + subtree removed with global __id__ compaction in the planned json. arg: {file,node}.",
+  "verify": "mcp-result",
+  "notes": "Use a clean leaf in soldier_t (no nested instance — that's the guard/error lens). dryRun so the 34-node fixture is untouched."
+ },
+ {
+  "id": "DA-W15",
+  "category": "dispatch",
+  "tool": "edit_rm_component",
+  "args": "{\"file\":\"soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer\",\"dryRun\":true}",
+  "expect": "OK; data.dryRun:true; the component removed from _components with compaction. arg: {file, selector} (a COMPONENT selector, not node).",
+  "verify": "mcp-result",
+  "notes": "Note arg is `selector` (component), distinct from the node-arg ops. dryRun."
+ },
+ {
+  "id": "DA-W16",
+  "category": "dispatch",
+  "tool": "edit_swap_uuid",
+  "args": "{\"file\":\"soldier_t.prefab\",\"old\":\"<current material uuid/name>\",\"new\":\"tree.mtl\",\"dryRun\":true}",
+  "expect": "OK; data = {file, ...json, dryRun:true}; minimal text patch repointing old→tree.mtl in this ONE file. arg: {old,new,file}.",
+  "verify": "mcp-result",
+  "notes": "Single-file swap (op 'swap-uuid' via applyEdit). Resolve old to the prefab's actual material first. dryRun."
+ },
+ {
+  "id": "DA-W17",
+  "category": "dispatch",
+  "tool": "edit_swap_uuid",
+  "args": "{\"old\":\"<material uuid/name>\",\"new\":\"tree.mtl\",\"all\":true,\"dryRun\":true}",
+  "expect": "OK; data = {...json, dryRun:true} with NO `file` key (different code path: runSwapAll). Plans repoints across ALL prefab/scene files project-wide. Proves all:true vs single-file dispatch divergence.",
+  "verify": "mcp-result",
+  "notes": "all:true takes the runSwapAll branch (no `file` needed). THE distinctive arg-shape: CLI uses a separate `edit --all swap-uuid` command; MCP folds it into one tool via the all flag. dryRun avoids mass mutation."
+ },
+ {
+  "id": "EM-01-double-prefix",
+  "category": "error",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._bogusProp\", \"value\": 1 }",
+  "expect": "isError:true tool result. Text begins with DOUBLE '✗ ✗ ' — runEdit→setDeep returns OM.selErr('path \"_bogusProp\" stops...') which already starts '✗', then server.js line 125 prepends another '✗'. (Property-not-found via setDeep; or use a missing prop path that errors.)",
+  "verify": "mcp-result",
+  "notes": "HIGH-VALUE MCP-layer artifact: write-op errors are double-prefixed because OM.* strings already carry '✗' and server re-prefixes. Documents the exact wrapping at server.js:123-126. Pick a selector whose prop genuinely errors (e.g. descend into a scalar)."
+ },
+ {
+  "id": "EM-02-single-prefix-read",
+  "category": "error",
+  "tool": "find",
+  "args": "{ \"query\": \"zzz_no_such_asset_zzz\" }",
+  "expect": "find returns data:[] (empty array, NOT isError) — find never resolves a single target. Contrast with deps/info below. Confirms find's tolerant arg path.",
+  "verify": "mcp-result",
+  "notes": "find uses findData (substring), so a miss is an empty list, not an error. Establishes the baseline that only single-target resolvers error."
+ },
+ {
+  "id": "EM-03-deps-not-found-single",
+  "category": "error",
+  "tool": "deps",
+  "args": "{ \"asset\": \"zzz_no_such_asset_zzz\" }",
+  "expect": "isError:true, text = '✗ not found: \"zzz_no_such_asset_zzz\"' — SINGLE '✗'. deps→resolveUuid (tools.js:19) returns a PLAIN 'not found:' string; server adds the only '✗'.",
+  "verify": "mcp-result",
+  "notes": "Proves the read-resolver path (resolveUuid) is single-prefixed, unlike write ops (EM-01) and get/tree selector errors (EM-05). The single-vs-double-✗ asymmetry is a real MCP-layer observation."
+ },
+ {
+  "id": "EM-04-ambiguous-candidates",
+  "category": "error",
+  "tool": "info",
+  "args": "{ \"asset\": \"soldier_t.prefab\" }",
+  "expect": "If basename is unique → success (data record). To force ambiguity use a basename shared by ≥2 assets (e.g. a duplicated material name). isError:true, text = '✗ \"<q>\" matches N assets — use the full path' FOLLOWED BY newline-joined candidate paths (server.js:124 appends res.candidates).",
+  "verify": "mcp-result",
+  "notes": "Verifies candidates list is surfaced in the isError text (the extra = res.candidates.join('\\n')). Pick a name with real collisions in the project; if none, use 'tree.mtl' only if duplicated, else skip-or-synthesize. Single '✗' (resolveUuid path)."
+ },
+ {
+  "id": "EM-05-get-selector-notfound",
+  "category": "error",
+  "tool": "get",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/NoSuchNode:cc.Label._string\" }",
+  "expect": "isError:true, text begins '✗ ✗ no node \"...\"' (DOUBLE '✗': getData→selError→OM.selErr prefixes '✗', server prefixes again). candidates (valid node paths) appended.",
+  "verify": "mcp-result",
+  "notes": "get/tree route through ops.js selError (carries '✗') → double-prefixed like write ops, UNLIKE deps/info (EM-03 single). Existing mcp.test.js only asserts /no node/ regex, never the prefix — this nails the exact text."
+ },
+ {
+  "id": "EM-06-not-a-prefab",
+  "category": "error",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/MyCoirComp.ts\", \"selector\": \"x:cc.Foo.bar\", \"value\": 1 }",
+  "expect": "isError:true, text = '✗ ✗ \"_coirtest/MyCoirComp.ts\" is a script, not a prefab/scene — edit only touches prefab/scene files' (resolveEditFile→OM.notPrefab, double '✗'). Could also use material/tree.mtl (type material).",
+  "verify": "mcp-result",
+  "notes": "OM.notPrefab guard reached BEFORE load. Use any non-prefab/scene asset. Asset must resolve first (so use a real existing file)."
+ },
+ {
+  "id": "EM-07-needProp",
+  "category": "error",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier\", \"value\": 1 }",
+  "expect": "isError:true, '✗ ✗ \"soldier_t/RootNode/soldier\" must select a property (…:Type.prop) for set' — selector resolves to a NODE, set needs a property (ops.js:119 OM.needProp).",
+  "verify": "mcp-result",
+  "notes": "kind-mismatch guard: set requires kind==='property'. Distinct from needNode/needComp."
+ },
+ {
+  "id": "EM-08-needNode",
+  "category": "error",
+  "tool": "edit_rename",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": null, \"node\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer\", \"name\": \"X\" }",
+  "expect": "isError:true, '✗ ✗ \"...:cc.SkinnedMeshRenderer\" must select a node for this op' — rename's `node` arg resolves to a COMPONENT; ops.js rename requires kind==='node' (OM.needNode). NOTE arg is `node` not `selector` for edit_rename.",
+  "verify": "mcp-result",
+  "notes": "Verifies (a) the edit_rename arg shape (file/node/name) maps node→params.selector, and (b) needNode kind guard. Drop the stray selector:null — edit_rename schema has no `selector` (additionalProperties:false would reject it). Use only {file,node,name}."
+ },
+ {
+  "id": "EM-09-needComp",
+  "category": "error",
+  "tool": "edit_rm_component",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier\" }",
+  "expect": "isError:true, '✗ ✗ \"soldier_t/RootNode/soldier\" must select a component (…:Type) for this op' — rm-component requires kind==='component' (OM.needComp).",
+  "verify": "mcp-result",
+  "notes": "edit_rm_component uses arg `selector` (not `node`) — confirms that arg-name choice too."
+ },
+ {
+  "id": "EM-10-instance-guard",
+  "category": "error",
+  "tool": "edit_rename",
+  "args": "{ \"file\": \"_coirtest/nested_t.prefab\", \"node\": \"#2\", \"name\": \"X\" }",
+  "expect": "isError:true, '✗ ✗ \"<name>\" is (in) a nested prefab instance — edit its source prefab directly, not here' — editableGuard via nestedInstanceRoot flags node #2 (a [prefab instance]).",
+  "verify": "mcp-result",
+  "notes": "Instance guard on a write. nested_t #2/#15 are instances per the fixture brief. Uses #N raw index selector to hit it deterministically. Verify the node is NOT mutated (follow-up get of _name unchanged)."
+ },
+ {
+  "id": "EM-11-rm-node-root",
+  "category": "error",
+  "tool": "edit_rm_node",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"#1\" }",
+  "expect": "isError:true, text contains 'cannot remove the root node' (removeNode editPrefab.js:487) wrapped → '✗ ✗ cannot remove the root node'. (#1 is the prefab's root cc.Node.)",
+  "verify": "mcp-result",
+  "notes": "removeNode root guard surfaced through MCP. Confirm via follow-up tree nodeCount unchanged (34)."
+ },
+ {
+  "id": "EM-12-set-parent-self",
+  "category": "error",
+  "tool": "edit_set_parent",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode\", \"newParent\": \"soldier_t/RootNode\" }",
+  "expect": "isError:true, '✗ ✗ cannot move a node into itself' (setParent editPrefab.js:336).",
+  "verify": "mcp-result",
+  "notes": "Verifies (a) edit_set_parent arg shape: node→selector, newParent→parent; (b) the self-move guard."
+ },
+ {
+  "id": "EM-13-set-parent-cycle",
+  "category": "error",
+  "tool": "edit_set_parent",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode\", \"newParent\": \"soldier_t/RootNode/soldier\" }",
+  "expect": "isError:true, '✗ ✗ cannot move a node into its own descendant' (isDescendant guard editPrefab.js:337). Use any node selector whose newParent is its own descendant.",
+  "verify": "mcp-result",
+  "notes": "Descendant-cycle guard. Pick a real parent/descendant pair from `tree` first. Distinct from self-move (EM-12)."
+ },
+ {
+  "id": "EM-14-set-parent-root",
+  "category": "error",
+  "tool": "edit_set_parent",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"#1\", \"newParent\": \"soldier_t/RootNode\" }",
+  "expect": "isError:true, '✗ ✗ cannot move the root node' (setParent editPrefab.js:340 — root has no _parent ref).",
+  "verify": "mcp-result",
+  "notes": "Third set-parent guard direction (moving the root itself). #1 = prefab root node."
+ },
+ {
+  "id": "EM-15-bad-value-unknown-type",
+  "category": "error",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.0\", \"value\": { \"__type__\": \"NotARealClass\", \"x\": 1 } }",
+  "expect": "isError:true, text = '✗ unknown __type__ class(es): NotARealClass — no matching script asset' — SINGLE '✗'. edit_set runs resolveRawTypes in tools.js:195-196 (PLAIN string) BEFORE applyEdit, so it's single-prefixed (unlike the engine-side OM.unknownType double-prefix path).",
+  "verify": "mcp-result",
+  "notes": "MCP-SPECIFIC: edit_set has its OWN resolveRawTypes pre-check (tools.js) returning a plain error → single '✗'. Contrasts with add-component's engine OM.unknownType (double). Proves raw-JSON __type__ validation on the value arg."
+ },
+ {
+  "id": "EM-16-swap-noop",
+  "category": "error",
+  "tool": "edit_swap_uuid",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"old\": \"material/tree.mtl\", \"new\": \"material/tree.mtl\" }",
+  "expect": "NOT an error. count:0 (old==new, or old not referenced in this file) → success data { op:'swap-uuid', count:0, ... }, writes:[] (W returns [] when count===0, ops.js:113). No file written. dryRun:false.",
+  "verify": "mcp-result",
+  "notes": "Swap no-op is a clean success with count:0, NOT an isError. Use a real swap target (tree.mtl) not referenced (or old===new) so count is 0. Confirm no .bak / no mtime change."
+ },
+ {
+  "id": "EM-17-swap-missing-file-arg",
+  "category": "error",
+  "tool": "edit_swap_uuid",
+  "args": "{ \"old\": \"material/tree.mtl\", \"new\": \"material/tree.mtl\" }",
+  "expect": "isError:true, text = '✗ swap_uuid needs `file` (or set all:true for project-wide)' — SINGLE '✗' (tools.js:219 plain string, no all/no file).",
+  "verify": "mcp-result",
+  "notes": "MCP arg-shape guard unique to edit_swap_uuid: neither all:true nor file → its own error string. Single '✗'."
+ },
+ {
+  "id": "FIX1-add-comp-unknown",
+  "category": "error",
+  "tool": "edit_add_component",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"type\": \"NotARealComp\" }",
+  "expect": "FINDING-1 fix via MCP: isError:true, '✗ ✗ unknown __type__ class(es): NotARealComp — no matching script asset in the project' (typeToken→null→OM.unknownType, code:1, double '✗'). NO component added.",
+  "verify": "mcp-result",
+  "notes": "CRUCIAL — proves the add-component type-validation fix is inherited by MCP. Unknown NON-cc name rejected. Confirm via follow-up tree (component count on the node unchanged). Note cc.* typos (e.g. cc.Nope) still PASS by design — optionally a negative-control case."
+ },
+ {
+  "id": "FIX1-add-comp-cc-builtin-passes",
+  "category": "error",
+  "tool": "edit_add_component",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"type\": \"cc.Nope\", \"dryRun\": true }",
+  "expect": "SUCCESS (not isError) — cc.* names are trusted (no offline registry), so a typo'd builtin passes the guard. data.resolved === 'cc.Nope'. dryRun so nothing commits.",
+  "verify": "mcp-result",
+  "notes": "Negative control documenting the KNOWN gap in FINDING-1: only non-cc unknowns are caught. dryRun:true avoids polluting the fixture with a junk component."
+ },
+ {
+  "id": "FIX1-add-comp-project-script-token",
+  "category": "error",
+  "tool": "edit_add_component",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"type\": \"MyCoirComp\" }",
+  "expect": "SUCCESS. data.type='MyCoirComp', data.resolved = a 22/23-char COMPRESSED uuid token (NOT the bare class name). The written component's __type__ is the compressed token. This is the FINDING-1 real-bug fix (bare name → MissingScript previously).",
+  "verify": "native",
+  "notes": "CRUCIAL native cross-check: after this write, reimport_asset → instantiate_prefab → component_get_component_info on the soldier node must show a REAL MyCoirComp (not MissingScript). Proves the MCP write path commits an engine-valid compressed token. Verify data.resolved via looksCompressed; verify engine via cocos-creator MCP."
+ },
+ {
+  "id": "FIX2-set-oob-array",
+  "category": "error",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.5\", \"value\": { \"__uuid__\": \"<tree.mtl-uuid>\" } }",
+  "expect": "FINDING-2 fix via MCP: isError:true, text contains 'index 5 is out of range for an array of length <len> (0..<len>)' (setDeep editPrefab.js:277), double '✗'. _materials has length 1, so index 5 is OOB (replace/append-at-len allowed, 5 is beyond).",
+  "verify": "mcp-result",
+  "notes": "CRUCIAL — proves the array-bounds fix is inherited by MCP. _materials[0] exists (len 1); index 5 is OOB. Use edit_set with a raw {__uuid__} value (resolveRawTypes passes a bare __uuid__ object). Confirm _materials still length 1 via follow-up get."
+ },
+ {
+  "id": "FIX2-set-uuid-oob-array",
+  "category": "error",
+  "tool": "edit_set_uuid",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.5\", \"asset\": \"material/tree.mtl\" }",
+  "expect": "Same FINDING-2 guard via the typed edit_set_uuid tool: isError:true, 'index 5 is out of range...'. Confirms the bounds check fires regardless of which write tool sets the array slot.",
+  "verify": "mcp-result",
+  "notes": "edit_set_uuid takes `asset` (resolved to {__uuid__}) instead of raw value — same setDeep path, same guard. One distinct tool-surface for the same fix."
+ },
+ {
+  "id": "ARG-transform-rot",
+  "category": "flags",
+  "tool": "edit_transform",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"kind\": \"rot\", \"x\": 30, \"y\": 60, \"z\": 90 }",
+  "expect": "SUCCESS. edit_transform COLLAPSES set-pos/set-scale/set-rot: kind:'rot'→op 'set-rot', builds value {__type__:'cc.Vec3',x,y,z}, writes _euler={30,60,90} AND _lrot quaternion (eulerToQuat). data.euler=[30,60,90], data.lrot present.",
+  "verify": "native",
+  "notes": "MCP-ONLY arg collapse (CLI has 3 separate verbs). Native readback: node_get_node_info rotation == euler {30,60,90} (G3 in COVERAGE already proved the math via CLI; here we prove the MCP arg-shape→op mapping reaches the same engine-valid output). Restore/dryRun-aware: do real write then verify, or back up fixture."
+ },
+ {
+  "id": "ARG-transform-pos-scale",
+  "category": "flags",
+  "tool": "edit_transform",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"kind\": \"pos\", \"x\": 1, \"y\": 2, \"z\": 3, \"dryRun\": true }",
+  "expect": "SUCCESS, data.op='set-pos', data.field='_lpos', value {__type__:'cc.Vec3',x:1,y:2,z:3}. dryRun:true → no write. Then kind:'scale' (dryRun) → op 'set-scale', field '_lscale'.",
+  "verify": "mcp-result",
+  "notes": "Confirms the other two kind→op branches of edit_transform without committing (dryRun). The pos/scale ops are already engine-verified via CLI; this only proves the MCP kind dispatch."
+ },
+ {
+  "id": "ARG-transform-bad-kind",
+  "category": "error",
+  "tool": "edit_transform",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"kind\": \"skew\", \"x\": 1, \"y\": 1, \"z\": 1 }",
+  "expect": "PROTOCOL/SCHEMA behaviour: kind has enum ['pos','scale','rot']. The hand-rolled server does NOT validate inputSchema, so 'skew' falls through tools.js:250 ternary → op defaults to 'set-pos' (a.kind==='rot'?...:'set-pos'). Observe: it SILENTLY behaves as pos. Document this as a no-schema-enforcement gap.",
+  "verify": "mcp-result",
+  "notes": "MCP-LAYER finding: the server does no JSON-Schema validation of args, so an out-of-enum kind is coerced to set-pos rather than rejected. Use dryRun:true. Genuinely distinct observation about the hand-rolled transport."
+ },
+ {
+  "id": "CACHE-watch-invalidate",
+  "category": "cache",
+  "tool": "rescan",
+  "args": "(sequence) 1) status → record edges/assets. 2) externally edit a fixture meta/prefab on disk (or add a temp asset). 3) wait >150ms for fs.watch debounce → markDirty. 4) status again.",
+  "expect": "The 2nd status (any tool call) triggers ensureFresh()→rescan because state.dirty was set by fs.watch (server.js:46-48 debounced 150ms → state.dirty=true). assets/edges reflect the on-disk change WITHOUT calling rescan explicitly.",
+  "verify": "mcp-result",
+  "notes": "MCP-ONLY: fs.watch + ensureFresh auto-invalidation. The executor must make a REAL on-disk change between two tool calls (e.g. via the cocos-creator MCP saving an asset, or a sibling file write) and confirm the cached scan refreshed on the next call. Recursive watch works on macOS."
+ },
+ {
+  "id": "CACHE-write-markdirty",
+  "category": "cache",
+  "tool": "edit_rename",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"node\": \"soldier_t/RootNode/soldier\", \"name\": \"soldier2\" } then get { selector: \"soldier_t/RootNode/soldier2:cc.SkinnedMeshRenderer._enabled\" }",
+  "expect": "After the write, applyEdit calls ctx.markDirty() (tools.js:33). The next tool (get) runs ensureFresh→rescan, so the RENAMED node path resolves in the SAME session. data.value = the _enabled bool. Then rename back to 'soldier'.",
+  "verify": "mcp-result",
+  "notes": "MCP-ONLY: a write marks the cache dirty so a follow-up read sees the change within one server session (the mcp.test.js dry-run test touches this but not the rename-then-resolve-new-path round-trip explicitly across the cache). Restore the name afterward."
+ },
+ {
+  "id": "CACHE-rescan-explicit",
+  "category": "cache",
+  "tool": "rescan",
+  "args": "{}",
+  "expect": "data { rescanned:true, assets:<N> }. forceRescan() re-scans from disk unconditionally and clears dirty. assets count matches a fresh status.",
+  "verify": "mcp-result",
+  "notes": "MCP-ONLY tool. Cheap explicit-refresh path (the Linux fallback when recursive watch is unavailable). Confirm assets equals status.assets."
+ },
+ {
+  "id": "CACHE-status-shape",
+  "category": "cache",
+  "tool": "status",
+  "args": "{}",
+  "expect": "data { project:<absProjectDir>, assets:<N>, edges:<M> }. project ends in the NewProject_386 dir; assets/edges are positive and match the analyze 'stats' counts.",
+  "verify": "mcp-result",
+  "notes": "MCP-ONLY tool. Baseline for the cache cases (compare before/after invalidation). Cross-check assets/edges against analyze {section:'stats'} for internal consistency."
+ },
+ {
+  "id": "FLAG-dryRun-backup",
+  "category": "flags",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\", \"value\": false, \"dryRun\": true, \"backup\": true }",
+  "expect": "data.dryRun:true. dryRun SHORT-CIRCUITS before commitWrites (tools.js:30), so backup:true is IGNORED — NO .bak file is created and the prefab is unchanged. Documents dryRun>backup precedence.",
+  "verify": "cli-reread",
+  "notes": "MCP arg precedence: dryRun wins over backup (no write → no backup). Verify by listing the dir: no soldier_t.prefab.bak exists and the file mtime is unchanged. (COVERAGE backlog flagged dry-run+backup precedence as untested.)"
+ },
+ {
+  "id": "FLAG-backup-real",
+  "category": "flags",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\", \"value\": false, \"backup\": true }",
+  "expect": "data.dryRun:false; a real write commits AND a soldier_t.prefab.bak (the pre-write copy) is created next to it (commitWrites→writeAtomic backup:true). _enabled now false.",
+  "verify": "cli-reread",
+  "notes": "MCP backup arg actually creates the .bak only on a real write. Verify .bak exists + contains the OLD _enabled:true. Restore _enabled:true afterward (and clean up .bak)."
+ },
+ {
+  "id": "FLAG-force-mtime-guard",
+  "category": "flags",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"...\", \"value\": ... }  (after the file's mtime changed on disk since the scan)",
+  "expect": "Without force: commitWrites→writeAtomic throws the concurrent-change guard; applyEdit catches (tools.js:31-32) → isError:true tool result with the mtime-guard message (NOT a crash). WITH force:true: the write succeeds despite the changed mtime.",
+  "verify": "mcp-result",
+  "notes": "MCP-ONLY interaction of fs.watch + mtime guard + force. Tricky to stage: the scan caches doc.mtime at load; touch the file on disk AFTER ensureFresh's rescan but the writes plan still carries the stale mtime. Practically: (a) call a write that loads+plans, (b) externally touch the file, (c) the guard fires only if the plan's mtime predates the touch. Simpler reliable form: confirm force:true bypasses the guard by editing twice rapidly where the 2nd plan's expectMtime is stale. If hard to stage deterministically, at minimum assert force:true path commits and the no-force path surfaces the guard as isError (not a crash)."
+ },
+ {
+  "id": "NATIVE-set-commits-valid",
+  "category": "native",
+  "tool": "edit_set",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._shadowCastingMode\", \"value\": 2 }",
+  "expect": "SUCCESS via the MCP write path. The committed prefab is engine-valid: the editor reimports cleanly and the int value reads back 2.",
+  "verify": "native",
+  "notes": "Small NATIVE subset proving the MCP commit path (applyEdit→commitWrites) writes engine-valid output, not just CLI. nativeSteps: reimport_asset(soldier_t.prefab) → instantiate_prefab/open_scene → node_get_node_info(soldier) → component_get_component_info(cc.SkinnedMeshRenderer) → _shadowCastingMode==2. (G4 proved this via CLI; here it's the MCP edit_set tool specifically.) Restore to original after.",
+  "nativeSteps": "reimport_asset → instantiate_prefab → node_get_node_info(RootNode/soldier) → component_get_component_info(SkinnedMeshRenderer)._shadowCastingMode === 2"
+ },
+ {
+  "id": "NATIVE-set-uuid-commits-valid",
+  "category": "native",
+  "tool": "edit_set_uuid",
+  "args": "{ \"file\": \"_coirtest/soldier_t.prefab\", \"selector\": \"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.0\", \"asset\": \"material/tree.mtl\" }",
+  "expect": "SUCCESS. edit_set_uuid writes {__uuid__: tree.mtl-uuid} into _materials[0]; the editor reimports and the material binds (sharedMaterials[0] resolves to tree.mtl).",
+  "verify": "native",
+  "notes": "NATIVE proof the typed edit_set_uuid (in-array index 0, a VALID slot — contrast FIX2's OOB index 5) commits an engine-valid asset ref via the MCP path. nativeSteps below. Back up & restore _materials[0] (or use backup:true).",
+  "nativeSteps": "reimport_asset → instantiate_prefab → node_get_node_info(soldier) → component_get_component_info(SkinnedMeshRenderer).materials[0] / sharedMaterials[0] resolves to material/tree.mtl uuid"
+ },
+ {
+  "id": "CW-01-watch-external-cli-edit",
+  "category": "cache",
+  "tool": "info (read after external CLI edit)",
+  "args": "BASELINE: mcp__coir-edit__info {\"asset\":\"_coirtest/soldier_t.prefab\"} → note size/degrees. THEN externally (NOT via coir-edit): run `npm run cli -- -C <proj> edit _coirtest/soldier_t.prefab rename soldier_t/RootNode WATCHTEST` (a shell write that fs.watch sees). Wait ~300ms (>150ms debounce). THEN mcp__coir-edit__info {\"asset\":\"_coirtest/soldier_t.prefab\"} AGAIN — with NO rescan call between.",
+  "expect": "The 2nd info reflects the on-disk change (size bytes differ from baseline) WITHOUT any rescan tool call. Proves fs.watch set state.dirty and ensureFresh() auto-rescanned before the read. (info size is the clearest observable; if size is identical, follow with a tree/get to confirm the renamed node.)",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "Core fs.watch auto-invalidation case. The external write MUST go through the filesystem (CLI or cocos save), not coir-edit, so markDirty is NOT what refreshes — only the watcher. Restore the name afterward."
+ },
+ {
+  "id": "CW-02-watch-external-cocos-save",
+  "category": "cache",
+  "tool": "get (read after cocos-creator saves the file)",
+  "args": "Pick a scene-or-prefab editable in the live editor. Externally via cocos-creator: open it, set a node property, save (scene_save_scene / prefab save). Wait ~300ms. THEN mcp__coir-edit__get {\"file\":\"<that file>\",\"selector\":\"<the changed prop selector>\"} with NO rescan call.",
+  "expect": "coir-edit get returns the value the editor just saved — auto-fresh via fs.watch. (Distinct from CW-01 because the writer is the real Cocos editor, the headline use-case in the server comment 'so reads stay fresh as Cocos Creator changes files'.)",
+  "verify": "native",
+  "nativeSteps": "Writer side IS cocos-creator (node_set_node_property + scene_save_scene). Reader side is coir-edit get. Confirms the editor-saves-while-MCP-watches loop end to end.",
+  "notes": "Optional/higher-cost; CW-01 already proves the watch mechanism with a cheaper CLI writer. Run only if a live-editable file is convenient. If recursive watch is unavailable (Linux), this is EXPECTED to be stale until rescan — note the platform (macOS here → recursive works)."
+ },
+ {
+  "id": "CW-03-write-then-read-consistency",
+  "category": "cache",
+  "tool": "edit_rename → tree (markDirty path)",
+  "args": "mcp__coir-edit__edit_rename {\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode\",\"name\":\"RootNodeMCP\"} ; THEN mcp__coir-edit__tree {\"file\":\"_coirtest/soldier_t.prefab\"} immediately (no rescan).",
+  "expect": "tree shows the node now named RootNodeMCP (selector soldier_t/RootNodeMCP). Proves the write's ctx.markDirty() forces ensureFresh() to rescan before the next read, so the cached scan reflects the just-committed edit — even faster than the watch debounce.",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "This is markDirty, NOT fs.watch (the rescan is triggered by the dirty flag set inside applyEdit, independent of the 150ms watcher). Restore name to RootNode after."
+ },
+ {
+  "id": "CW-04-dryRun-does-NOT-markDirty",
+  "category": "cache",
+  "tool": "edit_set dryRun (no cache invalidation, no file change)",
+  "args": "Read mtime/baseline: mcp__coir-edit__get {\"file\":\"_coirtest/soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\"} . THEN mcp__coir-edit__edit_set {\"file\":\"_coirtest/soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\",\"value\":false,\"dryRun\":true} . THEN get the SAME selector again.",
+  "expect": "edit_set returns data with dryRun:true and the planned json, but the file is NOT written; the subsequent get still returns the original _enabled value. Confirms applyEdit skips commitWrites+markDirty when dryRun → the dryRun arg neither mutates the file nor dirties the cache.",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "dryRun as an MCP arg (WRITE_FLAGS). Also CLI-verified backlog item '--dry-run combined precedence' — here we isolate the no-side-effect contract at the MCP layer."
+ },
+ {
+  "id": "CW-05-rescan-refreshed-counts",
+  "category": "cache",
+  "tool": "rescan",
+  "args": "mcp__coir-edit__status (note assets/edges). THEN mcp__coir-edit__rescan {} .",
+  "expect": "rescan returns { rescanned:true, assets:<N> } where N matches status.assets. Proves forceRescan re-runs scanProject and clears dirty. (Standalone rescan returns refreshed counts even with no change.)",
+  "verify": "mcp-result",
+  "nativeSteps": "",
+  "notes": "rescan is MCP-only (no CLI analogue). The fallback path for Linux non-recursive watch."
+ },
+ {
+  "id": "CW-06-rescan-picks-up-external-add",
+  "category": "cache",
+  "tool": "rescan after an external NEW asset (count delta)",
+  "args": "mcp__coir-edit__status (note assets=N0). Externally create a new asset under assets/_coirtest/ (e.g. via cocos-creator project_create_asset a small scene/prefab, or copy material/tree.mtl to _coirtest/tree_copy.mtl + its .meta on disk). mcp__coir-edit__rescan {} . Compare assets count.",
+  "expect": "rescan's assets count > N0 (the new asset is now indexed). Confirms rescan reads from disk, not a stale snapshot. (status alone would ALSO auto-refresh via watch+ensureFresh, but rescan is the explicit/forced path and the deterministic one.)",
+  "verify": "mcp-result",
+  "nativeSteps": "If created via cocos-creator: project_create_asset then reimport so the .meta exists. The new asset must have a valid .meta or it's a source-less drop (scan.missing), not a counted asset.",
+  "notes": "Pairs with CW-08 (new asset becomes a swap/set-uuid TARGET). Clean up the copied asset afterward."
+ },
+ {
+  "id": "CW-07-status-count-after-add-rm-node",
+  "category": "cache",
+  "tool": "status (counts change after structural edits)",
+  "args": "mcp__coir-edit__status (note edges=E0; assets unchanged by node edits within one prefab). mcp__coir-edit__edit_add_node {\"file\":\"_coirtest/soldier_t.prefab\",\"parent\":\"soldier_t/RootNode\",\"name\":\"CW_TMP\"} . mcp__coir-edit__status . THEN mcp__coir-edit__edit_rm_node {\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/CW_TMP\"} . mcp__coir-edit__status .",
+  "expect": "Each write markDirty → status auto-rescans → its reported counts reflect the current on-disk graph (asset count stable since the node carries no new asset refs; the point is status is FRESH after each structural write, not cached-stale). After add then rm the counts return to the original. Observable: status never returns pre-edit-stale numbers.",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "Lens item (d). A bare empty node adds no edges, so the strongest signal is round-trip stability + freshness. If you want a count DELTA, use edit_add_component (adds an extends/script edge) instead — but keep this as the add/rm-node freshness case. Net-zero: file restored."
+ },
+ {
+  "id": "CW-08-new-asset-targetable-after-refresh",
+  "category": "cache",
+  "tool": "edit_set_uuid / edit_swap_uuid target resolution off the cached scan",
+  "args": "STEP A (negative, BEFORE the asset is in the cache): immediately after creating tree_copy.mtl externally (do NOT rescan), call mcp__coir-edit__edit_set_uuid {\"file\":\"_coirtest/soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._materials.0\",\"asset\":\"_coirtest/tree_copy.mtl\",\"dryRun\":true} — if the watch hasn't fired yet it errors. STEP B: mcp__coir-edit__rescan {} . STEP C (positive): repeat the same edit_set_uuid dryRun:true — now resolves.",
+  "expect": "STEP A may return ✗ not found (asset not yet in cached scan) OR succeed if the 150ms watch already refreshed — EITHER proves resolution is bound to the cache, not disk. STEP C definitively resolves the target and returns the planned __uuid__ write. Confirms set-uuid/swap target resolution uses ctx.scan (resolveTarget over cached assets), so a brand-new asset is only targetable after the cache refreshes.",
+  "verify": "mcp-result",
+  "nativeSteps": "",
+  "notes": "Lens item (e). Use dryRun:true so we don't actually repoint the material (and don't need to read it back natively). The race in STEP A is the teaching point — narrate it; the deterministic proof is B→C. Clean up tree_copy.mtl after."
+ },
+ {
+  "id": "CW-09-watch-debounce-timing",
+  "category": "cache",
+  "tool": "info (read INSIDE the debounce window vs after)",
+  "args": "Externally edit _coirtest/soldier_t.prefab (CLI rename). IMMEDIATELY (<150ms, before the debounce timer fires) call mcp__coir-edit__info — then again after ~300ms. NOTE: because tool calls are serialized and ensureFresh checks the dirty flag synchronously at call time, the first read MAY still be stale (debounce not yet elapsed) and the second is fresh.",
+  "expect": "Documents the debounce contract: state.dirty is set 150ms AFTER the last fs event, so a read that races in before the timer fires can return the pre-change cached scan; a read after the window is fresh. This is the one window where the cache can legitimately lag. (If both reads are fresh, the watch fired fast — also acceptable; just record the observed timing.)",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "Lower priority / informational — characterizes the debounce, not a pass/fail correctness gate. markDirty (own writes) has NO such lag (CW-03), only external-watch reads do. Skip if timing is hard to hit reliably from the harness."
+ },
+ {
+  "id": "CW-10-serialized-calls-no-race",
+  "category": "cache",
+  "tool": "edit_set_active ×2 back-to-back (serialized chain)",
+  "args": "Fire two writes to the SAME file without waiting: edit_set_active {file:_coirtest/soldier_t.prefab, node:soldier_t/RootNode/soldier, active:false} and edit_set_active {... active:true}. THEN get the node's _active.",
+  "expect": "Both writes apply in order with NO mtime-guard 'file changed on disk' error between them — because handle() is run through the single `chain` promise (one message at a time), the 2nd write loads AFTER the 1st committed + markDirty rescanned, so its mtime expectation matches. Final get reflects the LAST write (active:true). Proves serialization: concurrent edits to one file never race the mtime guard.",
+  "verify": "cache",
+  "nativeSteps": "",
+  "notes": "Lens item (f), structural. If the two were NOT serialized, the 2nd would load the pre-1st-write mtime and either clobber or hit the guard. The clean ordering + no guard error is the evidence. Restore _active to its baseline (true) — net-zero."
+ },
+ {
+  "id": "CW-11-mtime-guard-vs-force-arg",
+  "category": "flags",
+  "tool": "edit_set_active with force (mtime guard via MCP arg)",
+  "args": "Make the cache STALE relative to disk: (1) read via coir-edit (caches mtime), (2) externally modify the file (CLI edit, changing on-disk mtime) but do NOT let coir-edit rescan — i.e. call a write IMMEDIATELY so its in-op loadDoc gets the new mtime BUT... NOTE: runEdit does a FRESH loadDoc, so the guard fires only if disk changes BETWEEN that load and commit. Practical test: write WITHOUT force after an external concurrent change mid-flight is hard to stage; instead verify force:true is accepted and threads through: edit_set_active {file:_coirtest/soldier_t.prefab, node:soldier_t/RootNode/soldier, active:false, force:true}.",
+  "expect": "force:true is accepted as an MCP arg and the write commits (commitWrites called with expectMtime:null → guard skipped). Confirms the force WRITE_FLAG maps to the same skip-guard path the CLI --force uses. (A natural guard-trip is timing-fragile because runEdit re-reads fresh; the inherited engine guard is already CLI-proven, so we only verify the MCP arg plumbing here.)",
+  "verify": "mcp-result",
+  "nativeSteps": "",
+  "notes": "force/backup/dryRun are shared WRITE_FLAGS — backup tested in CW-12, dryRun in CW-04, force here. We are NOT re-proving the mtime engine (CLI-covered); only that the MCP arg reaches commitWrites. Restore _active after."
+ },
+ {
+  "id": "CW-12-backup-arg-writes-bak",
+  "category": "flags",
+  "tool": "edit_rename with backup",
+  "args": "mcp__coir-edit__edit_rename {\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode\",\"name\":\"BakTest\",\"backup\":true} . Then check disk for _coirtest/soldier_t.prefab.bak (via a bash ls, NOT an MCP tool).",
+  "expect": "soldier_t.prefab.bak exists (copy of pre-edit file) and the live file has the rename. Confirms the backup WRITE_FLAG threads through commitWrites({backup:true}) → writeAtomic copies to .bak. (.bak content == original; live == edited.)",
+  "verify": "cli-reread",
+  "nativeSteps": "",
+  "notes": "backup is the 3rd shared WRITE_FLAG. verify=cli-reread (ls + diff the .bak vs git original). Restore name to RootNode and delete the .bak after."
+ },
+ {
+  "id": "CW-13-error-mapping-not-found",
+  "category": "error",
+  "tool": "info on a non-existent asset (engine error → isError result)",
+  "args": "mcp__coir-edit__info {\"asset\":\"_coirtest/does_not_exist.prefab\"} .",
+  "expect": "Tool result is isError:true with text starting '✗ not found: \"_coirtest/does_not_exist.prefab\"'. Confirms resolveUuid's {error} → tools/call wraps it as toolResult(..., isError) with the '✗ ' prefix. (Not a JSON-RPC error object — an isError tool result, per the server contract.)",
+  "verify": "mcp-result",
+  "nativeSteps": "",
+  "notes": "MCP-specific error MAPPING (server.js lines 123-126). The cache angle: resolution is over the cached scan, so 'not found' is a cache-membership answer."
+ },
+ {
+  "id": "CW-14-error-mapping-ambiguous-candidates",
+  "category": "error",
+  "tool": "find/info on an ambiguous basename (candidates in error text)",
+  "args": "Pick a basename that exists in >1 location in the cached scan (use mcp__coir-edit__find with a common substring first to identify one, e.g. a name shared across folders). THEN mcp__coir-edit__info {\"asset\":\"<ambiguousBasename>\"} .",
+  "expect": "isError:true, text = '✗ \"<name>\" matches N assets — use the full path' FOLLOWED BY the candidate paths on newlines (server appends res.candidates joined by \\n). Confirms the candidates branch of the error mapping renders the list into the isError text.",
+  "verify": "mcp-result",
+  "nativeSteps": "",
+  "notes": "Exercises the `extra` candidate-append branch (server.js line 124). If no ambiguous basename exists in _coirtest, create one cheaply (copy tree.mtl into two folders) or pick from the wider project scan. Skip only if no ambiguous name is reachable."
+ },
+ {
+  "id": "FN-01",
+  "category": "flags",
+  "tool": "edit_set_active",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"active\":false,\"dryRun\":true}",
+  "expect": "isError=false; result.data carries { file:'...soldier_t.prefab', dryRun:true } plus the mutated json. NO write happens — applyEdit skips commitWrites AND ctx.markDirty() when a.dryRun is true (tools.js:30-34). File on disk unchanged.",
+  "verify": "cli-reread",
+  "notes": "Pure dryRun. The data echoes the would-be result so the agent can preview. Confirm cache NOT marked dirty (FN-08 pairs with this)."
+ },
+ {
+  "id": "FN-02",
+  "category": "flags",
+  "tool": "edit_set_active",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"active\":false,\"dryRun\":true}",
+  "expect": "After FN-01's dryRun: re-read soldier_t.prefab on disk (CLI/Read or coir get) → _active is STILL its original value (true/1). dryRun produced no byte change. Also: a follow-up status/info must show the same asset/edge counts (no rescan triggered by a dryRun call).",
+  "verify": "cli-reread",
+  "notes": "Proves dryRun is truly read-only at the filesystem layer — the MCP-arg form of CLI --dry-run. mtime of the file unchanged."
+ },
+ {
+  "id": "FN-03",
+  "category": "flags",
+  "tool": "edit_rename",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"name\":\"soldier_bak\",\"backup\":true}",
+  "expect": "isError=false; data.dryRun=false. Side effect: _coirtest/soldier_t.prefab.bak is CREATED (copyFileSync before write, editPrefab.js:67) and its bytes equal the PRE-edit prefab; the live prefab now has _name 'soldier_bak'. So .bak = original, file = edited.",
+  "verify": "cli-reread",
+  "notes": "backup:true MCP-arg path. Verify by: (a) .bak exists, (b) diff .bak vs a pristine copy = identical, (c) live file changed. Clean up .bak + revert after."
+ },
+ {
+  "id": "FN-04",
+  "category": "flags",
+  "tool": "edit_rename",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier_bak\",\"name\":\"soldier\",\"backup\":true}",
+  "expect": "A SECOND backup:true write OVERWRITES the existing .bak (copyFileSync, no staleness check) with the current (post-FN-03) file bytes. So .bak tracks the most-recent pre-write state, not the first. This is the documented un-tested 'backup overwriting a stale .bak' branch — now exercised via MCP.",
+  "verify": "cli-reread",
+  "notes": "Confirms .bak is always the immediately-prior version, never cumulative. Pairs with FN-03 to cover the overwrite semantics flagged in COVERAGE.md backlog."
+ },
+ {
+  "id": "FN-05",
+  "category": "flags",
+  "tool": "edit_set_active",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"active\":false,\"dryRun\":true,\"backup\":true}",
+  "expect": "dryRun wins over backup: because a.dryRun is true, applyEdit returns BEFORE commitWrites, so NO .bak is created and NO write occurs (backup is only honoured inside commitWrites). data.dryRun=true. Verify no soldier_t.prefab.bak appears.",
+  "verify": "cli-reread",
+  "notes": "dryRun+backup precedence (COVERAGE.md backlog item) via MCP args. Confirms the flags don't both fire — dryRun short-circuits."
+ },
+ {
+  "id": "FN-06",
+  "category": "flags",
+  "tool": "edit_set",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._shadowCastingMode\",\"value\":2,\"force\":true}",
+  "expect": "isError=false; write commits. force:true → writeAtomic called with expectMtime:null (ops.js:241), so the concurrent-change mtime guard is SKIPPED. With a quiescent file this behaves identically to a normal write (the guard would have passed anyway) — confirms force is accepted as an MCP arg and is a no-op safety override in the common case.",
+  "verify": "cli-reread",
+  "notes": "force on a non-contended file. The real value of force is the race scenario (FN-07); here we just prove the arg is wired through applyEdit→commitWrites→writeAtomic and doesn't break a normal write."
+ },
+ {
+  "id": "FN-07",
+  "category": "flags",
+  "tool": "edit_set",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"selector\":\"soldier_t/RootNode/soldier:cc.SkinnedMeshRenderer._enabled\",\"value\":true} — then a contending touch, then the SAME call with force:true",
+  "expect": "REALISTIC mtime-guard scenario (hard to trigger in one call, like the CLI): the guard compares the mtime captured during runEdit's own load against statSync at commit time, so it only fires if the file changes in that micro-window. To exercise it deterministically: (1) via cocos-creator save soldier_t.prefab (or `touch`) so its mtime advances AFTER coir's runEdit load but BEFORE commit — in practice, drive it by issuing the write while the editor is mid-save, OR demonstrate the converse: a normal write succeeds, then force:true always succeeds regardless. Without force, a genuine race throws 'file changed on disk since it was read — re-read and retry (or force)', mapped to isError:true, text prefixed '✗'. With force:true the same write commits.",
+  "verify": "mcp-result",
+  "notes": "Document that this guard is genuinely hard to provoke in a single MCP tool call (the load+commit are back-to-back inside applyEdit). The honest test: prove force is the override by description; if the editor-saves-underneath race can be staged (save soldier_t.prefab in Cocos between coir's tree/get read and this write), the non-force write surfaces the '✗ ... changed on disk' isError result and force:true overrides it. Otherwise assert force-as-no-op (FN-06) + describe the race."
+ },
+ {
+  "id": "FN-08",
+  "category": "cache",
+  "tool": "status",
+  "args": "{} — called immediately AFTER a dryRun write (FN-01) and AFTER a real write (FN-03)",
+  "expect": "dryRun (FN-01) does NOT mark the cache dirty (ctx.markDirty only runs on a committed write), so a status right after a dryRun returns the SAME assets/edges counts with no rescan. A REAL write (FN-03) DOES call ctx.markDirty() → the NEXT tool call's ensureFresh() rescans. So the dryRun↔real distinction is observable at the cache layer too.",
+  "verify": "cache",
+  "notes": "Cross-cuts the flags lens with cache: confirms dryRun is side-effect-free even on the in-memory scan cache. (Counts only change if the rename/edit alters node/edge totals — pick a rename which won't change counts, so use a count-changing op like add_node elsewhere if you want a visible delta; here the assertion is 'no rescan churn from dryRun'.)"
+ },
+ {
+  "id": "FN-NATIVE-01",
+  "category": "native",
+  "tool": "edit_rename",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"name\":\"soldier_mcp\"}",
+  "expect": "MCP write commits; data.dryRun=false. Engine confirms the renamed node exists.",
+  "verify": "native",
+  "nativeSteps": "cocos-creator: project_reimport_asset(_coirtest/soldier_t.prefab) → prefab_instantiate_prefab → node_get_node_info on the instantiated tree → assert a child node named 'soldier_mcp' exists under RootNode (original 'soldier' gone). Proves the MCP rename write path produces engine-valid serialization the editor reimports + instantiates.",
+  "notes": "Representative simple-string write. Revert to 'soldier' after."
+ },
+ {
+  "id": "FN-NATIVE-02",
+  "category": "native",
+  "tool": "edit_transform",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"kind\":\"rot\",\"x\":30,\"y\":60,\"z\":90}",
+  "expect": "MCP arg-collapse path: kind:'rot' → op 'set-rot' with value {__type__:'cc.Vec3',x:30,y:60,z:90}; writes _euler AND the matching _lrot quaternion (tools.js:249-252). data.dryRun=false.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → node_get_node_info('soldier') → assert node.rotation euler reads back exactly {x:30,y:60,z:90} (RESULTS.md G3 proved the euler→quat math is byte-identical to 3.8.6 Quat.fromEuler). This is THE key MCP-shape test: edit_transform collapses CLI set-pos/set-scale/set-rot into one tool with kind+x/y/z — confirm the multi-axis rot round-trips through the engine.",
+  "notes": "Highest-value native case for this lens — exercises the unique edit_transform arg shape (kind enum + scalar x/y/z) end-to-end. Revert rot to 0,0,0."
+ },
+ {
+  "id": "FN-NATIVE-03",
+  "category": "native",
+  "tool": "edit_add_node",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"parent\":\"soldier_t/RootNode\",\"name\":\"coir_mcp_node\"}",
+  "expect": "New empty node added under RootNode (cloned from a same-file skeleton → version-correct PrefabInfo). data.dryRun=false; node count grows by 1.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → node_get_node_info(RootNode) or get_node_tree → assert a child 'coir_mcp_node' exists and instantiates cleanly (no MissingPrefab / console error). Confirms the MCP add-node write commits engine-loadable structure with correct __id__ compaction.",
+  "notes": "Structural additive via MCP. Pair: optionally add with index to also touch the index splice arg. Revert with edit_rm_node."
+ },
+ {
+  "id": "FN-NATIVE-04",
+  "category": "native",
+  "tool": "edit_add_component",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"type\":\"MyCoirComp\"}",
+  "expect": "FINDING-1 fix inherited by MCP: a PROJECT-SCRIPT class name is validated (typeToken) and written as the COMPRESSED uuid token, NOT the bare name — so the engine builds a real MyCoirComp, not a MissingScript. data.dryRun=false.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → component_get_component_info(soldier, 'MyCoirComp') → assert the component is FOUND on the node (a real component instance, not missing). This is the native proof that the MCP write path inherits the add-component type-resolution fix and emits a valid compressed __type__ token. (Contrast FINDING-1's cc.Nope: a typo'd builtin would instantiate but the component would be absent.)",
+  "notes": "Critical: ties the FINDING-1 fix to the MCP surface natively. Revert with edit_rm_component soldier:MyCoirComp."
+ },
+ {
+  "id": "FN-NATIVE-05",
+  "category": "native",
+  "tool": "edit_set_parent",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"newParent\":\"soldier_t\"}",
+  "expect": "Reparent soldier from RootNode up to soldier_t root child; both _children lists fixed; refuses cycles/root-target. data.dryRun=false.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → get_node_tree → assert 'soldier' is now a child of the new parent (and removed from RootNode's children), tree instantiates with no orphan/duplicate. Confirms the MCP reparent commits a consistent _children topology the engine accepts.",
+  "notes": "Pick a reparent that stays within the same prefab (no nested-instance crossing). Revert by reparenting back, or restore from pristine snapshot."
+ },
+ {
+  "id": "FN-NATIVE-06",
+  "category": "native",
+  "tool": "edit_swap_uuid",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"old\":\"<soldier material uuid or material/soldier.mtl>\",\"new\":\"material/tree.mtl\"}",
+  "expect": "Repoints the material reference(s) in soldier_t.prefab from the old material onto tree.mtl (text patch, minimal diff). data carries refs-changed count; data.dryRun=false.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → component_get_component_info(soldier,'cc.SkinnedMeshRenderer') → assert _materials[0] now resolves to material/tree.mtl (uuid 7bf9df40-prefixed), engine loads the material with no missing-asset warning. Proves the single-file MCP swap_uuid write produces a valid asset reference the engine resolves.",
+  "notes": "Single-file form (file set, all omitted). Mirrors RESULTS N14. Revert by swapping back."
+ },
+ {
+  "id": "FN-NATIVE-07",
+  "category": "native",
+  "tool": "edit_rm_node",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/coir_mcp_node\"}",
+  "expect": "Deletes the node added in FN-NATIVE-03 + global __id__ compaction (real delete, no soft-delete cruft). data.dryRun=false; node count drops by 1.",
+  "verify": "native",
+  "nativeSteps": "reimport → instantiate → get_node_tree → assert 'coir_mcp_node' is GONE and the prefab still instantiates cleanly (no dangling __id__ → no console error / MissingObject). Confirms the MCP rm-node write commits a compacted, engine-valid array.",
+  "notes": "Chains with FN-NATIVE-03 (add then remove → returns to original). The reimport must run AFTER the write to clear the stale import (RESULTS.md S01 note)."
+ },
+ {
+  "id": "FN-NATIVE-08",
+  "category": "native",
+  "tool": "edit_transform",
+  "args": "{\"file\":\"_coirtest/soldier_t.prefab\",\"node\":\"soldier_t/RootNode/soldier\",\"kind\":\"pos\",\"x\":1.5,\"y\":2.5,\"z\":3.5,\"dryRun\":true}",
+  "expect": "OPTIONAL/secondary: dryRun:true on edit_transform → returns the planned _lpos {1.5,2.5,3.5} in data.json with dryRun:true, but NO write; on a subsequent reimport the node position is STILL the original. Demonstrates dryRun works uniformly across the collapsed-transform tool, not just simple sets.",
+  "verify": "native",
+  "nativeSteps": "After this dryRun call: reimport → instantiate → node_get_node_info('soldier') → assert position is UNCHANGED (original lpos), confirming dryRun on edit_transform never touched the file even though the data preview shows the new vec3.",
+  "notes": "Lower priority — bridges flags(dryRun) × the edit_transform arg shape × native readback. Include only if time allows; FN-01/02 already prove dryRun at the fs layer."
+ }
+]
