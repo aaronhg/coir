@@ -162,7 +162,13 @@ asset → **Coir 依賴拓撲**.
   `Editor.Selection.select('node', uuid)`. These exist since 3.x, but confirm the
   message name / return shape (root = the scene node, fields `name`/`uuid`/`children`)
   on your editor version — both are wrapped so a wrong name just surfaces as
-  「請先開啟一個場景」.
+  「請先開啟一個場景」. In **prefab-edit mode** the live tree is wrapped in a temp
+  `Scene` (+ a `should_hide_in_hierarchy` preview Canvas for UI prefabs), so
+  `logicalRoot` descends to the prefab root to match coir's file paths — gated on
+  prefab-edit detection via the preview Canvas or `query-current-scene` +
+  `asset-db` `query-asset-info` (a 3D prefab has no Canvas). If a 3D prefab's
+  reverse-fill still shows a leading `Scene/…`, that asset query returned an
+  unexpected shape on your editor version — tell us / adjust the API name.
 - **Viewer URL**: defaults to the hosted build. For offline use, serve a copy of
   coir and change `VIEWER` in `main.js`.
 - **Snapshot size**: the neighborhood auto-shrinks its depth to keep the URL
