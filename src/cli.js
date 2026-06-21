@@ -92,6 +92,13 @@ Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --back
     value-flags: --str --int --num --enum --bool --color #RRGGBBAA --vec2/3/4 --size --quat --uuid <asset> --null
                  --json '<json>'  (set a whole object/array; a class-name __type__ → compressed token)
 
+Validate:
+  coir verify <file> [-o json]               offline structural check (also: edit <file> verify); EXITS 1 on a broken file
+  coir native-verify <file> [--port N] [-o json]   verify's LIVE twin — the running Cocos editor (the coir
+                                     extension's opt-in endpoint) reimports+instantiates the file and confirms the engine
+                                     builds what coir parsed; EXITS 1 on mismatch, 2 if unreachable / wrong project
+                                     (start it: Cocos Creator menu Coir ▸ native-verify: start, or the goto-panel toggle)
+
 MCP (for AI agents / no-shell hosts — typed tools over the SAME query+edit logic, hand-rolled, zero deps):
   coir mcp                           start a JSON-RPC/stdio MCP server on this project (see docs/MCP.md)
 
