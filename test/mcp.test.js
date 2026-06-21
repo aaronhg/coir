@@ -30,8 +30,8 @@ async function mk() {
     { __type__: 'cc.Prefab', _name: 'Foo', data: { __id__: 1 } },
     { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 3 }], _active: true },
     { __type__: 'cc.Node', _name: 'Title', _parent: { __id__: 1 }, _children: [], _components: [{ __id__: 4 }], _active: true },
-    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true },
-    { __type__: 'cc.Label', node: { __id__: 2 }, _string: 'Hi' },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, _num: 0, _col: null, _target: null }, // fields edit_set/edit_set_ref tests touch (must pre-exist — coir only edits existing fields)
+    { __type__: 'cc.Label', node: { __id__: 2 }, _string: 'Hi', _sub: '' },
   ]);
   await w('Foo.prefab.meta', { importer: 'prefab', uuid: 'f0f0f0f0-f0f0-f0f0-f0f0-f0f0f0f0f0f0' });
   // a structurally broken prefab (dangling _children #99) for the verify tool.
@@ -203,6 +203,18 @@ test('mcp: verify tool — sound prefab valid, broken prefab reports errors', as
   const bad = dataOf(r[2]);
   assert.equal(bad.valid, false);
   assert.ok(bad.errors.some((e) => e.code === 'bad-ref' || e.code === 'bad-child'));
+});
+
+test('mcp: edit_set_ref points a property at a node ({__id__}) in the same prefab', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_set_ref', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._target', target: 'Root/Title' }),
+    call(2, 'get', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._target' }),
+  ]);
+  const d = dataOf(r[1]);
+  assert.equal(d.targetKind, 'node');
+  assert.equal(d.needsReimport, false);
+  assert.deepEqual(dataOf(r[2]).value, { __id__: 2 }); // Title is entry #2
 });
 
 test('mcp: verify all:true — project-wide structural gate flags the broken prefab', async () => {

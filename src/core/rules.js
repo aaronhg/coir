@@ -71,6 +71,41 @@ const CHECKERS = {
   'no-cross-bundle': (scan, rule) => bundleReport(scan).links
     .filter((l) => (!rule.from || arr(rule.from).includes(l.from)) && (!rule.to || arr(rule.to).includes(l.to)))
     .map((l) => ({ message: `${l.from} → ${l.to} (${l.refsTotal} cross-bundle ref(s))${l.cycle ? ' ⇄' : ''}` })),
+  // Nested-prefab edit policy: only an instance ROOT's own properties (placement /
+  // top-node, e.g. _lpos/_name) may be overridden; a propertyOverride on a node
+  // INSIDE an instance is forbidden. References (cc.TargetOverrideInfo) are exempt
+  // (a different structure, always allowed). Defaults aimed at PREFAB authoring:
+  //   • files: 'prefab' (scenes carry legitimate engine-baked deep overrides —
+  //     lightmap / static-batch — so they're off by default; set 'scene'/'all').
+  //   • ignoreProps: the engine-baked set (lightmap/shadow), never a manual edit.
+  //   • allowProps: an extra allowlist of root props (unused = all root props OK).
+  // Needs I/O → the host precomputes ctx.instanceOverrides. See docs/NESTED-PREFABS.md.
+  'no-deep-instance-override': (scan, rule, ctx) => {
+    if (!ctx || !ctx.instanceOverrides) return [];
+    // files: unset → prefab only (scenes carry engine-baked deep overrides);
+    // 'all' → no type filter; else the explicit type(s).
+    const scope = rule.files === 'all' ? null : (rule.files ? new Set(arr(rule.files)) : new Set(['prefab']));
+    const ignore = new Set(rule.ignoreProps ? arr(rule.ignoreProps) : ['lightmapSettings', '_shadowCastingMode', '_shadowReceivingMode']);
+    const allow = rule.allowProps ? new Set(arr(rule.allowProps)) : null;
+    const out = [];
+    for (const { file, type, overrides } of ctx.instanceOverrides) {
+      if (scope && !scope.has(type)) continue;
+      for (const ov of overrides) {
+        if (ov.onRoot && (!allow || allow.has(ov.prop))) continue; // a root (top-node) override is allowed
+        if (ignore.has(ov.prop)) continue;                          // engine-baked, not a manual edit
+        out.push({ message: `deep instance override: "${ov.prop}" on a node inside instance "${ov.instance}" (localID ${ov.localID.join('/')})`, asset: file });
+      }
+    }
+    return out;
+  },
+  // Leaked editor preview Canvas: a saved prefab/scene must not contain a node
+  // named `should_hide_in_hierarchy` (the editor's prefab-edit preview Canvas,
+  // never meant to persist). Needs I/O → host precomputes ctx.previewLeaks.
+  'no-editor-preview-leak': (scan, rule, ctx) => {
+    if (!ctx || !ctx.previewLeaks) return [];
+    return ctx.previewLeaks.map(({ file, nodes }) =>
+      ({ message: `editor preview Canvas leaked into the file: ${nodes.join(', ')} — a "should_hide_in_hierarchy" node must never be saved (delete it, then re-save)`, asset: file }));
+  },
   // phase 2 — atlases used below `min` utilization (skips whole-/dynamic-referenced ones — unknowable).
   'atlas-min-util': (scan, rule) => {
     const min = rule.min ?? 0.5;
@@ -99,6 +134,10 @@ export function collectPluginCheckers(plugins) {
 }
 // Which configured rules need the (I/O-bound) duplicates data precomputed.
 export const needsDuplicates = (rules) => (rules || []).some((r) => r && r.name === 'no-duplicate-files');
+// …and which need the per-file nested-instance override data precomputed.
+export const needsInstanceOverrides = (rules) => (rules || []).some((r) => r && r.name === 'no-deep-instance-override');
+// …and which need the per-file preview-Canvas-leak scan.
+export const needsPreviewLeaks = (rules) => (rules || []).some((r) => r && r.name === 'no-editor-preview-leak');
 
 // Default ruleset when there is no coir.rules.json: health checks at WARN level
 // only — so `coir check` is useful out of the box but never fails CI without an

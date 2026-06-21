@@ -35,7 +35,8 @@ import { makeFsProvider } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareData } from './seam/shared.js';
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
-import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from './core/rules.js';
+import { evaluateRules, DEFAULT_RULES, needsDuplicates, needsInstanceOverrides, needsPreviewLeaks, collectPluginCheckers } from './core/rules.js';
+import { collectInstanceOverridesData, collectPreviewLeaksData } from './edit/ops.js';
 import { cmdEdit, cmdVerify, cmdVerifyAll, cmdRoundtrip, cmdNativeVerify } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
@@ -75,13 +76,14 @@ Query (read-only; prints to stdout, pipe-friendly):
   coir check [--rules <file>] [-o json]   declarative CI gate — evaluates coir.rules.json (no-bundle-cycle,
                                      max-duplication, no-dangling-refs, no-orphans, …); EXITS 1 on error, 2 on bad config.
 
-Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --backup, --force overrides the concurrent-change guard):
+Edit (in-place — WRITES the file; --dry-run previews · --backup snapshots · --force overrides the concurrent-change + existing-field guards · --reimport asks the running editor to reimport after the write):
   coir edit <file> <op> …            [--dry-run] [--backup] [-o json]
   coir edit --all swap-uuid <oldAsset> <newAsset>     (project-wide repoint)
     op:  tree      [--with <Type>] [--under <sel>] [--depth N]   list the node tree + each node's components (read-only; -o json gives ready selectors)
          get       <sel>                          read a value/node/component (-o json round-trips into set --json)
          set       <sel> <value-flag>             set a property (sel = nodePath:Type.prop)
-         set-uuid  <sel> <asset>                  point a property at an asset
+         set-uuid  <sel> <asset>                  point a property at an asset ({__uuid__})
+         set-ref   <sel> <targetNode[:Type]>      point a property at a node/component ({__id__}); <instanceRoot> --into <srcSubPath> = into a nested instance
          swap-uuid <oldAsset> <newAsset>          repoint every ref onto another asset (whole file)
          rename    <nodeSel> <newName>
          set-active/set-layer <nodeSel> --bool|--int <v>
@@ -169,6 +171,9 @@ function parseArgs(argv) {
     else if (a === '--diff') flags.diff = true; // edit: print a unified diff of the change (works with --dry-run)
     else if (a === '--verify') flags.verify = true; // edit: structurally validate the result before writing
     else if (a === '--roundtrip') flags.roundtrip = true; // verify: serializer-fidelity + invertible-edit audit (with --all = whole project)
+    else if (a === '--into') { if (argv[i + 1] !== undefined) flags.into = argv[++i]; } // set-ref P3b: a node sub-path in the instance's SOURCE prefab
+    else if (a === '--reimport') flags.reimport = true; // edit: after writing, ask the running Cocos editor (native-verify endpoint) to reimport the file
+    else if (a.startsWith('--into=')) flags.into = a.slice(7);
     else if (a === '--port') flags.port = parseInt(argv[++i], 10) || undefined; // native-verify: endpoint port (default: auto-probe 3789..3809)
     else if (a.startsWith('--port=')) flags.port = parseInt(a.slice(7), 10) || undefined;
     else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
@@ -527,6 +532,8 @@ async function cmdCheck(scan, fp, projectDir, flags, plugins) {
     const readers = { readBytes: fp.bytes ? (p) => fp.bytes(p) : undefined, readText: (p) => fp.readText(p) };
     ctx.duplicates = await duplicatesData(scan, readers, {});
   }
+  if (needsInstanceOverrides(rules)) ctx.instanceOverrides = collectInstanceOverridesData(scan, projectDir);
+  if (needsPreviewLeaks(rules)) ctx.previewLeaks = collectPreviewLeaksData(scan, projectDir);
   const res = evaluateRules(scan, rules, ctx, collectPluginCheckers(plugins));
   if (flags.json) { console.log(JSON.stringify(res)); }
   else {
@@ -629,7 +636,7 @@ async function main() {
   if (command === 'analyze') { cmdAnalyze(scan, target, flags); return; } // project-wide; target = the section (or none)
   if (command === 'duplicates') { await cmdDuplicates(scan, fp, target, flags); return; } // redundant assets (byte / structural)
   if (command === 'check') { await cmdCheck(scan, fp, projectDir, flags, plugins); return; } // declarative CI gate (exits non-zero on failure)
-  if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
+  if (command === 'edit') { await cmdEdit(scan, projectDir, flags, pos); return; }
   if (command === 'verify') { if (flags.roundtrip) cmdRoundtrip(scan, projectDir, flags, [target]); else if (flags.all) cmdVerifyAll(scan, projectDir, flags); else cmdVerify(scan, projectDir, flags, [target]); return; } // offline structural validation (--all: whole project · --roundtrip: serializer-fidelity / invertible-edit audit)
   if (command === 'roundtrip') { cmdRoundtrip(scan, projectDir, flags, [target]); return; } // alias: verify --roundtrip
   if (command === 'native-verify') { await cmdNativeVerify(scan, projectDir, flags, [target]); return; } // live-engine cross-check (needs the cocos-extension endpoint)

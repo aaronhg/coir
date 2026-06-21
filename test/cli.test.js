@@ -801,6 +801,183 @@ test('roundtrip alias == verify --roundtrip', () => {
   assert.deepEqual(a, b);
 });
 
+// ---- set-ref (intra-file node/component reference) -------------------------
+test('set-ref: points a property at a node in the same prefab → {__id__}, offline-complete', () => {
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'Ref.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', _name: 'Ref', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Ref', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 3 }], _prefab: null, _active: true },
+    { __type__: 'cc.Node', _name: 'Other', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: null, _active: true },
+    { __type__: 'cc.Sprite', _name: '', node: { __id__: 1 }, _enabled: true, __prefab: null, _target: null },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'Ref.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1' }));
+  const d = json(cli('edit', 'Ref.prefab', 'set-ref', 'Ref:cc.Sprite._target', 'Ref/Other', '-o', 'json'));
+  assert.equal(d.targetKind, 'node');
+  assert.equal(d.targetIndex, 2);
+  assert.equal(d.needsReimport, false);                 // intra-file __id__ → complete offline
+  assert.deepEqual(json(cli('edit', 'Ref.prefab', 'get', 'Ref:cc.Sprite._target', '-o', 'json')), { __id__: 2 });
+  // a property target is refused (must be a node/component)
+  const bad = cli('edit', 'Ref.prefab', 'set-ref', 'Ref:cc.Sprite._target', 'Ref:cc.Sprite._enabled');
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /must select a node or component/);
+});
+
+// ---- P2: edit a nested-instance ROOT property → author a propertyOverride --
+test('P2: set-pos on an instance ROOT authors a root propertyOverride; deeper is refused', () => {
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P2.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', _name: 'P2', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [], _prefab: { __id__: 3 }, _active: true },
+    { __type__: 'cc.Node', _name: 'Box', _parent: { __id__: 1 }, _children: [{ __id__: 4 }], _components: [], _prefab: { __id__: 5 }, _active: true },     // instance ROOT
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'OUTERxxxxxxxxxxxxxxxxx', instance: null },
+    { __type__: 'cc.Node', _name: 'Inner', _parent: { __id__: 2 }, _children: [], _components: [], _prefab: { __id__: 7 }, _active: true },                // DEEPER (inside the instance)
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, fileId: 'BOXxxxxxxxxxxxxxxxxxxx', instance: { __id__: 6 } },
+    { __type__: 'cc.PrefabInstance', fileId: 'PINSTxxxxxxxxxxxxxxxxx', mountedChildren: [], propertyOverrides: [] },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, fileId: 'INNERxxxxxxxxxxxxxxxxx', instance: null },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P2.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a3a3a3a3-a3a3-a3a3-a3a3-a3a3a3a3a3a3' }));
+  // set-pos on the instance ROOT (Box) → a propertyOverride, offline-complete
+  const d = json(cli('edit', 'P2.prefab', 'set-pos', 'Root/Box', '--vec3', '1', '2', '3', '-o', 'json'));
+  assert.equal(d.override, true);
+  assert.equal(d.needsReimport, false);
+  const arr = parseAsset('P2.prefab');
+  // a CCPropertyOverrideInfo for _lpos on the BOX fileId was authored + linked
+  const ov = arr.find((o) => o && o.__type__ === 'CCPropertyOverrideInfo' && o.propertyPath && o.propertyPath[0] === '_lpos');
+  assert.ok(ov, 'an _lpos override exists');
+  assert.deepEqual(ov.value, { __type__: 'cc.Vec3', x: 1, y: 2, z: 3 });
+  assert.equal(arr[6].propertyOverrides.length, 1);                 // linked into the PrefabInstance
+  assert.deepEqual(arr[2]._lpos, { __type__: 'cc.Vec3', x: 1, y: 2, z: 3 }); // baked node value synced
+  // setting it again UPDATES the same override (no duplicate)
+  cli('edit', 'P2.prefab', 'set-pos', 'Root/Box', '--vec3', '9', '9', '9');
+  assert.equal(parseAsset('P2.prefab')[6].propertyOverrides.length, 1);
+  // a DEEPER node (Inner, inside the instance) is refused
+  const bad = cli('edit', 'P2.prefab', 'set-pos', 'Root/Box/Inner', '--vec3', '0', '0', '0');
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /only the instance ROOT/);
+});
+
+// ---- "only edit existing fields" guard + --force create -------------------
+test('set: a non-existent property is refused (exit 2); --force creates it but flags needsReimport', () => {
+  // EditAdd's cc.Sprite has _arr but not _nope
+  const bad = cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._nope', '--int', '7');
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /no existing property "_nope"/);
+  // --force creates it + marks needsReimport (coir can't tell a real @property from a typo)
+  const d = json(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._nope', '--int', '7', '--force', '-o', 'json', '--dry-run'));
+  assert.equal(d.needsReimport, true);
+  // an array append (numeric index) is NOT blocked — setDeep's bounds check governs it
+  assert.equal(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._arr.2', '--json', '{"h":"z"}').status, 0);
+});
+
+test('set-ref: a non-existent reference property is refused unless --force', () => {
+  // EditAdd's cc.Sprite has no _other property; Root/Child is a valid target node
+  const r = cli('edit', 'EditAdd.prefab', 'set-ref', 'Root:cc.Sprite._other', 'Root/Child');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /no existing property "_other"/);
+  const d = json(cli('edit', 'EditAdd.prefab', 'set-ref', 'Root:cc.Sprite._other', 'Root/Child', '--force', '-o', 'json', '--dry-run'));
+  assert.equal(d.needsReimport, true);
+});
+
+// ---- --reimport (after a write, ask the editor to reimport; graceful offline) -
+test('--reimport: the write still succeeds when no matching editor endpoint is reachable', () => {
+  const r = cli('edit', 'EditNode.prefab', 'set', 'Root/Title:cc.Label._string', '--str', 'ViaReimport', '--reimport');
+  assert.equal(r.status, 0);                                   // the edit committed regardless
+  assert.equal(parseAsset('EditNode.prefab')[4]._string, 'ViaReimport');
+  assert.match(r.stderr, /reimport/i);                         // a reimport note (no endpoint for this temp project)
+});
+
+// ---- value-type sanity (set-ref ref-shape refuse + set kind-mismatch warn) -
+test('value type: set-ref refuses a non-reference field; set warns on a kind mismatch', () => {
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'TypeChk.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 3 }], _components: [{ __id__: 2 }], _prefab: null, _active: true },
+    { __type__: 'cc.Label', node: { __id__: 1 }, _string: 'Hi', _target: null },        // _string = scalar; _target = null (ref-shaped)
+    { __type__: 'cc.Node', _name: 'Other', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: null, _active: true },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'TypeChk.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a7a7a7a7-a7a7-a7a7-a7a7-a7a7a7a7a7a7' }));
+  // set-ref onto a scalar field → refused (its existing value isn't a reference)
+  const bad = cli('edit', 'TypeChk.prefab', 'set-ref', 'Root:cc.Label._string', 'Root/Other');
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /not a reference/);
+  // set-ref onto a ref-shaped field (null) → ok
+  assert.equal(cli('edit', 'TypeChk.prefab', 'set-ref', 'Root:cc.Label._target', 'Root/Other', '--dry-run').status, 0);
+  // set a string field with a number → a non-blocking warning, still writes
+  const d = json(cli('edit', 'TypeChk.prefab', 'set', 'Root:cc.Label._string', '--int', '42', '-o', 'json', '--dry-run'));
+  assert.match(d.warning || '', /number.*string|type mismatch/);
+  // same kind → no warning
+  const ok = json(cli('edit', 'TypeChk.prefab', 'set', 'Root:cc.Label._string', '--str', 'x', '-o', 'json', '--dry-run'));
+  assert.equal(ok.warning, undefined);
+});
+
+// ---- P3a/P3b: cross-boundary references into a nested instance -------------
+test('P3a: set-ref to a node BAKED inside an instance → inline {__id__} + TargetOverrideInfo, offline-complete', () => {
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P3a.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 6 }], _prefab: { __id__: 3 }, _active: true },
+    { __type__: 'cc.Node', _name: 'Box', _parent: { __id__: 1 }, _children: [{ __id__: 4 }], _components: [], _prefab: { __id__: 7 }, _active: true },     // instance root
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'OUTERxxxxxxxxxxxxxxxxx', instance: null, targetOverrides: [], nestedPrefabInstanceRoots: [{ __id__: 2 }] },
+    { __type__: 'cc.Node', _name: 'Label', _parent: { __id__: 2 }, _children: [], _components: [], _prefab: { __id__: 5 }, _active: true },                // baked, inside the instance
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, fileId: 'LABELxxxxxxxxxxxxxxxxx', instance: null },                                                  // Label's PrefabInfo (carries the source fileId)
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, __prefab: null, _target: null },                                                         // the source component
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, fileId: 'BOXxxxxxxxxxxxxxxxxxxx', instance: { __id__: 8 } },
+    { __type__: 'cc.PrefabInstance', fileId: 'PINSTxxxxxxxxxxxxxxxxx', mountedChildren: [], propertyOverrides: [] },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P3a.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a4a4a4a4-a4a4-a4a4-a4a4-a4a4a4a4a4a4' }));
+  const d = json(cli('edit', 'P3a.prefab', 'set-ref', 'Root:cc.Sprite._target', 'Root/Box/Label', '-o', 'json'));
+  assert.equal(d.mode, 'P3a');
+  assert.equal(d.needsReimport, false);                 // baked inline resolves → complete offline
+  const arr = parseAsset('P3a.prefab');
+  assert.deepEqual(arr[6]._target, { __id__: 4 });      // inline points at the baked Label
+  const toi = arr.find((o) => o && o.__type__ === 'cc.TargetOverrideInfo');
+  assert.ok(toi, 'a TargetOverrideInfo was written');
+  assert.equal(arr[toi.targetInfo.__id__].localID[0], 'LABELxxxxxxxxxxxxxxxxx'); // the baked node's source fileId
+});
+
+test('P3b: set-ref --into resolves a node in the source prefab → TargetOverrideInfo only, needsReimport', () => {
+  // a source prefab with a node "SRoot/Target" (fileId TARGETx…)
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'SrcP.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'SRoot', _parent: null, _children: [{ __id__: 2 }], _components: [], _prefab: { __id__: 3 }, _active: true },
+    { __type__: 'cc.Node', _name: 'Target', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: { __id__: 4 }, _active: true },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'SROOTxxxxxxxxxxxxxxxxx', instance: null },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, fileId: 'TARGETxxxxxxxxxxxxxxxx', instance: null },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'SrcP.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a5a5a5a5-a5a5-a5a5-a5a5-a5a5a5a5a5a5' }));
+  // a host prefab that instances SrcP (instance root's PrefabInfo.asset → SrcP's uuid)
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P3b.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 5 }], _prefab: { __id__: 3 }, _active: true },
+    { __type__: 'cc.Node', _name: 'Inst', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: { __id__: 4 }, _active: true },                  // instance root
+    { __type__: 'cc.PrefabInfo', root: { __id__: 1 }, asset: { __id__: 0 }, fileId: 'OUTERxxxxxxxxxxxxxxxxx', instance: null, targetOverrides: [], nestedPrefabInstanceRoots: [{ __id__: 2 }] },
+    { __type__: 'cc.PrefabInfo', root: { __id__: 2 }, fileId: 'INSTxxxxxxxxxxxxxxxxxx', instance: { __id__: 6 }, asset: { __uuid__: 'a5a5a5a5-a5a5-a5a5-a5a5-a5a5a5a5a5a5' } },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, __prefab: null, _target: null },
+    { __type__: 'cc.PrefabInstance', fileId: 'PINSTxxxxxxxxxxxxxxxxx', mountedChildren: [], propertyOverrides: [] },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'P3b.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a6a6a6a6-a6a6-a6a6-a6a6-a6a6a6a6a6a6' }));
+  const d = json(cli('edit', 'P3b.prefab', 'set-ref', 'Root:cc.Sprite._target', 'Root/Inst', '--into', 'SRoot/Target', '-o', 'json'));
+  assert.equal(d.mode, 'P3b');
+  assert.equal(d.sourceFileId, 'TARGETxxxxxxxxxxxxxxxx');  // resolved from the SOURCE prefab
+  assert.equal(d.needsReimport, true);
+  const arr = parseAsset('P3b.prefab');
+  assert.equal(arr[5]._target, null);                     // inline left null (engine resolves from the override)
+  const toi = arr.find((o) => o && o.__type__ === 'cc.TargetOverrideInfo');
+  assert.equal(arr[toi.targetInfo.__id__].localID[0], 'TARGETxxxxxxxxxxxxxxxx');
+  assert.equal(toi.target.__id__, 2);                     // target = the instance root
+});
+
+// ---- needsReimport flag (add-node with no PrefabInfo to template) ----------
+test('needsReimport: add-node with no PrefabInfo template flags a Cocos-Creator finalize', () => {
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'NoPI.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', _name: 'NoPI', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'NoPI', _parent: null, _children: [], _components: [], _prefab: null, _active: true },
+  ]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'NoPI.prefab.meta'), JSON.stringify({ importer: 'prefab', uuid: 'a2a2a2a2-a2a2-a2a2-a2a2-a2a2a2a2a2a2' }));
+  const r = cli('edit', 'NoPI.prefab', 'add-node', 'NoPI', 'Kid', '-o', 'json', '--dry-run');
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.needsReimport, true);                  // the fallback PrefabInfo lacks root/asset
+  // and the text path prints the ⚠ hint
+  const t = cli('edit', 'NoPI.prefab', 'add-node', 'NoPI', 'Kid2', '--dry-run');
+  assert.match(t.stdout, /needs Cocos Creator/);
+});
+
 // ---- tree --values (deep read) --------------------------------------------
 test('tree --values -o json: each node + component carries its raw value', () => {
   const t = json(cli('edit', 'EditAdd.prefab', 'tree', '--values', '-o', 'json'));
@@ -926,12 +1103,13 @@ test('edit --all: rejects non-swap ops (selector ops are per-file)', () => {
   assert.match(r.stderr, /only swap-uuid/);
 });
 
-test('edit: A-own node editable, but a nested prefab instance is refused', () => {
+test('edit: A-own node editable; an instance ROOT property → a propertyOverride (P2)', () => {
   assert.equal(cli('edit', 'AInst.prefab', 'set', 'Root:cc.Label._string', '--str', 'X').status, 0);
   assert.equal(parseAsset('AInst.prefab')[4]._string, 'X');
-  const r = cli('edit', 'AInst.prefab', 'rename', 'Root/Holder/BInst', 'Foo');
-  assert.equal(r.status, 2);
-  assert.match(r.stderr, /nested prefab instance/);
+  // BInst is a nested-instance ROOT → renaming it now authors a root propertyOverride
+  // (P2, allowed). --dry-run so it doesn't mutate the shared fixture.
+  const r = json(cli('edit', 'AInst.prefab', 'rename', 'Root/Holder/BInst', 'Foo', '--dry-run', '-o', 'json'));
+  assert.equal(r.override, true);
 });
 
 test('edit rm-node: refuses a subtree that CONTAINS a nested instance (#14)', () => {
@@ -1077,6 +1255,9 @@ test('set --json: builtin and nested __type__ are handled correctly', () => {
 });
 
 test('set --json: arrays/scalars work too (set a keys array)', () => {
+  // a prior test replaced _cfg with a keys-less value; restore _cfg (with keys)
+  // first, so set _cfg.keys edits an EXISTING field (coir only edits existing).
+  cli('edit', 'CfgEdit.prefab', 'set', 'Root:cc.Sprite._cfg', '--json', JSON.stringify({ __type__: CFG_TYPE, frameName: 'x', keys: ['a'] }));
   cli('edit', 'CfgEdit.prefab', 'set', 'Root:cc.Sprite._cfg.keys', '--json', '["p","q"]');
   assert.deepEqual(parseAsset('CfgEdit.prefab')[2]._cfg.keys, ['p', 'q']);
 });

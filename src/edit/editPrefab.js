@@ -524,8 +524,10 @@ export function addNode(arr, parentIndex, name, siblingIndex = -1) {
   if ('_active' in node) node._active = true;
   const nodeIndex = arr.length; arr.push(node);
 
+  let piFallback = false; // true when no cc.PrefabInfo existed to clone → the minimal
   if (isPrefabFile(arr)) { // give it a PrefabInfo (clone skeleton for version-correct fields)
-    const pi = cloneOf(arr, 'cc.PrefabInfo') || { __type__: 'cc.PrefabInfo', fileId: '' };
+    const piClone = cloneOf(arr, 'cc.PrefabInfo'); piFallback = !piClone; // fallback lacks root/asset → reimport completes it
+    const pi = piClone || { __type__: 'cc.PrefabInfo', fileId: '' };
     const rootIdx = isRef(arr[0].data) ? arr[0].data.__id__ : 1; // the prefab's root cc.Node
     // Reset every identity/link field so the clone carries none of the template's
     // own refs (a stale root/asset, or a dangling nestedPrefabInstanceRoots __id__).
@@ -542,7 +544,7 @@ export function addNode(arr, parentIndex, name, siblingIndex = -1) {
   const ref = { __id__: nodeIndex };
   if (siblingIndex == null || siblingIndex < 0 || siblingIndex >= parent._children.length) parent._children.push(ref);
   else parent._children.splice(siblingIndex, 0, ref);
-  return { ok: true, index: nodeIndex };
+  return { ok: true, index: nodeIndex, fallback: piFallback ? 'PrefabInfo' : null };
 }
 
 /**
@@ -722,4 +724,143 @@ export function probeInvertible(arr, { compName = null } = {}) {
   if (rm.error || !rm.newArr) return { error: rm.error || 'removeNode returned no array', code: 'rm-failed' };
   const newErrors = verifyDoc(rm.newArr, { compName }).errors.filter((e) => !baseErrors.has(`${e.code}|${e.msg}`));
   return { invertible: probeCanon(JSON.stringify(rm.newArr)) === probeCanon(before), verifyErrors: newErrors };
+}
+
+/**
+ * Classify every nested-instance `propertyOverride` in a parsed prefab/scene as
+ * **on-root** vs **deeper**. An override targets the instance ROOT iff its
+ * `TargetInfo.localID` is the single fileId of the host instance node's
+ * `PrefabInfo` — that's the placement/identity layer (`_lpos`/`_name`/… the
+ * editor pins on every instance). Anything else (a different/longer `localID`)
+ * is a property of a node/component **inside** the instance. `cc.TargetOverrideInfo`
+ * (reference wiring) is NOT a propertyOverride and is intentionally ignored here.
+ * Pure read; drives the `no-deep-instance-override` check rule. See
+ * docs/NESTED-PREFABS.md. Returns one record per override:
+ * `{ instance, prop, localID, onRoot }`.
+ * @param {any[]} arr
+ * @returns {Array<{instance:string, prop:string, localID:string[], onRoot:boolean}>}
+ */
+export function findInstanceOverrides(arr) {
+  if (!Array.isArray(arr)) return [];
+  const at = (ref) => (ref && typeof ref.__id__ === 'number') ? arr[ref.__id__] : null;
+  // PrefabInstance index → { host node name, that node's PrefabInfo.fileId }
+  const hostByInstance = new Map();
+  arr.forEach((n, j) => {
+    if (!n || !isNodeType(n.__type__) || !n._prefab) return;
+    const pi = at(n._prefab);
+    if (pi && pi.__type__ === 'cc.PrefabInfo' && pi.instance && typeof pi.instance.__id__ === 'number') {
+      hostByInstance.set(pi.instance.__id__, { name: n._name || `#${j}`, fileId: pi.fileId });
+    }
+  });
+  const out = [];
+  arr.forEach((o, i) => {
+    if (!o || o.__type__ !== 'cc.PrefabInstance') return;
+    const host = hostByInstance.get(i) || { name: `#${i}`, fileId: null };
+    for (const ref of o.propertyOverrides || []) {
+      const ov = at(ref);
+      if (!ov || ov.__type__ !== 'CCPropertyOverrideInfo') continue;
+      const ti = at(ov.targetInfo);
+      const localID = ti && Array.isArray(ti.localID) ? ti.localID : [];
+      const onRoot = localID.length === 1 && host.fileId != null && localID[0] === host.fileId;
+      out.push({ instance: host.name, prop: (ov.propertyPath || []).join('.'), localID, onRoot });
+    }
+  });
+  return out;
+}
+
+const samePropPath = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
+
+/**
+ * P2 — author/update a ROOT-level propertyOverride on a nested instance: set a
+ * top-node property (`_lpos`/`_name`/…) of the instance ROOT. Finds an existing
+ * `CCPropertyOverrideInfo` for (rootFileId, propertyPath) and updates its value,
+ * else creates one (+ its `cc.TargetInfo` with `localID:[rootFileId]`) and links
+ * it into `PrefabInstance.propertyOverrides`. Also keeps the baked node value in
+ * sync. ONLY the instance root is valid here (deeper = the no-deep-instance-override
+ * policy); the caller gates that. Offline-complete — the structure matches what the
+ * editor writes. See docs/NESTED-PREFABS.md §4.
+ * @param {any[]} arr @param {number} instanceRootIndex @param {string[]} propertyPath @param {any} value
+ */
+export function setRootOverride(arr, instanceRootIndex, propertyPath, value) {
+  const node = arr[instanceRootIndex];
+  if (!node || !isNodeType(node.__type__)) return { error: `#${instanceRootIndex} is not a node` };
+  const pi = isRef(node._prefab) ? arr[node._prefab.__id__] : null;
+  if (!pi || pi.__type__ !== 'cc.PrefabInfo' || !isRef(pi.instance)) return { error: `#${instanceRootIndex} is not a nested-instance root` };
+  const inst = arr[pi.instance.__id__];
+  if (!inst || inst.__type__ !== 'cc.PrefabInstance') return { error: 'instance is not a cc.PrefabInstance' };
+  const rootFileId = pi.fileId;
+  if (!Array.isArray(inst.propertyOverrides)) inst.propertyOverrides = [];
+  let ov = null; // an existing override for this exact (root, property)
+  for (const ref of inst.propertyOverrides) {
+    if (!isRef(ref)) continue;
+    const o = arr[ref.__id__];
+    if (!o || o.__type__ !== 'CCPropertyOverrideInfo' || !samePropPath(o.propertyPath, propertyPath)) continue;
+    const ti = isRef(o.targetInfo) ? arr[o.targetInfo.__id__] : null;
+    if (ti && Array.isArray(ti.localID) && ti.localID.length === 1 && ti.localID[0] === rootFileId) { ov = o; break; }
+  }
+  if (ov) {
+    ov.value = value;
+  } else {
+    const tiIndex = arr.length; arr.push({ __type__: 'cc.TargetInfo', localID: [rootFileId] });
+    const ovIndex = arr.length; arr.push({ __type__: 'CCPropertyOverrideInfo', targetInfo: { __id__: tiIndex }, propertyPath: [...propertyPath], value });
+    inst.propertyOverrides.push({ __id__: ovIndex });
+  }
+  const r = setDeep(node, propertyPath.join('.'), value); // keep the baked node value consistent
+  if ('error' in r) return r;
+  return { ok: true };
+}
+
+/**
+ * P3 — set a property to reference a node INSIDE a nested instance, via a
+ * `cc.TargetOverrideInfo` on the outer root's `PrefabInfo.targetOverrides`. Live-
+ * validated: the engine resolves the reference from this structure alone (no
+ * baked target branch needed). `targetFileId` is the target node's `fileId` in the
+ * SOURCE prefab; `inlineId` is its baked `__id__` in this file (P3a) or null
+ * (P3b — engine resolves from the override alone). Finds/updates an existing
+ * override for (source, propertyPath), else creates one (+ its `cc.TargetInfo`),
+ * and sets the inline property. See docs/NESTED-PREFABS.md §5.
+ * @param {any[]} arr @param {number} sourceCompIndex @param {string[]} propertyPath
+ * @param {number} instanceRootIndex @param {string} targetFileId @param {number|null} inlineId
+ */
+export function setCrossRef(arr, sourceCompIndex, propertyPath, instanceRootIndex, targetFileId, inlineId) {
+  const rootIdx = isRef(arr[0] && arr[0].data) ? arr[0].data.__id__ : 1; // the prefab's root node
+  const rootNode = arr[rootIdx];
+  if (!rootNode || !isRef(rootNode._prefab)) return { error: 'outer root has no PrefabInfo' };
+  const outerPI = arr[rootNode._prefab.__id__];
+  if (!outerPI || outerPI.__type__ !== 'cc.PrefabInfo') return { error: 'outer PrefabInfo not found' };
+  if (!Array.isArray(outerPI.targetOverrides)) outerPI.targetOverrides = [];
+  let toi = null; // an existing override for this (source component, property)
+  for (const ref of outerPI.targetOverrides) {
+    if (!isRef(ref)) continue;
+    const t = arr[ref.__id__];
+    if (t && t.__type__ === 'cc.TargetOverrideInfo' && isRef(t.source) && t.source.__id__ === sourceCompIndex && samePropPath(t.propertyPath, propertyPath)) { toi = t; break; }
+  }
+  if (toi) {
+    toi.target = { __id__: instanceRootIndex };
+    const ti = isRef(toi.targetInfo) ? arr[toi.targetInfo.__id__] : null;
+    if (ti) ti.localID = [targetFileId];
+    else { const i = arr.length; arr.push({ __type__: 'cc.TargetInfo', localID: [targetFileId] }); toi.targetInfo = { __id__: i }; }
+  } else {
+    const tiIdx = arr.length; arr.push({ __type__: 'cc.TargetInfo', localID: [targetFileId] });
+    const toiIdx = arr.length; arr.push({ __type__: 'cc.TargetOverrideInfo', source: { __id__: sourceCompIndex }, sourceInfo: null, propertyPath: [...propertyPath], target: { __id__: instanceRootIndex }, targetInfo: { __id__: tiIdx } });
+    outerPI.targetOverrides.push({ __id__: toiIdx });
+  }
+  const r = setDeep(arr[sourceCompIndex], propertyPath.join('.'), inlineId != null ? { __id__: inlineId } : null);
+  if ('error' in r) return r;
+  return { ok: true };
+}
+
+/**
+ * Detect a leaked editor PREVIEW CANVAS: a node named `should_hide_in_hierarchy`
+ * (or `…_should_hide_in_hierarchy`) is the hidden Canvas+Camera the editor injects
+ * into the live tree to render a prefab in isolation (prefab edit mode). It is
+ * `LockedInEditor` and must NEVER be saved into a file — when it is, the prefab
+ * has gained a stray Canvas. Returns the offending node names (empty = clean).
+ * See docs/NESTED-PREFABS.md.
+ * @param {any[]} arr @returns {string[]}
+ */
+export function findPreviewCanvasLeaks(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter((o) => o && isNodeType(o.__type__) && typeof o._name === 'string' && o._name.includes('should_hide_in_hierarchy'))
+    .map((o) => o._name);
 }

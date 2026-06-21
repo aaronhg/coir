@@ -11,7 +11,8 @@ import { componentName, typeToken } from '../core/selector.js';
 import { resolveTarget } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
-  nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc, roundTrip, probeInvertible } from './editPrefab.js';
+  nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc, roundTrip, probeInvertible,
+  findInstanceOverrides, findPreviewCanvasLeaks, setRootOverride, setCrossRef } from './editPrefab.js';
 
 // Operation-level messages — byte-identical to the CLI's prior strings so output
 // is unchanged. (Usage / value-flag messages stay CLI-side in editCli's EM.)
@@ -25,9 +26,78 @@ export const OM = {
   needNode: (s) => `✗ "${s}" must select a node for this op`,
   needComp: (s) => `✗ "${s}" must select a component (…:Type) for this op`,
   instanceGuard: (name) => `✗ "${name}" is (in) a nested prefab instance — edit its source prefab directly, not here`,
+  deepInstanceEdit: (name) => `✗ that property is INSIDE the nested prefab instance "${name}" — only the instance ROOT's own properties can be overridden here (edit deeper values in the source prefab)`,
   subtreeInstance: (sel) => `✗ "${sel}" contains a nested prefab instance — rm it in its source prefab, not here`,
+  refNotNode: (s) => `✗ set-ref target "${s}" must select a node or component (…/Node or …:Type), not a property`,
+  refNeedInstance: (s) => `✗ set-ref --into needs "${s}" to be a nested-instance ROOT (the instance you reference a node inside of)`,
+  noSuchProp: (sel, prop) => `✗ "${sel}" has no existing property "${prop}" — coir only edits fields that already exist (a typo, or a field Cocos Creator hasn't written yet). Add it in the editor first, or pass --force to create it (the result then needs a Creator reimport).`,
+  notRefField: (sel, kind) => `✗ "${sel}" currently holds a ${kind} value, not a reference — set-ref only points a property that is a node/component reference (its existing value is null or a {__id__}). Use set/set-uuid for a value/asset, or --force to override.`,
   selErr: (e) => `✗ ${e}`,
 };
+
+// Coarse "kind" of a serialized value — for type-sanity checks against a field's
+// existing value (the field's prior value is the type the editor wrote).
+function valueKind(v) {
+  if (v === null || v === undefined) return 'null';
+  if (Array.isArray(v)) return 'array';
+  const t = typeof v;
+  if (t === 'string' || t === 'number' || t === 'boolean') return t;
+  if (t === 'object') {
+    if (typeof v.__uuid__ === 'string') return 'asset';    // {__uuid__} asset ref
+    if (typeof v.__id__ === 'number') return 'ref';        // {__id__} node/component ref
+    if (typeof v.__type__ === 'string') return v.__type__; // cc.Vec3 / cc.Color / custom class
+    return 'object';
+  }
+  return 'object';
+}
+// The kind of the value currently AT `prop` on entry `idx` ('null' if absent).
+function kindAt(arr, idx, prop) {
+  const gd = getDeep(arr[idx], prop);
+  return ('error' in gd) ? 'null' : valueKind(gd.value);
+}
+
+// Edits whose offline result is NOT yet what the editor would produce — Cocos
+// Creator finishes them on the next open/reimport. Surfaced as result.reimportReason.
+export const REIMPORT = {
+  template: (kind) => `the new node's ${kind} was cloned from a minimal fallback (no existing one to template) — open in Cocos Creator to complete it`,
+  crossRef: 'a cross-boundary reference (cc.TargetOverrideInfo, no baked branch) was written — reimport in Cocos Creator to refresh the library + let the editor bake its display branch',
+  newField: (prop) => `a new property "${prop}" was force-created — coir can't tell a real @property from a typo, so reimport in Cocos Creator to reconcile (accept it, or drop it on save)`,
+};
+
+// True if `propPath` targets a MISSING object key on `obj` (intermediate missing
+// or final key absent). Array indices are excluded — setDeep's bounds check
+// governs those. Drives the "only edit existing fields" guard.
+function missingObjectProp(obj, propPath) {
+  const parts = String(propPath).replace(/\[(\d+)\]/g, '.$1').split('.').filter((p) => p !== '');
+  const last = parts[parts.length - 1];
+  if (/^\d+$/.test(last)) return false;                 // array index, not an object-key typo
+  const gd = getDeep(obj, propPath);
+  return ('error' in gd) || gd.value === undefined;     // intermediate missing OR final key absent
+}
+
+// A node's own fileId (from its PrefabInfo); null if it has none.
+function fileIdOf(arr, nodeIndex) {
+  const n = arr[nodeIndex];
+  const pi = n && n._prefab && typeof n._prefab.__id__ === 'number' ? arr[n._prefab.__id__] : null;
+  return pi && typeof pi.fileId === 'string' ? pi.fileId : null;
+}
+// P3b — resolve a node sub-path INSIDE the instance's SOURCE prefab to its fileId.
+// The instance carries its source via PrefabInfo.asset.__uuid__; we load that prefab
+// and resolve the sub-path against it. Returns { fileId, sourcePath } | { error }.
+function resolveSourceFileId(scan, projectDir, arr, instRootIdx, subPath) {
+  const node = arr[instRootIdx];
+  const pi = node && node._prefab && typeof node._prefab.__id__ === 'number' ? arr[node._prefab.__id__] : null;
+  const uuid = pi && pi.asset && typeof pi.asset.__uuid__ === 'string' ? pi.asset.__uuid__.split('@')[0] : null;
+  if (!uuid) return { error: 'the instance has no source-prefab asset uuid' };
+  const srcAsset = scan.assets.get(uuid);
+  if (!srcAsset || !srcAsset.path) return { error: `source prefab ${uuid} not found in the project` };
+  let srcDoc; try { srcDoc = loadDoc(path.join(projectDir, 'assets', srcAsset.path)); } catch { return { error: `cannot load source prefab ${srcAsset.path}` }; }
+  const r = resolveSelector(srcDoc.arr, subPath, compNameFor(scan));
+  if ('error' in r) return { error: `"${subPath}" not found in source prefab ${srcAsset.path}: ${r.error}` };
+  if (r.kind !== 'node') return { error: `"${subPath}" in the source prefab must select a node` };
+  const fid = fileIdOf(srcDoc.arr, r.index);
+  return fid ? { fileId: fid, sourcePath: srcAsset.path } : { error: `target "${subPath}" in the source prefab has no fileId` };
+}
 
 const assetPath = (scan, uuid) => scan.assets.get(uuid)?.path || uuid;
 const compNameFor = (scan) => (raw) => componentName(scan, raw);
@@ -77,6 +147,16 @@ function editableGuard(arr, index) {
   const root = nestedInstanceRoot(arr, index);
   return root != null ? { error: OM.instanceGuard((arr[root] && arr[root]._name) || `#${root}`), code: 2 } : null;
 }
+// P2 classification for a node-property write on a NODE index: { root:true } = it
+// IS a nested-instance root (→ author a propertyOverride); { root:false } = not in
+// any instance (→ write the node directly); { error } = DEEPER than the root (→
+// refused, the same line the `no-deep-instance-override` check draws).
+function instanceWrite(arr, index) {
+  const root = nestedInstanceRoot(arr, index);
+  if (root == null) return { root: false };
+  if (root === index) return { root: true };
+  return { error: OM.deepInstanceEdit((arr[root] && arr[root]._name) || `#${root}`), code: 2 };
+}
 // Resolve a selector to an editable NODE index, or an error result.
 function resolveNode(arr, sel, compName) {
   const res = resolveSelector(arr, sel, compName);
@@ -94,7 +174,7 @@ function resolveNode(arr, sel, compName) {
  * `doc.arr`, so this composes: runBatch calls it N times on one loaded doc.
  * @param {any} scan @param {{arr:any[], raw:string, mtime:number}} doc @param {string} op @param {any} params
  */
-function applyArrayOp(scan, doc, op, params) {
+function applyArrayOp(scan, doc, op, params, projectDir) {
   const compName = compNameFor(scan);
   switch (op) {
     case 'set': case 'set-uuid': {
@@ -102,6 +182,14 @@ function applyArrayOp(scan, doc, op, params) {
       if ('error' in res) return selError(res);
       if (res.kind !== 'property') return { error: OM.needProp(params.selector), code: 2 };
       const g = editableGuard(doc.arr, res.index); if (g) return g;
+      // Only edit fields that already exist (a missing object key = a typo, or a
+      // field Creator hasn't written). --force creates it but the result is then
+      // needsReimport (coir can't tell a real @property from junk).
+      let needsReimport, reimportReason;
+      if (missingObjectProp(doc.arr[res.index], res.prop)) {
+        if (!params.force) return { error: OM.noSuchProp(params.selector, res.prop), code: 2 };
+        needsReimport = true; reimportReason = REIMPORT.newField(res.prop);
+      }
       let value, json;
       if (op === 'set-uuid') {
         const ra = resolveAssetData(scan, params.asset); if (ra.error) return ra;
@@ -111,16 +199,29 @@ function applyArrayOp(scan, doc, op, params) {
         value = params.value;
         json = { op, selector: params.selector, prop: res.prop, value };
       }
+      // type sanity (existing fields only): warn if the new value's kind differs
+      // from what the field currently holds (the type Creator wrote). Soft — a few
+      // properties are legitimately polymorphic; null clears anything.
+      let warning;
+      if (!needsReimport) {
+        const cur = kindAt(doc.arr, res.index, res.prop), now = valueKind(value);
+        if (cur !== 'null' && now !== 'null' && now !== cur) warning = `value kind "${now}" ≠ the field's current "${cur}" — possible type mismatch`;
+      }
       const r = setDeep(doc.arr[res.index], res.prop, value);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return { json };
+      return { json, needsReimport, reimportReason, warning };
     }
     case 'rename': case 'set-active': case 'set-layer': case 'set-pos': case 'set-scale': {
       const res = resolveSelector(doc.arr, params.selector, compName);
       if ('error' in res) return selError(res);
       if (res.kind !== 'node') return { error: OM.needNode(params.selector), code: 2 };
-      const g = editableGuard(doc.arr, res.index); if (g) return g;
       const field = { rename: '_name', 'set-active': '_active', 'set-layer': '_layer', 'set-pos': '_lpos', 'set-scale': '_lscale' }[op];
+      const ig = instanceWrite(doc.arr, res.index); if (ig.error) return ig; // P2: instance root → override; deeper → refused
+      if (ig.root) {
+        const r = setRootOverride(doc.arr, res.index, [field], params.value);
+        if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+        return { json: { op, node: params.selector, field, value: params.value, override: true } };
+      }
       doc.arr[res.index][field] = params.value;
       return { json: { op, node: params.selector, field, value: params.value } };
     }
@@ -128,9 +229,14 @@ function applyArrayOp(scan, doc, op, params) {
       const res = resolveSelector(doc.arr, params.selector, compName);
       if ('error' in res) return selError(res);
       if (res.kind !== 'node') return { error: OM.needNode(params.selector), code: 2 };
-      const g = editableGuard(doc.arr, res.index); if (g) return g;
-      const e = params.value; const node = doc.arr[res.index];
-      node._euler = e; node._lrot = eulerToQuat(e.x, e.y, e.z);
+      const e = params.value; const node = doc.arr[res.index]; const lrot = eulerToQuat(e.x, e.y, e.z);
+      const ig = instanceWrite(doc.arr, res.index); if (ig.error) return ig;
+      if (ig.root) { // P2: author overrides for both _euler and _lrot
+        let r = setRootOverride(doc.arr, res.index, ['_euler'], e); if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+        r = setRootOverride(doc.arr, res.index, ['_lrot'], lrot); if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+        return { json: { op, node: params.selector, euler: [e.x, e.y, e.z], lrot, override: true } };
+      }
+      node._euler = e; node._lrot = lrot;
       return { json: { op, node: params.selector, euler: [e.x, e.y, e.z], lrot: node._lrot } };
     }
     case 'set-parent': {
@@ -146,11 +252,60 @@ function applyArrayOp(scan, doc, op, params) {
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
       return { json: { op, node: params.selector, newParent: params.parent, index: params.index ?? -1 } };
     }
+    case 'set-ref': {
+      // Reference a node/component. P1: an intra-file {__id__} (same prefab, not in
+      // an instance). P3a: a target baked inside a nested instance → inline {__id__}
+      // + a cc.TargetOverrideInfo. P3b (`into`): a target only in the instance's
+      // SOURCE prefab → just the TargetOverrideInfo (engine resolves it; needsReimport).
+      const res = resolveSelector(doc.arr, params.selector, compName);
+      if ('error' in res) return selError(res);
+      if (res.kind !== 'property') return { error: OM.needProp(params.selector), code: 2 };
+      const g = editableGuard(doc.arr, res.index); if (g) return g; // source not in a nested instance
+      const prop = res.prop.split('.');
+      // only edit existing fields — the source reference property must already exist
+      let fieldReimport, fieldReason;
+      if (missingObjectProp(doc.arr[res.index], res.prop)) {
+        if (!params.force) return { error: OM.noSuchProp(params.selector, res.prop), code: 2 };
+        fieldReimport = true; fieldReason = REIMPORT.newField(res.prop);
+      } else if (!params.force) { // the field exists → it must already be a reference (null or {__id__})
+        const k = kindAt(doc.arr, res.index, res.prop);
+        if (k !== 'null' && k !== 'ref') return { error: OM.notRefField(params.selector, k), code: 2 };
+      }
+
+      if (params.into != null) { // P3b — target is a sub-path in the instance's source prefab
+        const inst = resolveSelector(doc.arr, params.target, compName);
+        if ('error' in inst) return { error: OM.selErr(inst.error), code: 2, candidates: (inst.candidates || []).slice(0, 20) };
+        if (inst.kind !== 'node' || nestedInstanceRoot(doc.arr, inst.index) !== inst.index) return { error: OM.refNeedInstance(params.target), code: 2 };
+        const fi = resolveSourceFileId(scan, projectDir, doc.arr, inst.index, params.into);
+        if (fi.error) return { error: OM.selErr(fi.error), code: 2 };
+        const r = setCrossRef(doc.arr, res.index, prop, inst.index, fi.fileId, null);
+        if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+        return { json: { op, selector: params.selector, prop: res.prop, instance: params.target, into: params.into, sourceFileId: fi.fileId, mode: 'P3b' }, needsReimport: true, reimportReason: REIMPORT.crossRef };
+      }
+
+      const tgt = resolveSelector(doc.arr, params.target, compName);
+      if ('error' in tgt) return { error: OM.selErr(tgt.error), code: 2, candidates: (tgt.candidates || []).slice(0, 20) };
+      if (tgt.kind === 'property') return { error: OM.refNotNode(params.target), code: 2 };
+      const tRoot = nestedInstanceRoot(doc.arr, tgt.index);
+      if (tRoot == null) { // P1 — intra-file reference
+        const r = setDeep(doc.arr[res.index], res.prop, { __id__: tgt.index });
+        if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+        return { json: { op, selector: params.selector, prop: res.prop, target: params.target, targetKind: tgt.kind, targetIndex: tgt.index, mode: 'P1' }, needsReimport: fieldReimport, reimportReason: fieldReason };
+      }
+      // P3a — target is a baked node inside an instance; fileId from its PrefabInfo
+      const fid = fileIdOf(doc.arr, tgt.index);
+      if (!fid) return { error: OM.selErr(`baked target "${params.target}" has no fileId`), code: 2 };
+      const r = setCrossRef(doc.arr, res.index, prop, tRoot, fid, tgt.index);
+      if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+      return { json: { op, selector: params.selector, prop: res.prop, target: params.target, targetKind: tgt.kind, targetIndex: tgt.index, sourceFileId: fid, mode: 'P3a' }, needsReimport: fieldReimport, reimportReason: fieldReason };
+    }
     case 'add-node': {
       const ni = resolveNode(doc.arr, params.parent, compName); if (ni.error) return ni;
       const r = addNode(doc.arr, ni.index, params.name, params.index);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return { json: { op, parent: params.parent, name: params.name, index: r.index } };
+      const out = { json: { op, parent: params.parent, name: params.name, index: r.index } };
+      if (r.fallback) { out.needsReimport = true; out.reimportReason = REIMPORT.template(r.fallback); }
+      return out;
     }
     case 'rm-node': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -213,9 +368,9 @@ export function runEdit(scan, projectDir, op, params) {
     const json = { op, from: assetPath(scan, ro.uuid), to: assetPath(scan, rn.uuid), fromUuid: ro.uuid, toUuid: rn.uuid, count };
     return { ok: true, asset, json, writes: count ? W(text) : [] };
   }
-  const r = applyArrayOp(scan, doc, op, params);
+  const r = applyArrayOp(scan, doc, op, params, projectDir);
   if (r.error) return r;
-  return { ok: true, asset, json: r.json, writes: W(serialize(doc.arr, doc.raw)) };
+  return { ok: true, asset, json: r.json, writes: W(serialize(doc.arr, doc.raw)), needsReimport: !!r.needsReimport, reimportReason: r.reimportReason, warning: r.warning };
 }
 
 /**
@@ -234,16 +389,20 @@ export function runBatch(scan, projectDir, file, ops) {
   const ld = loadOrErr(absPath, asset);
   if (ld.error) return ld;
   const { doc } = ld;
-  const applied = [];
+  const applied = []; const reasons = []; const warns = [];
   for (let i = 0; i < ops.length; i++) {
     const { op, ...params } = ops[i] || {};
     if (op === 'swap-uuid') return { error: `✗ batch op #${i}: swap-uuid is not supported in a batch (use swap-uuid or --all)`, code: 1, opIndex: i };
-    const r = applyArrayOp(scan, doc, op, params);
+    const r = applyArrayOp(scan, doc, op, params, projectDir);
     if (r.error) return { error: `✗ batch op #${i} (${op || '?'}): ${String(r.error).replace(/^✗\s*/, '')}`, code: r.code || 2, candidates: r.candidates, opIndex: i };
     applied.push(r.json);
+    if (r.needsReimport && r.reimportReason) reasons.push(r.reimportReason);
+    if (r.warning) warns.push(`#${i}: ${r.warning}`);
   }
   const json = { op: 'batch', file: asset.path, count: applied.length, ops: applied };
-  return { ok: true, asset, json, writes: [{ absPath, text: serialize(doc.arr, doc.raw), oldText: doc.raw, mtime: doc.mtime }] };
+  return { ok: true, asset, json, writes: [{ absPath, text: serialize(doc.arr, doc.raw), oldText: doc.raw, mtime: doc.mtime }],
+    needsReimport: reasons.length > 0, reimportReason: reasons.length ? [...new Set(reasons)].join('; ') : undefined,
+    warning: warns.length ? warns.join(' · ') : undefined };
 }
 
 /**
@@ -361,6 +520,47 @@ export function auditRoundtripData(scan, projectDir, { all = false, file = null 
   const skipped = new Set(unprobed.map((u) => u.file));
   const passed = assets.length - failed.size - skipped.size;
   return { ok: true, scope: all ? 'all' : 'file', total: assets.length, passed, byteDivergent, failures, unprobed, valid: failures.length === 0 };
+}
+
+/**
+ * Host-side I/O collector for the `no-deep-instance-override` check rule: load
+ * every prefab/scene and classify its nested-instance propertyOverrides
+ * (`findInstanceOverrides`). Returns `[{ file, overrides[] }]` for the files that
+ * have any — the rules engine stays pure and just reads this off `ctx`.
+ * @param {any} scan @param {string} projectDir
+ */
+export function collectInstanceOverridesData(scan, projectDir) {
+  const assets = [...scan.assets.values()]
+    .filter((a) => (a.type === 'prefab' || a.type === 'scene') && a.hasSource && a.path && !a.virtual)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const out = [];
+  for (const a of assets) {
+    let doc;
+    try { doc = loadDoc(path.join(projectDir, 'assets', a.path)); } catch { continue; }
+    const overrides = findInstanceOverrides(doc.arr);
+    if (overrides.length) out.push({ file: a.path, type: a.type, overrides });
+  }
+  return out;
+}
+
+/**
+ * Host-side I/O collector for the `no-editor-preview-leak` check rule: load every
+ * prefab/scene and flag any that contains a leaked editor preview Canvas
+ * (`findPreviewCanvasLeaks`). Returns `[{ file, nodes[] }]`.
+ * @param {any} scan @param {string} projectDir
+ */
+export function collectPreviewLeaksData(scan, projectDir) {
+  const assets = [...scan.assets.values()]
+    .filter((a) => (a.type === 'prefab' || a.type === 'scene') && a.hasSource && a.path && !a.virtual)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const out = [];
+  for (const a of assets) {
+    let doc;
+    try { doc = loadDoc(path.join(projectDir, 'assets', a.path)); } catch { continue; }
+    const nodes = findPreviewCanvasLeaks(doc.arr);
+    if (nodes.length) out.push({ file: a.path, nodes });
+  }
+  return out;
 }
 
 /**

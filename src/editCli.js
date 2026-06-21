@@ -21,7 +21,7 @@ import path from 'node:path';
 // instance guard, not-a-prefab, …) come back from ops.js verbatim and are printed
 // by failExit, so they live in ONE place (ops.OM) shared with the MCP server.
 const EM = {
-  editUsage: 'edit needs: <file> <op> …   (op: tree / get / set / set-uuid / swap-uuid / rename / set-active / set-layer / set-pos / set-scale / set-rot / set-parent / add-node / rm-node / add-component / rm-component)',
+  editUsage: 'edit needs: <file> <op> …   (op: tree / get / set / set-uuid / set-ref / swap-uuid / rename / set-active / set-layer / set-pos / set-scale / set-rot / set-parent / add-node / rm-node / add-component / rm-component)',
   editUnknownOp: (op) => `unknown edit op "${op}"`,
   swapUsage: 'swap-uuid needs: <file> swap-uuid <oldAsset> <newAsset>',
   swapNoop: (q) => `(no references to "${q}" in this file — nothing changed)`,
@@ -31,6 +31,8 @@ const EM = {
   getUsage: 'get needs: <file> get <selector>   (reads the value/node/component; -o json for raw, round-trips into set --json)',
   setUsage: 'set needs: <file> set <selector:Comp.prop> <value-flag>   (e.g. --str/--int/--vec3/--uuid)',
   setUuidUsage: 'set-uuid needs: <file> set-uuid <selector:Comp.prop> <asset>',
+  setRefUsage: 'set-ref needs: <file> set-ref <selector:Comp.prop> <targetNode[:Type]>   (same-prefab ref) — OR <selector> <instanceRoot> --into <sourceSubPath>  (reference a node INSIDE a nested instance, via the source prefab)',
+  reimportHint: (why) => `  ⚠ needs Cocos Creator: ${why}`,
   noValue: (op) => `✗ ${op} needs a value flag (--str/--int/--num/--bool/--enum/--color/--vec2/3/4/--size/--quat/--uuid/--json/--null)`,
   nodeOpUsage: (op) => `${op} needs: <file> ${op} <nodeSelector> ${op === 'rename' ? '<newName>' : '<value-flag>'}`,
   rotNeedsVec3: 'set-rot needs --vec3 <x> <y> <z> (euler degrees)',
@@ -52,9 +54,10 @@ const assetPath = (scan, uuid) => scan.assets.get(uuid)?.path || uuid;
 // Stashed so the shared commit chokepoint (commitOrExit) can run `--verify`
 // (verifyText needs the scan) without threading it through every applyResult call.
 let _scan = null;
+let _projectDir = null; // stashed for --reimport (connect to the editor for this project)
 
 export function cmdEdit(scan, projectDir, flags, pos) {
-  _scan = scan;
+  _scan = scan; _projectDir = projectDir;
   if (flags.all) return cmdEditAll(scan, projectDir, flags, pos); // project-wide: pos = [op, …]
   const file = pos[0]; const op = pos[1];
   if (!file || !op) { console.error(EM.editUsage); process.exit(1); }
@@ -66,6 +69,7 @@ export function cmdEdit(scan, projectDir, flags, pos) {
     case 'batch': return cmdBatch(scan, projectDir, flags, pos);
     case 'set': return cmdSet(scan, projectDir, flags, pos);
     case 'set-uuid': return cmdSetUuid(scan, projectDir, flags, pos);
+    case 'set-ref': return cmdSetRef(scan, projectDir, flags, pos);
     case 'rename': case 'set-active': case 'set-layer': case 'set-pos': case 'set-scale': case 'set-rot':
       return nodeOp(scan, projectDir, flags, pos, op);
     case 'set-parent': return cmdSetParent(scan, projectDir, flags, pos);
@@ -108,15 +112,32 @@ function commitOrExit(r, flags) {
   try { commitWrites(r.writes, { backup: flags.backup, force: flags.force }); }
   catch (e) { console.error(EM.conflict(e instanceof Error ? e.message : String(e))); process.exit(2); }
 }
-// The post-mutation half: commit (unless dry-run) + print desc/json. `desc` is
-// the CLI text body; the json is r.json plus {file, dryRun}.
-function applyResult(flags, r, desc) {
+// After a successful write, if --reimport is set, ask the running Cocos editor
+// (the cocos-extension endpoint) to reimport the file — refreshing its library so
+// it picks up coir's edit (essential for a needsReimport result, handy for any).
+async function maybeReimport(flags, r) {
+  if (!flags.reimport || flags.dryRun || !r.writes || !r.writes.length || !r.asset) return;
+  try {
+    const conn = await nv.connect({ project: _projectDir });
+    const rep = await nv.reimport(conn.base, `db://assets/${r.asset.path}`);
+    if (rep && rep.error) console.error(`  ⚠ reimport failed: ${rep.error}`);
+    else console.error(`  ↻ reimported in Cocos Creator (:${conn.port})`);
+  } catch (e) { console.error(`  ⚠ --reimport: no reachable editor endpoint (${e instanceof Error ? e.message : e})`); }
+}
+// The post-mutation half: commit (unless dry-run) + print desc/json (+ optional
+// --reimport). `desc` is the CLI text body; the json is r.json plus {file, dryRun}.
+async function applyResult(flags, r, desc) {
   printDiff(flags, r.writes);
   if (!flags.dryRun) commitOrExit(r, flags);
-  if (flags.json) { console.log(JSON.stringify({ file: r.asset.path, ...r.json, dryRun: !!flags.dryRun })); return; }
-  const lines = [desc + (flags.dryRun ? EM.dryRunSuffix : '')];
-  if (!flags.dryRun) lines.push(EM.written(flags.backup));
-  console.log(lines.join('\n'));
+  if (flags.json) console.log(JSON.stringify({ file: r.asset.path, ...r.json, dryRun: !!flags.dryRun, needsReimport: !!r.needsReimport, ...(r.warning ? { warning: r.warning } : {}) }));
+  else {
+    const lines = [desc + (flags.dryRun ? EM.dryRunSuffix : '')];
+    if (r.warning) lines.push(`  ⚠ ${r.warning}`);
+    if (!flags.dryRun) lines.push(EM.written(flags.backup));
+    if (r.needsReimport) lines.push(EM.reimportHint(r.reimportReason));
+    console.log(lines.join('\n'));
+  }
+  await maybeReimport(flags, r);
 }
 // Turn a typed value spec (from a --flag) into the JS value Cocos serializes.
 // CLI-only (exits on a bad value); the MCP server takes typed values directly.
@@ -335,7 +356,7 @@ function cmdBatch(scan, projectDir, flags, pos) {
   let ops; try { ops = JSON.parse(text); } catch (e) { console.error(EM.badValue(`invalid ops JSON: ${e instanceof Error ? e.message : e}`)); process.exit(1); }
   const r = runBatch(scan, projectDir, file, ops);
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: batch — ${r.json.count} op(s) applied`);
+  return applyResult(flags, r, `${r.asset.path}: batch — ${r.json.count} op(s) applied`);
 }
 
 // ---- get: read the value/node/component at a selector (set's read pair) ----
@@ -369,17 +390,33 @@ function cmdSet(scan, projectDir, flags, pos) {
   if (!sel) { console.error(EM.setUsage); process.exit(1); }
   if (!flags.value) { console.error(EM.noValue('set')); process.exit(1); }
   const value = resolveValueSpec(scan, flags.value);
-  const r = runEdit(scan, projectDir, 'set', { file: pos[0], selector: sel, value });
+  const r = runEdit(scan, projectDir, 'set', { file: pos[0], selector: sel, value, force: flags.force });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: ${sel} = ${JSON.stringify(value)}`);
+  return applyResult(flags, r, `${r.asset.path}: ${sel} = ${JSON.stringify(value)}`);
 }
 
 function cmdSetUuid(scan, projectDir, flags, pos) {
   const sel = pos[2];
   if (!sel || !pos[3]) { console.error(EM.setUuidUsage); process.exit(1); }
-  const r = runEdit(scan, projectDir, 'set-uuid', { file: pos[0], selector: sel, asset: pos[3] });
+  const r = runEdit(scan, projectDir, 'set-uuid', { file: pos[0], selector: sel, asset: pos[3], force: flags.force });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: ${sel} → ${r.json.to}`);
+  return applyResult(flags, r, `${r.asset.path}: ${sel} → ${r.json.to}`);
+}
+
+// ---- set-ref: point a property at a NODE/COMPONENT --------------------------
+// Distinct from set-uuid (asset). P1: an intra-file {__id__} (same prefab).
+// P3a: a target baked inside a nested instance → inline + cc.TargetOverrideInfo.
+// P3b (--into <sourceSubPath>): a target only in the instance's source prefab →
+// just the TargetOverrideInfo (engine resolves it; needsReimport).
+function cmdSetRef(scan, projectDir, flags, pos) {
+  const sel = pos[2]; const target = pos[3];
+  if (!sel || !target) { console.error(EM.setRefUsage); process.exit(1); }
+  const r = runEdit(scan, projectDir, 'set-ref', { file: pos[0], selector: sel, target, into: flags.into, force: flags.force });
+  if (r.error) failExit(r);
+  const desc = r.json.mode === 'P3b'
+    ? `${r.asset.path}: ${sel} → ${target} ∷ ${r.json.into} (cross-boundary ${r.json.mode}, fileId ${r.json.sourceFileId})`
+    : `${r.asset.path}: ${sel} → ${target} (${r.json.targetKind} #${r.json.targetIndex}, ${r.json.mode})`;
+  return applyResult(flags, r, desc);
 }
 
 // ---- Tier 2: rename / set-active / set-layer / set-pos / set-scale / set-rot -
@@ -406,7 +443,7 @@ function nodeOp(scan, projectDir, flags, pos, op) {
   const desc = op === 'set-rot'
     ? `${r.asset.path}: ${sel} euler = ${value.x},${value.y},${value.z}  (→ _lrot)`
     : `${r.asset.path}: ${sel} ${r.json.field} = ${JSON.stringify(value)}`;
-  applyResult(flags, r, desc);
+  return applyResult(flags, r, desc);
 }
 
 // ---- Tier 2: set-parent (reparent) -----------------------------------------
@@ -415,7 +452,7 @@ function cmdSetParent(scan, projectDir, flags, pos) {
   if (!sel || !parentSel) { console.error(EM.setParentUsage); process.exit(1); }
   const r = runEdit(scan, projectDir, 'set-parent', { file: pos[0], selector: sel, parent: parentSel, index: flags.index });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: set-parent ${sel} → under ${parentSel}${flags.index != null ? ` [${flags.index}]` : ''}`);
+  return applyResult(flags, r, `${r.asset.path}: set-parent ${sel} → under ${parentSel}${flags.index != null ? ` [${flags.index}]` : ''}`);
 }
 
 // ---- Tier 3: structural add / remove ---------------------------------------
@@ -424,7 +461,7 @@ function cmdAddNode(scan, projectDir, flags, pos) {
   if (!parentSel || !name) { console.error(EM.addNodeUsage); process.exit(1); }
   const r = runEdit(scan, projectDir, 'add-node', { file: pos[0], parent: parentSel, name, index: flags.index });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: add node "${name}" under ${parentSel}  (#${r.json.index})`);
+  return applyResult(flags, r, `${r.asset.path}: add node "${name}" under ${parentSel}  (#${r.json.index})`);
 }
 
 function cmdAddComponent(scan, projectDir, flags, pos) {
@@ -432,7 +469,7 @@ function cmdAddComponent(scan, projectDir, flags, pos) {
   if (!sel || !type) { console.error(EM.addCompUsage); process.exit(1); }
   const r = runEdit(scan, projectDir, 'add-component', { file: pos[0], selector: sel, type });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: add ${type} on ${sel}  (#${r.json.index})`);
+  return applyResult(flags, r, `${r.asset.path}: add ${type} on ${sel}  (#${r.json.index})`);
 }
 
 function cmdRmNode(scan, projectDir, flags, pos) {
@@ -440,7 +477,7 @@ function cmdRmNode(scan, projectDir, flags, pos) {
   if (!sel) { console.error(EM.nodeOpUsage('rm-node')); process.exit(1); }
   const r = runEdit(scan, projectDir, 'rm-node', { file: pos[0], selector: sel });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: removed ${sel}  (${r.json.removed} entries, ${r.json.cleared} dangling ref(s) cleared)`);
+  return applyResult(flags, r, `${r.asset.path}: removed ${sel}  (${r.json.removed} entries, ${r.json.cleared} dangling ref(s) cleared)`);
 }
 
 function cmdRmComponent(scan, projectDir, flags, pos) {
@@ -448,7 +485,7 @@ function cmdRmComponent(scan, projectDir, flags, pos) {
   if (!sel) { console.error(EM.addCompUsage); process.exit(1); }
   const r = runEdit(scan, projectDir, 'rm-component', { file: pos[0], selector: sel });
   if (r.error) failExit(r);
-  applyResult(flags, r, `${r.asset.path}: removed component ${sel}  (${r.json.removed} entries, ${r.json.cleared} dangling ref(s) cleared)`);
+  return applyResult(flags, r, `${r.asset.path}: removed component ${sel}  (${r.json.removed} entries, ${r.json.cleared} dangling ref(s) cleared)`);
 }
 
 // ---- project-wide (`--all`): currently swap-uuid only ----------------------

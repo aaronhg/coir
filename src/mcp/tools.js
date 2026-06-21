@@ -10,9 +10,10 @@ import path from 'node:path';
 import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
-import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from '../core/rules.js';
-import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyAllData, verifyText, auditRoundtripData } from '../edit/ops.js';
+import { evaluateRules, DEFAULT_RULES, needsDuplicates, needsInstanceOverrides, needsPreviewLeaks, collectPluginCheckers } from '../core/rules.js';
+import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyAllData, verifyText, auditRoundtripData, collectInstanceOverridesData, collectPreviewLeaksData } from '../edit/ops.js';
 import { unifiedDiff } from '../edit/diff.js';
+import * as nv from '../verify/nativeClient.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
 function resolveUuid(scan, query) {
@@ -25,9 +26,11 @@ function resolveUuid(scan, query) {
 // Commit a write-plan result (runEdit/runBatch) honouring dryRun/backup/force,
 // plus the shared verify/diff flags. `verify`: structurally validate the planned
 // text and refuse to write on errors. `diff`: include a unified diff in the data.
-function commitResult(ctx, r, a) {
+async function commitResult(ctx, r, a) {
   if (r.error) return { error: r.error, candidates: r.candidates };
-  const out = { file: r.asset.path, ...r.json, dryRun: !!a.dryRun };
+  const out = { file: r.asset.path, ...r.json, dryRun: !!a.dryRun, needsReimport: !!r.needsReimport };
+  if (r.needsReimport) out.reimportReason = r.reimportReason; // finalized by Cocos Creator on next open/reimport
+  if (r.warning) out.warning = r.warning;                     // soft type-sanity hint (non-blocking)
   if (a.diff) out.diff = (r.writes || []).map((w) => unifiedDiff(w.oldText ?? '', w.text)).join('\n\n');
   if (a.verify) {
     for (const w of r.writes || []) {
@@ -40,6 +43,11 @@ function commitResult(ctx, r, a) {
     catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
     ctx.markDirty();
   }
+  // --reimport: after writing, ask the running Cocos editor to reimport the file.
+  if (a.reimport && !a.dryRun && r.writes && r.writes.length) {
+    try { const conn = await nv.connect({ project: ctx.projectDir }); const rep = await nv.reimport(conn.base, `db://assets/${r.asset.path}`); out.reimported = !(rep && rep.error); if (rep && rep.error) out.reimportError = rep.error; }
+    catch (e) { out.reimported = false; out.reimportError = e instanceof Error ? e.message : String(e); }
+  }
   return { data: out };
 }
 function applyEdit(ctx, op, params, a) {
@@ -50,9 +58,10 @@ function applyEdit(ctx, op, params, a) {
 const WRITE_FLAGS = {
   dryRun: { type: 'boolean', description: 'Plan the edit and return what would change WITHOUT writing the file.' },
   backup: { type: 'boolean', description: 'Copy the file to <file>.bak before writing.' },
-  force: { type: 'boolean', description: 'Skip the concurrent-change guard (write even if the file changed on disk since the scan).' },
+  force: { type: 'boolean', description: 'Skip the concurrent-change guard (write even if the file changed on disk since the scan); also overrides the existing-field / reference-shape guards.' },
   verify: { type: 'boolean', description: 'Structurally validate the result before writing; refuse to write on errors.' },
   diff: { type: 'boolean', description: 'Include a unified diff of the change in the result.' },
+  reimport: { type: 'boolean', description: 'After writing, ask the running Cocos editor (native-verify endpoint) to reimport the file — refreshes its library so the edit is picked up. Returns reimported:true/false.' },
 };
 const SEL_DOC = 'Selector: nodePath then :Type then .prop, e.g. "Canvas/Title:cc.Label._string". [i] disambiguates same-name nodes / same-type components / array elements; #N is the raw array index. Discover selectors with tree.';
 
@@ -140,7 +149,7 @@ export const TOOLS = [
   },
   {
     name: 'check',
-    description: 'Run the declarative CI rules and return { violations, errors, warns, configErrors } — the same gate `coir check` uses (no exit code; the agent decides). Rules come from the inline `rules` arg, else `rulesPath`, else <project>/coir.rules.json, else a warn-only default health set. Built-in checkers: max-meta-errors, no-dangling-refs, no-orphans, no-bundle-cycle, max-duplication, no-duplicate-files, forbid-dep, no-cross-bundle, atlas-min-util (+ any plugin-contributed).',
+    description: 'Run the declarative CI rules and return { violations, errors, warns, configErrors } — the same gate `coir check` uses (no exit code; the agent decides). Rules come from the inline `rules` arg, else `rulesPath`, else <project>/coir.rules.json, else a warn-only default health set. Built-in checkers: max-meta-errors, no-dangling-refs, no-orphans, no-bundle-cycle, max-duplication, no-duplicate-files, forbid-dep, no-cross-bundle, atlas-min-util, no-deep-instance-override, no-editor-preview-leak (+ any plugin-contributed).',
     inputSchema: { type: 'object', additionalProperties: false,
       properties: {
         rules: { type: 'array', items: { type: 'object' }, description: 'Inline ruleset (overrides the file): [{ name, level?, ...params }].' },
@@ -155,6 +164,8 @@ export const TOOLS = [
       if (!Array.isArray(rules)) rules = DEFAULT_RULES;
       const c = {};
       if (needsDuplicates(rules)) c.duplicates = await duplicatesData(ctx.scan, { readBytes: ctx.bytes, readText: ctx.readText }, {});
+      if (needsInstanceOverrides(rules)) c.instanceOverrides = collectInstanceOverridesData(ctx.scan, ctx.projectDir);
+      if (needsPreviewLeaks(rules)) c.previewLeaks = collectPreviewLeaksData(ctx.scan, ctx.projectDir);
       return { data: evaluateRules(ctx.scan, rules, c, collectPluginCheckers(ctx.plugins)) };
     },
   },
@@ -250,7 +261,7 @@ export const TOOLS = [
       }
       const unknown = []; resolveRawTypes(ctx.scan, value, unknown);
       if (unknown.length) return { error: `unknown __type__ class(es): ${[...new Set(unknown)].join(', ')} — no matching script asset` };
-      return applyEdit(ctx, 'set', { file: a.file, selector: a.selector, value }, a);
+      return applyEdit(ctx, 'set', { file: a.file, selector: a.selector, value, force: a.force }, a);
     },
   },
   {
@@ -258,7 +269,14 @@ export const TOOLS = [
     description: 'Point a property at an asset (sets {__uuid__}). The asset is given by path/basename/uuid.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector', 'asset'],
       properties: { file: { type: 'string' }, selector: { type: 'string', description: SEL_DOC }, asset: { type: 'string', description: 'Target asset.' }, ...WRITE_FLAGS } },
-    run: (ctx, a) => applyEdit(ctx, 'set-uuid', { file: a.file, selector: a.selector, asset: a.asset }, a),
+    run: (ctx, a) => applyEdit(ctx, 'set-uuid', { file: a.file, selector: a.selector, asset: a.asset, force: a.force }, a),
+  },
+  {
+    name: 'edit_set_ref',
+    description: 'Point a property at a NODE or COMPONENT (an intra-file {__id__}) — distinct from edit_set_uuid (asset). Three modes: (P1) target is a node/component in the same file → set target. (P3a) target is a node baked inside a nested instance → inline + a cc.TargetOverrideInfo, offline-complete. (P3b) reference a node ONLY in the instance\'s source prefab → pass target = the nested-instance ROOT and `into` = the node sub-path within the source prefab; coir resolves its fileId and writes a cc.TargetOverrideInfo (engine resolves it; result is needsReimport).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector', 'target'],
+      properties: { file: { type: 'string' }, selector: { type: 'string', description: SEL_DOC }, target: { type: 'string', description: 'P1/P3a: target node/component. P3b: the nested-instance ROOT.' }, into: { type: 'string', description: 'P3b only: the target node sub-path WITHIN the instance\'s source prefab.' }, ...WRITE_FLAGS } },
+    run: (ctx, a) => applyEdit(ctx, 'set-ref', { file: a.file, selector: a.selector, target: a.target, into: a.into, force: a.force }, a),
   },
   {
     name: 'edit_swap_uuid',

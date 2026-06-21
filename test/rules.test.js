@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scanProject } from '../src/core/scan.js';
 import { evaluateRules, collectPluginCheckers } from '../src/core/rules.js';
+import { findInstanceOverrides } from '../src/edit/editPrefab.js';
 
 const memFP = (files) => ({
   listFiles: async () => Object.keys(files),
@@ -107,4 +108,73 @@ test('rules phase 3: a plugin contributes a checker', async () => {
   assert.ok(res.violations.some((v) => /x\.png/.test(v.message)));
   // without the plugin the same rule is an unknown-rule config error
   assert.equal(evaluateRules(scan, [{ name: 'no-png', level: 'error' }]).configErrors, 1);
+});
+
+// ---- no-deep-instance-override (nested-prefab edit policy) -----------------
+test('findInstanceOverrides: root vs deep classified by localID == host PrefabInfo.fileId', () => {
+  // a prefab with one nested instance carrying a ROOT override + a DEEP override
+  const arr = [
+    { __type__: 'cc.Prefab', _name: 'P' },                                   // 0
+    { __type__: 'cc.Node', _name: 'P', _prefab: { __id__: 2 } },             // 1 own root
+    { __type__: 'cc.PrefabInfo', fileId: 'OWN', instance: null },            // 2
+    { __type__: 'cc.Node', _name: 'inst', _prefab: { __id__: 4 } },          // 3 instance host
+    { __type__: 'cc.PrefabInfo', fileId: 'ROOT', instance: { __id__: 5 } },  // 4 host's PrefabInfo
+    { __type__: 'cc.PrefabInstance', propertyOverrides: [{ __id__: 6 }, { __id__: 8 }] }, // 5
+    { __type__: 'CCPropertyOverrideInfo', targetInfo: { __id__: 7 }, propertyPath: ['_lpos'], value: 1 }, // 6 ROOT
+    { __type__: 'cc.TargetInfo', localID: ['ROOT'] },                        // 7
+    { __type__: 'CCPropertyOverrideInfo', targetInfo: { __id__: 9 }, propertyPath: ['_name'], value: 'x' }, // 8 DEEP
+    { __type__: 'cc.TargetInfo', localID: ['DEEP'] },                        // 9
+  ];
+  const ovs = findInstanceOverrides(arr);
+  assert.equal(ovs.length, 2);
+  const root = ovs.find((o) => o.prop === '_lpos'), deep = ovs.find((o) => o.prop === '_name');
+  assert.equal(root.onRoot, true);   // localID ROOT == host fileId
+  assert.equal(deep.onRoot, false);  // localID DEEP != host fileId → inside the instance
+});
+
+test('no-deep-instance-override: flags deep, allows root, respects files/ignoreProps defaults', () => {
+  const scan = { assets: new Map(), edges: [], metaErrors: [] };
+  const ctx = { instanceOverrides: [
+    { file: 'A.prefab', type: 'prefab', overrides: [
+      { instance: 'inst', prop: '_lpos', localID: ['ROOT'], onRoot: true },          // root → allowed
+      { instance: 'inst', prop: 'x', localID: ['DEEP'], onRoot: false },             // deep → violation
+      { instance: 'inst', prop: 'lightmapSettings', localID: ['D2'], onRoot: false },// deep but engine-baked → ignored by default
+    ] },
+    { file: 'S.scene', type: 'scene', overrides: [
+      { instance: 'i', prop: 'foo', localID: ['D3'], onRoot: false },                // scene → off by default
+    ] },
+  ] };
+  // default: prefab only + ignore baked → only "x"
+  let res = evaluateRules(scan, [{ name: 'no-deep-instance-override', level: 'error' }], ctx);
+  let v = res.violations.filter((r) => r.rule === 'no-deep-instance-override');
+  assert.equal(v.length, 1);
+  assert.ok(/"x"/.test(v[0].message));
+  // files:all → the scene's "foo" too (lightmapSettings still ignored) = 2
+  res = evaluateRules(scan, [{ name: 'no-deep-instance-override', level: 'error', files: 'all' }], ctx);
+  assert.equal(res.violations.filter((r) => r.rule === 'no-deep-instance-override').length, 2);
+  // ignoreProps:[] (don't skip baked) → x + lightmapSettings = 2 on the prefab
+  res = evaluateRules(scan, [{ name: 'no-deep-instance-override', level: 'error', ignoreProps: [] }], ctx);
+  assert.equal(res.violations.filter((r) => r.rule === 'no-deep-instance-override').length, 2);
+});
+
+// ---- no-editor-preview-leak (saved should_hide_in_hierarchy node) ----------
+test('findPreviewCanvasLeaks: flags a saved should_hide_in_hierarchy node', async () => {
+  const { findPreviewCanvasLeaks } = await import('../src/edit/editPrefab.js');
+  const clean = [{ __type__: 'cc.Prefab' }, { __type__: 'cc.Node', _name: 'Root' }];
+  const leaked = [{ __type__: 'cc.Prefab' }, { __type__: 'cc.Node', _name: 'should_hide_in_hierarchy' },
+    { __type__: 'cc.Node', _name: 'UICamera_should_hide_in_hierarchy' }];
+  assert.deepEqual(findPreviewCanvasLeaks(clean), []);
+  assert.equal(findPreviewCanvasLeaks(leaked).length, 2);
+});
+
+test('no-editor-preview-leak: a leaked preview canvas → one violation per file', () => {
+  const scan = { assets: new Map(), edges: [], metaErrors: [] };
+  const ctx = { previewLeaks: [{ file: 'Bad.prefab', nodes: ['should_hide_in_hierarchy'] }] };
+  const res = evaluateRules(scan, [{ name: 'no-editor-preview-leak', level: 'error' }], ctx);
+  const v = res.violations.filter((r) => r.rule === 'no-editor-preview-leak');
+  assert.equal(v.length, 1);
+  assert.equal(v[0].asset, 'Bad.prefab');
+  assert.equal(res.errors, 1);
+  // no ctx → no-op (engine stays pure)
+  assert.equal(evaluateRules(scan, [{ name: 'no-editor-preview-leak', level: 'error' }], {}).violations.length, 0);
 });

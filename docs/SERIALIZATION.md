@@ -51,6 +51,8 @@ coir's dependency topology grows from **only** a few fields; the large remainder
 
 **Corollary:** as long as two prefabs have the same `__uuid__` and compressed `__type__`, the dependency topology coir computes is **exactly identical**, no matter how complete or incomplete PrefabInfo/CompPrefabInfo/fileId are written. This is also why coir's editor can edit files in place without disturbing the topology (§6).
 
+> **Nested prefabs.** `instance` / `targetOverrides` / `nestedPrefabInstanceRoots` (plus `cc.PrefabInstance`, `CCPropertyOverrideInfo`, `cc.TargetOverrideInfo`, `cc.TargetInfo`) are the **nested-instance** machinery — `fileId`-addressed value/reference overrides across the instantiation boundary, which coir's editor refuses to mutate in place. They are explained in detail in **[NESTED-PREFABS.md](NESTED-PREFABS.md)**.
+
 ---
 
 ## 3. UUID compression (`__type__`)
@@ -114,6 +116,39 @@ When the edit feature (see [EDITING.md](EDITING.md)) modifies an existing file i
 - **Minimal diff**: pure asset repointing (`swap-uuid`) goes through a quote-anchored text replacement, with no reordering and no re-serialization.
 
 In other words, coir's editor approaches official quality on "structural completeness" via template-by-example, and beats the soft-delete camp on "hard-delete" — and all of this depends only on the §1 contract of this page, not on any of the ignored fields in §2.
+
+---
+
+## 7. coir's construction surface (the Cocos-format coupling)
+
+Template-by-example (§6) means coir **rarely hand-builds** an engine object — it clones a real one from the file. The inventory below is therefore the **complete coupling surface**: the only structures coir constructs from scratch (so if Cocos changes the format, these are the points to re-check). All live in `src/edit/editPrefab.js` unless noted.
+
+### Hand-built typed structures (no template — full literal)
+
+| Structure | Where | Fields coir authors | Cocos contract | Validated |
+|---|---|---|---|---|
+| **`cc.TargetOverrideInfo`** (P3 cross-ref) | `setCrossRef` | `source`/`sourceInfo`/`propertyPath`/`target`/`targetInfo` | cross-boundary reference system | live engine (`native-verify`) |
+| **`CCPropertyOverrideInfo`** (P2 root override) | `setRootOverride` | `targetInfo`/`propertyPath`/`value` | instance value-override system | live engine |
+| **`cc.TargetInfo`** (P2/P3) | `setRootOverride`/`setCrossRef` | `localID: [fileId]` | `fileId` addressing | live engine |
+| **Component skeleton** | `addComponent` | `__type__`/`_name`/`_objFlags`/`node`/`_enabled`/`__prefab`/`_id` | component base fields | `native-verify` (engine applies defaults) |
+| **`cc.PrefabInfo` fallback** | `addNode` | `{__type__, fileId}` (lacks `root`/`asset`) | PrefabInfo | ⚠ `needsReimport` |
+| **`cc.CompPrefabInfo` fallback** | `addComponent` | `{__type__, fileId}` | CompPrefabInfo (trivial) | complete |
+| **Value types** `cc.Vec2/3/4` · `cc.Quat` · `cc.Color` · `cc.Size` | `editCli.js` (value flags), `mcp/tools.js` (`edit_transform`), `eulerToQuat`/`addNode` resets | `x/y/z/w` · `r/g/b/a` · `width/height` | math / value-type fields | tests |
+
+The **override trio** (`TargetOverrideInfo` / `CCPropertyOverrideInfo` / `TargetInfo`) is the deepest coupling — fully hand-built (these may not exist in the file to clone) — which is why they were each verified against the running editor. See [NESTED-PREFABS.md](NESTED-PREFABS.md).
+
+### `fileId` generation (synthetic, not the editor's)
+
+`pad22(seed)` = `"<seed>xxxx…"` padded to **22 chars**. Used for a new node's `_id`, its `PrefabInfo.fileId`, a new component's `_id`, and its `CompPrefabInfo.fileId`. Contract: a `fileId` is a 22-char token. coir's synthetic form is **engine-accepted** (`native-verify`), but it is not the editor's random base64, so the editor regenerates it on the next save.
+
+### Field / ref conventions coir writes
+
+- **Node** (reset by `addNode`): `_name` · `_parent` · `_children` · `_components` · `_prefab` · `_active` · `_lpos`/`_lscale`/`_lrot`/`_euler` · `_id`.
+- **PrefabInfo** (reset by `addNode`): `fileId` · `root` · `asset` · `instance` · `targetOverrides` · `nestedPrefabInstanceRoots`.
+- **Ref shapes**: `{__id__}` (intra-file) · `{__uuid__}` (asset).
+- **Linking pushes**: `parent._children.push` · `node._components.push` · `PrefabInstance.propertyOverrides.push` · `PrefabInfo.targetOverrides.push` · `node._prefab = {__id__}` · `comp.__prefab = {__id__}`.
+
+Everything else a new node/component carries comes from the **cloned template** (§6), not from coir — so it is not part of this coupling surface.
 
 ---
 
