@@ -39,6 +39,8 @@ const U = {
   editNode: '10101010-1010-1010-1010-101010101010',
   editTree: '20202020-2020-2020-2020-202020202020',
   editXref: '30303030-3030-3030-3030-303030303030',
+  editAdd: '31313131-3131-3131-3131-313131313131',
+  broken: '32323232-3232-3232-3232-323232323232',
   allShared: '40404040-4040-4040-4040-404040404040',
   allOther: '50505050-5050-5050-5050-505050505050',
   allLonely: '60606060-6060-6060-6060-606060606060',
@@ -209,6 +211,23 @@ before(async () => {
     { __type__: 'cc.MyComp', node: { __id__: 1 }, _enabled: true, __prefab: null, _ref: { __id__: 3 } },
   ]);
   await write('EditXref.prefab.meta', { importer: 'prefab', uuid: U.editXref });
+
+  // dedicated, isolated prefab for add-component validation + array-bounds tests
+  // (its own fixture so it never couples with the EditTree mutation chain).
+  await write('EditAdd.prefab', [
+    { __type__: 'cc.Prefab', _name: 'EditAdd' },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 3 }], _prefab: null, _active: true },
+    { __type__: 'cc.Node', _name: 'Child', _parent: { __id__: 1 }, _children: [], _components: [], _prefab: null, _active: true },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, __prefab: null, _arr: [{ h: 'a' }, { h: 'b' }] },
+  ]);
+  await write('EditAdd.prefab.meta', { importer: 'prefab', uuid: U.editAdd });
+
+  // a STRUCTURALLY BROKEN prefab for `verify`: _children points at a missing #99.
+  await write('Broken.prefab', [
+    { __type__: 'cc.Prefab', _name: 'Broken' },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 99 }], _components: [], _active: true },
+  ]);
+  await write('Broken.prefab.meta', { importer: 'prefab', uuid: U.broken });
 
   // `--all` (project-wide swap) fixtures: one shared asset referenced by two
   // prefabs + a scene; plus a lonely asset nothing references.
@@ -648,6 +667,110 @@ test('edit add-component: appends a component + CompPrefabInfo, wired to node', 
   assert.ok(child._components.some((c) => c.__id__ === arr.indexOf(w)), 'wired into Child._components');
   assert.deepEqual(refIntegrity(arr), []);
   assert.equal(arr.length, before + 2);
+});
+
+test('fix add-component: unknown non-cc type is refused (exit 1, no write)', () => {
+  const before = parseAsset('EditAdd.prefab');
+  const r = cli('edit', 'EditAdd.prefab', 'add-component', 'Root/Child', 'NotARealScript');
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /unknown __type__/);
+  assert.deepEqual(parseAsset('EditAdd.prefab'), before, 'file untouched on refusal');
+});
+
+test('fix add-component: a project script CLASS NAME is written as its compressed token (not the bare name)', () => {
+  assert.equal(cli('edit', 'EditAdd.prefab', 'add-component', 'Root/Child', 'ShopCtrl').status, 0);
+  const arr = parseAsset('EditAdd.prefab');
+  assert.equal(typesIn(arr, 'ShopCtrl').length, 0, 'bare class name NOT written (engine could not resolve it)');
+  const c = arr.find((o) => o && o.__type__ === SCRIPT_TYPE);
+  assert.ok(c, 'component written with the compressed uuid token');
+  const child = nodeNamed(arr, 'Child');
+  assert.ok(child._components.some((x) => x.__id__ === arr.indexOf(c)), 'wired into Child._components');
+  assert.deepEqual(refIntegrity(arr), []);
+});
+
+test('fix setDeep: out-of-range array index is refused (exit 2, no null-padding); in-range append/replace work', () => {
+  const oob = cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._arr.5', '--json', '{"h":"x"}');
+  assert.equal(oob.status, 2);
+  assert.match(oob.stderr, /out of range/);
+  assert.equal(parseAsset('EditAdd.prefab').find((o) => o.__type__ === 'cc.Sprite')._arr.length, 2, 'array NOT grown by the OOB write');
+  // append (=== length) and replace (< length) remain allowed
+  assert.equal(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._arr.2', '--json', '{"h":"c"}').status, 0);
+  assert.equal(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._arr.0', '--json', '{"h":"z"}').status, 0);
+  const arr2 = parseAsset('EditAdd.prefab').find((o) => o.__type__ === 'cc.Sprite')._arr;
+  assert.equal(arr2.length, 3, 'append added one');
+  assert.equal(arr2[0].h, 'z', 'replace worked');
+  assert.ok(arr2.every((e) => e != null), 'no null holes');
+});
+
+// ---- verify (offline structural validator) --------------------------------
+test('verify: a structurally sound prefab → exit 0, valid', () => {
+  const r = cli('verify', 'EditAdd.prefab');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /valid/);
+});
+
+test('verify: a dangling __id__ → exit 1 with bad-ref / bad-child errors', () => {
+  const r = cli('verify', 'Broken.prefab');
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /bad-ref|bad-child/);
+});
+
+test('verify -o json: structured { valid, errors[] }', () => {
+  const r = cli('verify', 'Broken.prefab', '-o', 'json');
+  assert.equal(r.status, 1);
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.valid, false);
+  assert.ok(d.errors.length >= 1 && d.errors[0].code && d.errors[0].msg);
+});
+
+// ---- tree --values (deep read) --------------------------------------------
+test('tree --values -o json: each node + component carries its raw value', () => {
+  const t = json(cli('edit', 'EditAdd.prefab', 'tree', '--values', '-o', 'json'));
+  const root = t.nodes.find((n) => n.name === 'Root');
+  assert.ok(root.value && root.value.__type__ === 'cc.Node', 'node value inlined');
+  const sprite = root.components.find((c) => c.type === 'cc.Sprite');
+  assert.ok(sprite.value && sprite.value.__type__ === 'cc.Sprite', 'component value inlined');
+});
+
+// ---- --diff ----------------------------------------------------------------
+test('edit --diff --dry-run: prints a unified diff and does NOT write', () => {
+  const before = parseAsset('EditAdd.prefab');
+  const r = cli('edit', 'EditAdd.prefab', 'set-active', 'Root', '--bool', 'false', '--diff', '--dry-run');
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /@@/);            // a hunk header
+  assert.match(r.stdout, /\+.*_active/s);  // the changed field appears on a + line
+  assert.deepEqual(parseAsset('EditAdd.prefab'), before, 'dry-run left the file unchanged');
+});
+
+// ---- edit batch (atomic multi-op) -----------------------------------------
+test('edit batch: applies multiple ops atomically in one write', () => {
+  const ops = JSON.stringify([
+    { op: 'rename', selector: 'Root/Child', value: 'Renamed' },
+    { op: 'add-node', parent: 'Root', name: 'Added' },
+  ]);
+  const r = cli('edit', 'EditAdd.prefab', 'batch', ops);
+  assert.equal(r.status, 0);
+  const arr = parseAsset('EditAdd.prefab');
+  assert.ok(nodeNamed(arr, 'Renamed'), 'op 1 applied (rename)');
+  assert.ok(nodeNamed(arr, 'Added'), 'op 2 applied (add-node)');
+  assert.deepEqual(refIntegrity(arr), [], 'refs intact');
+});
+
+test('edit batch: any failing op writes NOTHING (atomic)', () => {
+  const before = parseAsset('EditAdd.prefab');
+  const ops = JSON.stringify([
+    { op: 'set-active', selector: 'Root', value: false },          // op 0 would succeed (Root always exists)
+    { op: 'rename', selector: 'Root/NoSuchNode', value: 'X' },     // op 1 fails → abort
+  ]);
+  const r = cli('edit', 'EditAdd.prefab', 'batch', ops);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /batch op #1/);
+  assert.deepEqual(parseAsset('EditAdd.prefab'), before, 'nothing written on a failed batch');
+});
+
+// ---- --verify on an edit ---------------------------------------------------
+test('edit --verify: a sound result still commits (exit 0)', () => {
+  assert.equal(cli('edit', 'EditAdd.prefab', 'set-active', 'Root', '--bool', 'true', '--verify').status, 0);
 });
 
 test('edit rm-component: real-deletes the component + its CompPrefabInfo, compacts', () => {

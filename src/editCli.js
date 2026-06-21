@@ -11,7 +11,9 @@
 import { mainUuid } from './core/uuid.js';
 import { componentName } from './core/selector.js';
 import { resolveAsset, edgeMaps, locText } from './seam/shared.js';
-import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from './edit/ops.js';
+import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyText } from './edit/ops.js';
+import { unifiedDiff } from './edit/diff.js';
+import fs from 'node:fs';
 
 // CLI-only messages: usage + value-flag errors. Operation errors (bad selector,
 // instance guard, not-a-prefab, …) come back from ops.js verbatim and are printed
@@ -45,7 +47,12 @@ const EM = {
 
 const assetPath = (scan, uuid) => scan.assets.get(uuid)?.path || uuid;
 
+// Stashed so the shared commit chokepoint (commitOrExit) can run `--verify`
+// (verifyText needs the scan) without threading it through every applyResult call.
+let _scan = null;
+
 export function cmdEdit(scan, projectDir, flags, pos) {
+  _scan = scan;
   if (flags.all) return cmdEditAll(scan, projectDir, flags, pos); // project-wide: pos = [op, …]
   const file = pos[0]; const op = pos[1];
   if (!file || !op) { console.error(EM.editUsage); process.exit(1); }
@@ -53,6 +60,8 @@ export function cmdEdit(scan, projectDir, flags, pos) {
     case 'swap-uuid': return cmdSwapUuid(scan, projectDir, flags, pos);
     case 'tree': return cmdTree(scan, projectDir, flags, pos);
     case 'get': return cmdGet(scan, projectDir, flags, pos);
+    case 'verify': return cmdVerify(scan, projectDir, flags, pos);
+    case 'batch': return cmdBatch(scan, projectDir, flags, pos);
     case 'set': return cmdSet(scan, projectDir, flags, pos);
     case 'set-uuid': return cmdSetUuid(scan, projectDir, flags, pos);
     case 'rename': case 'set-active': case 'set-layer': case 'set-pos': case 'set-scale': case 'set-rot':
@@ -71,13 +80,36 @@ export function cmdEdit(scan, projectDir, flags, pos) {
 function failExit(r) { console.error(r.error); for (const c of r.candidates || []) console.error(`    ${c}`); process.exit(r.code); }
 // Commit the write plan (mtime-guarded unless --force), then exit 2 on a
 // concurrent-change conflict so a caller never clobbers an editor's save.
+// --diff: print a unified diff of each planned write (works in dry-run too — it's
+// the preview). Text-mode only (so it never corrupts -o json output).
+function printDiff(flags, writes) {
+  if (!flags.diff || flags.json || !writes) return;
+  for (const w of writes) {
+    if (w == null || w.oldText == null) continue;
+    if (writes.length > 1) console.log(`# ${w.absPath}`);
+    const d = unifiedDiff(w.oldText, w.text);
+    console.log(d || '(no textual change)');
+  }
+}
 function commitOrExit(r, flags) {
+  // --verify: structurally validate the planned text BEFORE writing; abort on errors.
+  if (flags.verify) {
+    for (const w of r.writes || []) {
+      const v = verifyText(_scan, w.text);
+      if (v.errors.length) {
+        console.error(`✗ verify: ${v.errors.length} structural error(s) — not written`);
+        for (const e of v.errors.slice(0, 10)) console.error(`    ${e.msg}`);
+        process.exit(2);
+      }
+    }
+  }
   try { commitWrites(r.writes, { backup: flags.backup, force: flags.force }); }
   catch (e) { console.error(EM.conflict(e instanceof Error ? e.message : String(e))); process.exit(2); }
 }
 // The post-mutation half: commit (unless dry-run) + print desc/json. `desc` is
 // the CLI text body; the json is r.json plus {file, dryRun}.
 function applyResult(flags, r, desc) {
+  printDiff(flags, r.writes);
   if (!flags.dryRun) commitOrExit(r, flags);
   if (flags.json) { console.log(JSON.stringify({ file: r.asset.path, ...r.json, dryRun: !!flags.dryRun })); return; }
   const lines = [desc + (flags.dryRun ? EM.dryRunSuffix : '')];
@@ -140,6 +172,7 @@ function cmdSwapUuid(scan, projectDir, flags, pos) {
   const lines = [head, `  ${count} reference(s)${flags.dryRun ? EM.dryRunSuffix : ''}`];
   const outs = (edgeMaps(scan).out.get(r.asset.uuid) || []).filter((e) => mainUuid(e.to) === fromUuid);
   for (const e of outs) for (const loc of e.locations) lines.push(`    ${locText(scan, loc)}`);
+  printDiff(flags, r.writes);
   if (!flags.dryRun) { commitOrExit(r, flags); lines.push(EM.written(flags.backup)); }
   console.log(lines.join('\n'));
 }
@@ -150,7 +183,7 @@ function cmdSwapUuid(scan, projectDir, flags, pos) {
 // parsing the file. `-o json` is the machine form; `--with`/`--under`/`--depth`.
 function cmdTree(scan, projectDir, flags, pos) {
   const depth = flags.depth == null ? Infinity : flags.depth; // tree defaults to the whole tree
-  const r = treeData(scan, projectDir, pos[0], { withType: flags.with, under: flags.under, depth });
+  const r = treeData(scan, projectDir, pos[0], { withType: flags.with, under: flags.under, depth, values: !!flags.values });
   if (r.error) failExit(r);
   if (flags.json) { console.log(JSON.stringify({ file: r.file, nodeCount: r.nodeCount, nodes: r.nodes })); return; }
 
@@ -166,8 +199,35 @@ function cmdTree(scan, projectDir, flags, pos) {
     const marks = (n.active ? '' : ' (off)') + (n.instance ? ' [prefab instance]' : '');
     const comps = n.instance ? '' : n.components.map(tok).join(' ');
     lines.push(`${`${indent}${name}${marks}`.padEnd(38)} #${n.index}${comps ? `   ${comps}` : ''}`);
+    // --values (text): one compact line per component with its serialized value.
+    if (flags.values && !n.instance) for (const c of n.components) lines.push(`${indent}    ${tok(c)} = ${JSON.stringify(c.value)}`);
   }
   console.log(lines.join('\n'));
+}
+
+// ---- verify: offline structural validation of a prefab/scene (no live engine) -
+export function cmdVerify(scan, projectDir, flags, pos) {
+  const r = verifyData(scan, projectDir, pos[0]);
+  if (r.error) failExit(r);
+  if (flags.json) { console.log(JSON.stringify(r)); process.exit(r.valid ? 0 : 1); }
+  console.log(`${r.file} — ${r.entries} entries: ${r.valid ? '✓ structurally valid' : `✗ ${r.errors.length} error(s)`}`
+    + (r.warnings.length ? `, ${r.warnings.length} warning(s)` : ''));
+  for (const e of r.errors) console.log(`  ✗ [${e.code}] ${e.msg}`);
+  for (const w of r.warnings) console.log(`  ⚠ [${w.code}] ${w.msg}`);
+  process.exit(r.valid ? 0 : 1); // non-zero on structural errors → CI-gateable
+}
+
+// ---- batch: apply many ops to one file atomically (all-or-nothing) -----------
+// `edit <file> batch <ops.json>` — opsArg is a path to a JSON file OR inline JSON,
+// an array of {op, …params} (the same params each edit op takes, minus `file`).
+function cmdBatch(scan, projectDir, flags, pos) {
+  const file = pos[0]; const opsArg = pos[2];
+  if (!opsArg) { console.error('batch needs: <file> batch <ops.json>   (a JSON file or inline JSON array of {op,…})'); process.exit(1); }
+  let text; try { text = fs.readFileSync(opsArg, 'utf8'); } catch { text = opsArg; } // path → read; else treat as inline JSON
+  let ops; try { ops = JSON.parse(text); } catch (e) { console.error(EM.badValue(`invalid ops JSON: ${e instanceof Error ? e.message : e}`)); process.exit(1); }
+  const r = runBatch(scan, projectDir, file, ops);
+  if (r.error) failExit(r);
+  applyResult(flags, r, `${r.asset.path}: batch — ${r.json.count} op(s) applied`);
 }
 
 // ---- get: read the value/node/component at a selector (set's read pair) ----

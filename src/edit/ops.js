@@ -11,7 +11,7 @@ import { componentName, typeToken } from '../core/selector.js';
 import { resolveTarget } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
-  nestedInstanceRoot, subtreeHasInstance, listNodes } from './editPrefab.js';
+  nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc } from './editPrefab.js';
 
 // Operation-level messages — byte-identical to the CLI's prior strings so output
 // is unchanged. (Usage / value-flag messages stay CLI-side in editCli's EM.)
@@ -87,32 +87,16 @@ function resolveNode(arr, sel, compName) {
 }
 
 /**
- * Run one in-place edit op. `params.file` + any asset-name params are resolved
- * here. Returns { ok, asset, json, writes } on success (writes = [{absPath,text,
- * mtime}], the planned write(s) — caller commits via commitWrites respecting
- * dry-run), or { error, code, candidates? } on any failure.
- * @param {any} scan @param {string} projectDir @param {string} op @param {any} params
+ * Apply ONE array-mutating edit op to `doc.arr` in place (rm ops reassign
+ * `doc.arr` to the compacted array). Returns { json } | { error, code,
+ * candidates? } — NO serialization or file I/O. swap-uuid is NOT here (it's a
+ * raw-text patch, handled in runEdit). Selectors are resolved against the CURRENT
+ * `doc.arr`, so this composes: runBatch calls it N times on one loaded doc.
+ * @param {any} scan @param {{arr:any[], raw:string, mtime:number}} doc @param {string} op @param {any} params
  */
-export function runEdit(scan, projectDir, op, params) {
+function applyArrayOp(scan, doc, op, params) {
   const compName = compNameFor(scan);
-  const rf = resolveEditFile(scan, projectDir, params.file);
-  if (rf.error) return rf;
-  const { asset, absPath } = rf;
-  const ld = loadOrErr(absPath, asset);
-  if (ld.error) return ld;
-  const { doc } = ld;
-  const W = (text) => [{ absPath, text, mtime: doc.mtime }];
-  const done = (json, writes) => ({ ok: true, asset, json, writes });
-  const reserialize = () => serialize(doc.arr, doc.raw);
-
   switch (op) {
-    case 'swap-uuid': {
-      const ro = resolveAssetData(scan, params.old); if (ro.error) return ro;
-      const rn = resolveAssetData(scan, params.new); if (rn.error) return rn;
-      const { text, count } = planSwapUuid(doc.raw, ro.uuid, rn.uuid);
-      return done({ op, from: assetPath(scan, ro.uuid), to: assetPath(scan, rn.uuid), fromUuid: ro.uuid, toUuid: rn.uuid, count },
-        count ? W(text) : []);
-    }
     case 'set': case 'set-uuid': {
       const res = resolveSelector(doc.arr, params.selector, compName);
       if ('error' in res) return selError(res);
@@ -129,7 +113,7 @@ export function runEdit(scan, projectDir, op, params) {
       }
       const r = setDeep(doc.arr[res.index], res.prop, value);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done(json, W(reserialize()));
+      return { json };
     }
     case 'rename': case 'set-active': case 'set-layer': case 'set-pos': case 'set-scale': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -138,7 +122,7 @@ export function runEdit(scan, projectDir, op, params) {
       const g = editableGuard(doc.arr, res.index); if (g) return g;
       const field = { rename: '_name', 'set-active': '_active', 'set-layer': '_layer', 'set-pos': '_lpos', 'set-scale': '_lscale' }[op];
       doc.arr[res.index][field] = params.value;
-      return done({ op, node: params.selector, field, value: params.value }, W(reserialize()));
+      return { json: { op, node: params.selector, field, value: params.value } };
     }
     case 'set-rot': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -147,7 +131,7 @@ export function runEdit(scan, projectDir, op, params) {
       const g = editableGuard(doc.arr, res.index); if (g) return g;
       const e = params.value; const node = doc.arr[res.index];
       node._euler = e; node._lrot = eulerToQuat(e.x, e.y, e.z);
-      return done({ op, node: params.selector, euler: [e.x, e.y, e.z], lrot: node._lrot }, W(reserialize()));
+      return { json: { op, node: params.selector, euler: [e.x, e.y, e.z], lrot: node._lrot } };
     }
     case 'set-parent': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -160,13 +144,13 @@ export function runEdit(scan, projectDir, op, params) {
       g = editableGuard(doc.arr, pres.index); if (g) return g;
       const r = setParent(doc.arr, res.index, pres.index, params.index);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done({ op, node: params.selector, newParent: params.parent, index: params.index ?? -1 }, W(reserialize()));
+      return { json: { op, node: params.selector, newParent: params.parent, index: params.index ?? -1 } };
     }
     case 'add-node': {
       const ni = resolveNode(doc.arr, params.parent, compName); if (ni.error) return ni;
       const r = addNode(doc.arr, ni.index, params.name, params.index);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done({ op, parent: params.parent, name: params.name, index: r.index }, W(reserialize()));
+      return { json: { op, parent: params.parent, name: params.name, index: r.index } };
     }
     case 'rm-node': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -176,13 +160,21 @@ export function runEdit(scan, projectDir, op, params) {
       if (subtreeHasInstance(doc.arr, res.index)) return { error: OM.subtreeInstance(params.selector), code: 2 };
       const r = removeNode(doc.arr, res.index);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done({ op, node: params.selector, removed: r.removed, cleared: r.cleared }, W(serialize(r.newArr, doc.raw)));
+      doc.arr = r.newArr;
+      return { json: { op, node: params.selector, removed: r.removed, cleared: r.cleared } };
     }
     case 'add-component': {
       const ni = resolveNode(doc.arr, params.selector, compName); if (ni.error) return ni;
-      const r = addComponent(doc.arr, ni.index, params.type);
+      // Validate/resolve the type the SAME way `set --json` does (typeToken): a
+      // cc.* builtin / already-compressed token passes through; a project-script
+      // CLASS NAME resolves to its compressed uuid token (the serialized form a
+      // component needs); an unknown non-cc name → null → refuse. cc.* names are
+      // trusted (no offline builtin registry), so e.g. cc.Nope still passes.
+      const tok = typeToken(scan, params.type);
+      if (tok === null) return { error: OM.unknownType([params.type]), code: 1 };
+      const r = addComponent(doc.arr, ni.index, tok);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done({ op, node: params.selector, type: params.type, index: r.index }, W(reserialize()));
+      return { json: { op, node: params.selector, type: params.type, resolved: tok, index: r.index } };
     }
     case 'rm-component': {
       const res = resolveSelector(doc.arr, params.selector, compName);
@@ -191,10 +183,67 @@ export function runEdit(scan, projectDir, op, params) {
       const g = editableGuard(doc.arr, res.index); if (g) return g;
       const r = removeComponent(doc.arr, res.index);
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
-      return done({ op, component: params.selector, removed: r.removed, cleared: r.cleared }, W(serialize(r.newArr, doc.raw)));
+      doc.arr = r.newArr;
+      return { json: { op, component: params.selector, removed: r.removed, cleared: r.cleared } };
     }
     default: return { error: `unknown edit op "${op}"`, code: 1 };
   }
+}
+
+/**
+ * Run one in-place edit op. `params.file` + any asset-name params are resolved
+ * here. Returns { ok, asset, json, writes } on success (writes = [{absPath,text,
+ * oldText,mtime}], the planned write(s) — caller commits via commitWrites
+ * respecting dry-run; `oldText` is the pre-edit content for `--diff`), or
+ * { error, code, candidates? } on any failure.
+ * @param {any} scan @param {string} projectDir @param {string} op @param {any} params
+ */
+export function runEdit(scan, projectDir, op, params) {
+  const rf = resolveEditFile(scan, projectDir, params.file);
+  if (rf.error) return rf;
+  const { asset, absPath } = rf;
+  const ld = loadOrErr(absPath, asset);
+  if (ld.error) return ld;
+  const { doc } = ld;
+  const W = (text) => [{ absPath, text, oldText: doc.raw, mtime: doc.mtime }];
+  if (op === 'swap-uuid') {
+    const ro = resolveAssetData(scan, params.old); if (ro.error) return ro;
+    const rn = resolveAssetData(scan, params.new); if (rn.error) return rn;
+    const { text, count } = planSwapUuid(doc.raw, ro.uuid, rn.uuid);
+    const json = { op, from: assetPath(scan, ro.uuid), to: assetPath(scan, rn.uuid), fromUuid: ro.uuid, toUuid: rn.uuid, count };
+    return { ok: true, asset, json, writes: count ? W(text) : [] };
+  }
+  const r = applyArrayOp(scan, doc, op, params);
+  if (r.error) return r;
+  return { ok: true, asset, json: r.json, writes: W(serialize(doc.arr, doc.raw)) };
+}
+
+/**
+ * Apply MANY ops to one prefab/scene atomically: load once, apply each op to the
+ * in-memory array (re-resolving selectors against the running state), and emit ONE
+ * write. If any op fails, NOTHING is written (the caller just doesn't commit) — so
+ * a structural refactor is all-or-nothing. swap-uuid is rejected (it's a text
+ * patch; use swap-uuid / --all). `ops` = [{op, …params}] (no `file`).
+ * @param {any} scan @param {string} projectDir @param {string} file @param {Array<any>} ops
+ */
+export function runBatch(scan, projectDir, file, ops) {
+  if (!Array.isArray(ops) || ops.length === 0) return { error: '✗ batch needs a non-empty array of ops', code: 1 };
+  const rf = resolveEditFile(scan, projectDir, file);
+  if (rf.error) return rf;
+  const { asset, absPath } = rf;
+  const ld = loadOrErr(absPath, asset);
+  if (ld.error) return ld;
+  const { doc } = ld;
+  const applied = [];
+  for (let i = 0; i < ops.length; i++) {
+    const { op, ...params } = ops[i] || {};
+    if (op === 'swap-uuid') return { error: `✗ batch op #${i}: swap-uuid is not supported in a batch (use swap-uuid or --all)`, code: 1, opIndex: i };
+    const r = applyArrayOp(scan, doc, op, params);
+    if (r.error) return { error: `✗ batch op #${i} (${op || '?'}): ${String(r.error).replace(/^✗\s*/, '')}`, code: r.code || 2, candidates: r.candidates, opIndex: i };
+    applied.push(r.json);
+  }
+  const json = { op: 'batch', file: asset.path, count: applied.length, ops: applied };
+  return { ok: true, asset, json, writes: [{ absPath, text: serialize(doc.arr, doc.raw), oldText: doc.raw, mtime: doc.mtime }] };
 }
 
 /**
@@ -213,12 +262,35 @@ export function runSwapAll(scan, projectDir, oldQuery, newQuery) {
     const abs = path.join(projectDir, 'assets', a.path);
     let doc; try { doc = loadDoc(abs); } catch { skipped.push(a.path); continue; }
     const { text, count } = planSwapUuid(doc.raw, ro.uuid, rn.uuid);
-    if (count > 0) { hits.push({ file: a.path, absPath: abs, text, mtime: doc.mtime, count }); totalRefs += count; }
+    if (count > 0) { hits.push({ file: a.path, absPath: abs, text, oldText: doc.raw, mtime: doc.mtime, count }); totalRefs += count; }
   }
   const json = { op: 'swap-uuid', scope: 'all', from: assetPath(scan, ro.uuid), to: assetPath(scan, rn.uuid),
     fromUuid: ro.uuid, toUuid: rn.uuid, files: hits.map((h) => ({ file: h.file, count: h.count })),
     totalFiles: hits.length, totalRefs, skipped };
-  return { ok: true, json, writes: hits.map((h) => ({ absPath: h.absPath, text: h.text, mtime: h.mtime })), hits, skipped };
+  return { ok: true, json, writes: hits.map((h) => ({ absPath: h.absPath, text: h.text, oldText: h.oldText, mtime: h.mtime })), hits, skipped };
+}
+
+/**
+ * Offline structural validation of a prefab/scene file (no live engine needed).
+ * Returns { ok, file, entries, errors, warnings, valid } or { error, code }.
+ * @param {any} scan @param {string} projectDir @param {string} file
+ */
+export function verifyData(scan, projectDir, file) {
+  const rf = resolveEditFile(scan, projectDir, file);
+  if (rf.error) return rf;
+  const ld = loadOrErr(rf.absPath, rf.asset); if (ld.error) return ld;
+  const { errors, warnings } = verifyDoc(ld.doc.arr, { compName: compNameFor(scan) });
+  return { ok: true, file: rf.asset.path, entries: ld.doc.arr.length, errors, warnings, valid: errors.length === 0 };
+}
+
+/**
+ * Verify the SERIALIZED text an edit would write (used by `--verify` to gate a
+ * commit). Returns { errors, warnings } (a parse failure is an error).
+ * @param {any} scan @param {string} text
+ */
+export function verifyText(scan, text) {
+  let arr; try { arr = JSON.parse(text); } catch (e) { return { errors: [{ code: 'parse', msg: e instanceof Error ? e.message : String(e) }], warnings: [] }; }
+  return verifyDoc(arr, { compName: compNameFor(scan) });
 }
 
 /**
@@ -249,7 +321,7 @@ export function getData(scan, projectDir, file, selector) {
 }
 
 // Node hierarchy + component selectors (structure discovery) → {ok,file,nodeCount,nodes} | {error,code,candidates?}.
-export function treeData(scan, projectDir, file, { withType = null, under = null, depth = Infinity } = {}) {
+export function treeData(scan, projectDir, file, { withType = null, under = null, depth = Infinity, values = false } = {}) {
   const rf = resolveEditFile(scan, projectDir, file);
   if (rf.error) return rf;
   const ld = loadOrErr(rf.absPath, rf.asset); if (ld.error) return ld;
@@ -263,5 +335,12 @@ export function treeData(scan, projectDir, file, { withType = null, under = null
   }
   let nodes = listNodes(ld.doc.arr, compName, { depth, under: underIdx });
   if (withType) nodes = nodes.filter((n) => n.components.some((c) => c.type === withType));
+  // `values`: inline each node's + component's RAW serialized object (the deep
+  // read — structure AND values in one call, no per-node `get` round-trips).
+  if (values) nodes = nodes.map((nd) => ({
+    ...nd,
+    value: ld.doc.arr[nd.index],
+    components: nd.components.map((c) => ({ ...c, value: ld.doc.arr[c.index] })),
+  }));
   return { ok: true, file: rf.asset.path, nodeCount: nodes.length, nodes };
 }

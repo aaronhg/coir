@@ -270,6 +270,12 @@ export function setDeep(obj, propPath, value) {
     cur = cur[k];
   }
   const last = parts[parts.length - 1];
+  // Bounds-check an array write: a numeric index past the end would silently pad
+  // the array with nulls (a typo'd index corrupts the array shape). Allow replace
+  // (< length) and append (=== length); refuse a gap (> length).
+  if (Array.isArray(cur) && /^\d+$/.test(last) && Number(last) > cur.length) {
+    return { error: `index ${last} is out of range for an array of length ${cur.length} (0..${cur.length})` };
+  }
   const old = cur[last];
   cur[last] = value;
   return { ok: true, old };
@@ -576,4 +582,81 @@ export function addComponent(arr, nodeIndex, typeName) {
   if (!Array.isArray(node._components)) node._components = [];
   node._components.push({ __id__: compIndex });
   return { ok: true, index: compIndex };
+}
+
+/**
+ * Offline STRUCTURAL validation of a parsed prefab/scene array — catches the
+ * corruption an in-place edit could introduce, WITHOUT needing the live engine
+ * (the engine's serializer is the only authority on semantic validity, but most
+ * "the editor won't open it" breakage is structural and knowable here). Returns
+ * { errors, warnings } — each { code, msg, index? }. An error means the file is
+ * structurally broken (a dangling `__id__`, a null gap, an untyped entry); a
+ * warning is suspicious-but-loadable (parent/child mismatch, an orphan entry, a
+ * `__type__` that resolves to no known class). `compName` (optional) enables the
+ * __type__-resolvability check.
+ * @param {any[]} arr
+ * @param {{compName?:((rawType:any)=>string)|null}} [opts]
+ * @returns {{errors:Array<{code:string,msg:string,index?:number}>, warnings:Array<{code:string,msg:string,index?:number}>}}
+ */
+export function verifyDoc(arr, { compName = null } = {}) {
+  const errors = []; const warnings = [];
+  const E = (code, msg, index) => errors.push(index == null ? { code, msg } : { code, msg, index });
+  const W = (code, msg, index) => warnings.push(index == null ? { code, msg } : { code, msg, index });
+  const n = Array.isArray(arr) ? arr.length : 0;
+  if (!n) { E('empty', 'empty document (no entries)'); return { errors, warnings }; }
+  if (!arr[0] || typeof arr[0].__type__ !== 'string') E('no-root', 'entry #0 has no __type__ (not a valid root)', 0);
+
+  // 1) every {__id__} reference points at an in-range, typed entry; collect reachable.
+  const reachable = new Set([0]);
+  const walk = (v, owner) => {
+    if (Array.isArray(v)) { for (const el of v) walk(el, owner); return; }
+    if (v && typeof v === 'object') {
+      if (typeof v.__id__ === 'number') {
+        const id = v.__id__;
+        if (id < 0 || id >= n || !arr[id] || typeof arr[id].__type__ !== 'string')
+          E('bad-ref', `entry #${owner}: __id__ ${id} points at no valid entry`, owner);
+        else reachable.add(id);
+        return; // a ref object carries only __id__
+      }
+      for (const k of Object.keys(v)) walk(v[k], owner);
+    }
+  };
+  arr.forEach((o, i) => { if (o && typeof o === 'object') walk(o, i); });
+
+  // 2) entry typing / null gaps (a null entry = an out-of-range array write padding).
+  arr.forEach((o, i) => {
+    if (o === null) E('null-entry', `entry #${i} is null (a gap — e.g. an out-of-range array write)`, i);
+    else if (typeof o !== 'object' || typeof o.__type__ !== 'string') E('untyped-entry', `entry #${i} has no __type__`, i);
+  });
+
+  // 3) node ↔ child ↔ parent and component back-refs.
+  arr.forEach((o, i) => {
+    if (!o || !isNodeType(o.__type__)) return;
+    for (const ch of o._children || []) {
+      if (!isRef(ch)) { E('bad-child', `node #${i} has a non-ref entry in _children`, i); continue; }
+      const c = arr[ch.__id__];
+      if (!c || !isNodeType(c.__type__)) { E('bad-child', `node #${i} child #${ch.__id__} is not a node`, i); continue; }
+      if (!isRef(c._parent) || c._parent.__id__ !== i) W('parent-mismatch', `node #${ch.__id__}._parent ≠ #${i} (the node that lists it as a child)`, ch.__id__);
+    }
+    for (const cr of o._components || []) {
+      if (!isRef(cr)) { E('bad-comp-ref', `node #${i} has a non-ref entry in _components`, i); continue; }
+      const c = arr[cr.__id__];
+      if (!c) { E('bad-comp-ref', `node #${i} component #${cr.__id__} is missing`, i); continue; }
+      if (isRef(c.node) && c.node.__id__ !== i) W('comp-node-mismatch', `component #${cr.__id__}.node ≠ #${i} (its owning node)`, cr.__id__);
+    }
+  });
+
+  // 4) reachability — a non-root entry referenced by no __id__ (compaction should leave none).
+  arr.forEach((o, i) => { if (i > 0 && o && typeof o === 'object' && !reachable.has(i)) W('orphan-entry', `entry #${i} (${o.__type__ ?? '?'}) is referenced by no __id__`, i); });
+
+  // 5) __type__ resolvability (optional): a non-cc.* type that names no known class.
+  if (compName) arr.forEach((o, i) => {
+    if (!o || typeof o.__type__ !== 'string') return;
+    const t = o.__type__;
+    if (t.startsWith('cc.')) return;                 // engine builtin — not verifiable offline
+    const name = compName(t);
+    if (!name) W('unresolved-type', `entry #${i} __type__ "${t}" resolves to no known class`, i);
+  });
+
+  return { errors, warnings };
 }

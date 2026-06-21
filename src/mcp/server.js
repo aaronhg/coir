@@ -122,7 +122,11 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
         catch (e) { res = { error: e instanceof Error ? e.message : String(e) }; }
         if (res && res.error) {
           const extra = res.candidates && res.candidates.length ? `\n${res.candidates.join('\n')}` : '';
-          return toolResult(msg.id, `✗ ${res.error}${extra}`, true);
+          // Normalize to exactly one leading "✗ ": some errors come from the edit seam already
+          // ✗-prefixed (OM.* / OM.selErr), others are bare MCP-layer strings — strip any leading
+          // ✗ then add one, so every error renders with a single ✗ (not "✗ ✗ …" or none).
+          const message = `${res.error}`.replace(/^\s*✗\s*/, '');
+          return toolResult(msg.id, `✗ ${message}${extra}`, true);
         }
         return toolResult(msg.id, JSON.stringify(res.data));
       }

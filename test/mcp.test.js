@@ -34,6 +34,12 @@ async function mk() {
     { __type__: 'cc.Label', node: { __id__: 2 }, _string: 'Hi' },
   ]);
   await w('Foo.prefab.meta', { importer: 'prefab', uuid: 'f0f0f0f0-f0f0-f0f0-f0f0-f0f0f0f0f0f0' });
+  // a structurally broken prefab (dangling _children #99) for the verify tool.
+  await w('Broken.prefab', [
+    { __type__: 'cc.Prefab', _name: 'Broken' },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 99 }], _components: [], _active: true },
+  ]);
+  await w('Broken.prefab.meta', { importer: 'prefab', uuid: 'b0b0b0b0-b0b0-b0b0-b0b0-b0b0b0b0b0b0' });
   return dir;
 }
 
@@ -154,5 +160,107 @@ test('mcp: a bad selector comes back as an isError tool result, not a crash', as
   ]);
   assert.equal(r[1].result.isError, true);
   assert.match(r[1].result.content[0].text, /no node/);
-  assert.equal(dataOf(r[2]).assets, 2); // coin.png + Foo.prefab
+  assert.equal(dataOf(r[2]).assets, 3); // coin.png + Foo.prefab + Broken.prefab
+});
+
+// FINDING-4 fix: some MCP hosts serialize an untyped `value` arg as a JSON STRING
+// (false→"false", {obj}→stringified). edit_set must parse a JSON-shaped string back to
+// its real type, so the prefab gets a boolean/number/object — not a string.
+test('mcp: edit_set parses a JSON-string value back to its type; raw:true keeps a literal string', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_set', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._enabled', value: 'false' }),               // bool-as-string
+    call(2, 'edit_set', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._num', value: '42' }),                      // number-as-string
+    call(3, 'edit_set', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._col', value: '{"__type__":"cc.Color","r":255,"g":136,"b":0,"a":255}' }), // object-as-string
+    call(4, 'edit_set', { file: 'Foo.prefab', selector: 'Root/Title:cc.Label._string', value: 'true', raw: true }), // literal string "true"
+    call(5, 'edit_set', { file: 'Foo.prefab', selector: 'Root/Title:cc.Label._sub', value: 'hello world' }),        // non-JSON string → kept verbatim
+  ]);
+  for (const i of [1, 2, 3, 4, 5]) assert.equal(r[i].result.isError, undefined, `call ${i} should succeed`);
+  const arr = JSON.parse(await fs.readFile(path.join(dir, 'assets', 'Foo.prefab'), 'utf8'));
+  assert.strictEqual(arr[3]._enabled, false, '_enabled is boolean false, not the string "false"'); // the FINDING-4 case
+  assert.strictEqual(arr[3]._num, 42, 'number parsed from string');
+  assert.deepEqual(arr[3]._col, { __type__: 'cc.Color', r: 255, g: 136, b: 0, a: 255 }, 'object parsed from string');
+  assert.strictEqual(arr[4]._string, 'true', 'raw:true keeps the literal JSON-shaped string');
+  assert.strictEqual(arr[4]._sub, 'hello world', 'a non-JSON string is kept verbatim');
+});
+
+test('mcp: edit_set unknown-__type__ guard fires on a parsed object value (parse precedes the guard)', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_set', { file: 'Foo.prefab', selector: 'Root:cc.Sprite._x', value: '{"__type__":"NotARealClassXyz","v":1}' }),
+  ]);
+  assert.equal(r[1].result.isError, true);
+  assert.match(r[1].result.content[0].text, /unknown __type__/);
+});
+
+test('mcp: verify tool — sound prefab valid, broken prefab reports errors', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'verify', { file: 'Foo.prefab' }),
+    call(2, 'verify', { file: 'Broken.prefab' }),
+  ]);
+  assert.equal(dataOf(r[1]).valid, true);
+  const bad = dataOf(r[2]);
+  assert.equal(bad.valid, false);
+  assert.ok(bad.errors.some((e) => e.code === 'bad-ref' || e.code === 'bad-child'));
+});
+
+test('mcp: tree values:true inlines node + component raw values', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [call(1, 'tree', { file: 'Foo.prefab', values: true })]);
+  const t = dataOf(r[1]);
+  const root = t.nodes.find((n) => n.name === 'Root');
+  assert.equal(root.value.__type__, 'cc.Node');
+  assert.equal(root.components.find((c) => c.type === 'cc.Sprite').value.__type__, 'cc.Sprite');
+});
+
+test('mcp: edit_batch applies multiple ops atomically; a failing op writes nothing', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    // good batch: rename + add a node, one write
+    call(1, 'edit_batch', { file: 'Foo.prefab', ops: [
+      { op: 'rename', selector: 'Root/Title', value: 'Heading' },
+      { op: 'add-node', parent: 'Root', name: 'Extra' },
+    ] }),
+    call(2, 'tree', { file: 'Foo.prefab' }),
+    // bad batch: op 1 fails → nothing changes
+    call(3, 'edit_batch', { file: 'Foo.prefab', ops: [
+      { op: 'rename', selector: 'Root/Heading', value: 'WontStick' },
+      { op: 'rename', selector: 'Root/Nope', value: 'X' },
+    ] }),
+    call(4, 'get', { file: 'Foo.prefab', selector: 'Root/Heading:cc.Label._string' }),
+  ]);
+  assert.equal(r[1].result.isError, undefined);
+  assert.equal(dataOf(r[1]).count, 2);
+  const names = dataOf(r[2]).nodes.map((n) => n.name);
+  assert.ok(names.includes('Heading') && names.includes('Extra'));
+  assert.equal(r[3].result.isError, true);          // bad batch refused
+  assert.match(r[3].result.content[0].text, /batch op #1/);
+  assert.equal(dataOf(r[4]).value, 'Hi');           // unchanged → atomic (Heading still there, not renamed)
+});
+
+test('mcp: edit_batch + diff returns a unified diff; dryRun does not write', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_batch', { file: 'Foo.prefab', dryRun: true, diff: true, ops: [{ op: 'rename', selector: 'Root/Title', value: 'Z' }] }),
+    call(2, 'get', { file: 'Foo.prefab', selector: 'Root/Title:cc.Label._string' }),
+  ]);
+  assert.equal(dataOf(r[1]).dryRun, true);
+  assert.match(dataOf(r[1]).diff, /@@/);
+  assert.equal(dataOf(r[2]).value, 'Hi'); // still there (dry-run)
+});
+
+// FINDING-3 fix: errors render with exactly one ✗ (engine-seam errors used to double-prefix).
+test('mcp: error results carry exactly one ✗ (engine-seam and MCP-layer alike)', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_set', { file: 'Foo.prefab', selector: 'Root', value: 1 }), // needProp — engine-seam (was ✗ ✗)
+    call(2, 'deps', { asset: 'no-such-zzz' }),                               // not found — MCP-layer (single ✗)
+  ]);
+  for (const i of [1, 2]) {
+    const t = r[i].result.content[0].text;
+    assert.equal(r[i].result.isError, true);
+    assert.ok(t.startsWith('✗ '), `call ${i} should start with one ✗: ${t}`);
+    assert.ok(!/^✗\s+✗/.test(t), `call ${i} should not double-prefix ✗: ${t}`);
+  }
 });

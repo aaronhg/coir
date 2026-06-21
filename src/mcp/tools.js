@@ -11,7 +11,8 @@ import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from '../core/rules.js';
-import { runEdit, runSwapAll, commitWrites, resolveRawTypes, getData, treeData } from '../edit/ops.js';
+import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyText } from '../edit/ops.js';
+import { unifiedDiff } from '../edit/diff.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
 function resolveUuid(scan, query) {
@@ -21,18 +22,28 @@ function resolveUuid(scan, query) {
   return { uuid: r.uuid };
 }
 
-// Run a write op through the shared seam, then commit (unless dryRun). The mtime
-// guard refuses a write if the file changed on disk since the scan (Cocos Creator
-// saved it) unless force:true.
-function applyEdit(ctx, op, params, a) {
-  const r = runEdit(ctx.scan, ctx.projectDir, op, params);
+// Commit a write-plan result (runEdit/runBatch) honouring dryRun/backup/force,
+// plus the shared verify/diff flags. `verify`: structurally validate the planned
+// text and refuse to write on errors. `diff`: include a unified diff in the data.
+function commitResult(ctx, r, a) {
   if (r.error) return { error: r.error, candidates: r.candidates };
+  const out = { file: r.asset.path, ...r.json, dryRun: !!a.dryRun };
+  if (a.diff) out.diff = (r.writes || []).map((w) => unifiedDiff(w.oldText ?? '', w.text)).join('\n\n');
+  if (a.verify) {
+    for (const w of r.writes || []) {
+      const v = verifyText(ctx.scan, w.text);
+      if (v.errors.length) return { error: `verify: ${v.errors.length} structural error(s) — not written: ${v.errors.slice(0, 6).map((e) => e.msg).join('; ')}` };
+    }
+  }
   if (!a.dryRun) {
     try { commitWrites(r.writes, { backup: !!a.backup, force: !!a.force }); }
     catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
     ctx.markDirty();
   }
-  return { data: { file: r.asset.path, ...r.json, dryRun: !!a.dryRun } };
+  return { data: out };
+}
+function applyEdit(ctx, op, params, a) {
+  return commitResult(ctx, runEdit(ctx.scan, ctx.projectDir, op, params), a);
 }
 
 // Shared schema fragments for write tools.
@@ -40,6 +51,8 @@ const WRITE_FLAGS = {
   dryRun: { type: 'boolean', description: 'Plan the edit and return what would change WITHOUT writing the file.' },
   backup: { type: 'boolean', description: 'Copy the file to <file>.bak before writing.' },
   force: { type: 'boolean', description: 'Skip the concurrent-change guard (write even if the file changed on disk since the scan).' },
+  verify: { type: 'boolean', description: 'Structurally validate the result before writing; refuse to write on errors.' },
+  diff: { type: 'boolean', description: 'Include a unified diff of the change in the result.' },
 };
 const SEL_DOC = 'Selector: nodePath then :Type then .prop, e.g. "Canvas/Title:cc.Label._string". [i] disambiguates same-name nodes / same-type components / array elements; #N is the raw array index. Discover selectors with tree.';
 
@@ -154,9 +167,10 @@ export const TOOLS = [
         with: { type: 'string', description: 'Keep only nodes carrying this component type (e.g. cc.Label).' },
         under: { type: 'string', description: 'Scope to the subtree under this node selector.' },
         depth: { type: 'number', description: 'Limit to N levels below the root (default: the whole tree).' },
+        values: { type: 'boolean', description: 'Deep read: inline each node\'s + component\'s raw serialized value (structure AND values in one call — no per-node get round-trips).' },
       } },
     run: (ctx, a) => {
-      const r = treeData(ctx.scan, ctx.projectDir, a.file, { withType: a.with, under: a.under, depth: a.depth == null ? Infinity : a.depth });
+      const r = treeData(ctx.scan, ctx.projectDir, a.file, { withType: a.with, under: a.under, depth: a.depth == null ? Infinity : a.depth, values: !!a.values });
       if (r.error) return { error: r.error, candidates: r.candidates };
       return { data: { file: r.file, nodeCount: r.nodeCount, nodes: r.nodes } };
     },
@@ -170,6 +184,17 @@ export const TOOLS = [
       const r = getData(ctx.scan, ctx.projectDir, a.file, a.selector);
       if (r.error) return { error: r.error, candidates: r.candidates };
       return { data: { value: r.value, kind: r.kind } };
+    },
+  },
+  {
+    name: 'verify',
+    description: 'OFFLINE structural validation of a prefab/scene (no live engine needed): checks every {__id__} reference resolves, node↔child↔parent and component back-refs, null gaps, orphan entries, and __type__ resolvability. Returns { valid, errors[], warnings[] }. Run after an edit_* (or before relying on a file) to catch corruption the engine would reject.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file'],
+      properties: { file: { type: 'string', description: 'The prefab/scene file.' } } },
+    run: (ctx, a) => {
+      const r = verifyData(ctx.scan, ctx.projectDir, a.file);
+      if (r.error) return { error: r.error, candidates: r.candidates };
+      return { data: { file: r.file, entries: r.entries, valid: r.valid, errors: r.errors, warnings: r.warnings } };
     },
   },
   {
@@ -187,14 +212,32 @@ export const TOOLS = [
 
   // ---- writes (edit_*) — gate each individually -----------------------
   {
+    name: 'edit_batch',
+    description: 'Apply MANY edits to ONE prefab/scene ATOMICALLY: load once, apply each op in order (selectors re-resolve against the running state), write once. If any op fails, NOTHING is written (all-or-nothing) — use for a multi-step structural refactor instead of N separate edit_* calls. Each op is { op, …params } (no `file`). Params by op: set → {selector, value}; set-uuid → {selector, asset}; rename/set-active/set-layer → {selector, value}; set-pos/set-scale/set-rot → {selector, value:{"__type__":"cc.Vec3","x":..,"y":..,"z":..}}; set-parent → {selector, parent, index?}; add-node → {parent, name, index?}; rm-node/rm-component → {selector}; add-component → {selector, type}. swap-uuid is NOT allowed (use edit_swap_uuid).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'ops'],
+      properties: { file: { type: 'string' }, ops: { type: 'array', items: { type: 'object' }, description: 'Ordered [{op, …params}] — see the tool description for each op\'s params.' }, ...WRITE_FLAGS } },
+    run: (ctx, a) => commitResult(ctx, runBatch(ctx.scan, ctx.projectDir, a.file, a.ops), a),
+  },
+  {
     name: 'edit_set',
-    description: 'Set a component property to a value. `value` is the raw JSON Cocos serializes: a scalar ("hi"/42/true), a wrapper object ({"__type__":"cc.Color","r":..}), an asset ref ({"__uuid__":".."}), or a custom type by class name ({"__type__":"SpriteConfig",..} — converted to its token). Use get to see the current shape.',
+    description: 'Set a component property to a value. `value` is the JSON Cocos serializes: a scalar ("hi"/42/true), a wrapper object ({"__type__":"cc.Color","r":..}), an asset ref ({"__uuid__":".."}), or a custom type by class name ({"__type__":"SpriteConfig",..} — converted to its token). Use get to see the current shape. NOTE: some MCP hosts send `value` as a JSON STRING (e.g. false→"false", an object→its stringified JSON); a JSON-shaped string is parsed back to its type automatically. To set a LITERAL string whose text is itself JSON (e.g. a label reading "true" or "42"), pass `raw:true`.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector', 'value'],
-      properties: { file: { type: 'string' }, selector: { type: 'string', description: SEL_DOC }, value: { description: 'The raw value (any JSON).' }, ...WRITE_FLAGS } },
+      properties: { file: { type: 'string' }, selector: { type: 'string', description: SEL_DOC }, value: { description: 'The value (any JSON). May be passed as a JSON string — it is parsed back to its type unless raw:true.' }, raw: { type: 'boolean', description: 'Treat a string `value` verbatim (do NOT JSON-parse it) — for a literal string property whose text looks like JSON, e.g. "true"/"42".' }, ...WRITE_FLAGS } },
     run: (ctx, a) => {
-      const unknown = []; resolveRawTypes(ctx.scan, a.value, unknown);
+      // Defend against MCP hosts that serialize an untyped argument as a JSON string:
+      // a string that is valid JSON is parsed back to its real type (bool/number/object),
+      // so value:"false" sets a boolean and value:'{"__type__":"cc.Color",..}' sets the
+      // wrapper. A string that is NOT valid JSON is kept verbatim; `raw:true` forces verbatim
+      // (for a literal string whose text is itself JSON). Parse BEFORE resolveRawTypes so the
+      // unknown-__type__ guard sees the real object, not a string. (The CLI is unambiguous —
+      // it uses typed --str/--int/--json flags.)
+      let value = a.value;
+      if (typeof value === 'string' && !a.raw) {
+        try { value = JSON.parse(value); } catch { /* not JSON → a literal string */ }
+      }
+      const unknown = []; resolveRawTypes(ctx.scan, value, unknown);
       if (unknown.length) return { error: `unknown __type__ class(es): ${[...new Set(unknown)].join(', ')} — no matching script asset` };
-      return applyEdit(ctx, 'set', { file: a.file, selector: a.selector, value: a.value }, a);
+      return applyEdit(ctx, 'set', { file: a.file, selector: a.selector, value }, a);
     },
   },
   {
