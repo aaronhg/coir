@@ -11,6 +11,32 @@
 const T = (k, fb) => { try { const s = Editor.I18n.t(`coir.${k}`); return s && s !== `coir.${k}` ? s : fb; } catch (e) { return fb; } };
 const base = (p) => String(p || '').slice(String(p || '').lastIndexOf('/') + 1);
 
+// In PREFAB EDIT MODE the live scene tree is wrapped: a temp `Scene` → [a
+// `should_hide_in_hierarchy` preview Canvas, for UI prefabs] → the prefab root.
+// coir's file-based nodePaths start at the PREFAB ROOT (no Scene, no Canvas), so
+// `logicalRoot` descends past the wrappers — but ONLY when a prefab is being
+// edited, since in normal scene editing the scene IS the root (coir paths include
+// it). The Canvas is a definitive prefab-edit signal (UI); a 3D prefab has none,
+// so we ask the asset-db what the open scene's asset is. See docs/NESTED-PREFABS.md.
+const HIDDEN = 'should_hide_in_hierarchy';
+const isWrapper = (n) => !!(n && typeof n.name === 'string' && n.name.includes(HIDDEN));
+async function editingPrefab(scene) {
+  if (scene && (scene.children || []).some(isWrapper)) return true; // a preview Canvas → UI prefab
+  try {
+    const uuid = await Editor.Message.request('scene', 'query-current-scene');
+    if (!uuid) return false;
+    const info = await Editor.Message.request('asset-db', 'query-asset-info', uuid);
+    return !!info && /prefab/i.test(`${info.importer || ''} ${info.type || ''}`);
+  } catch (e) { return false; }
+}
+async function logicalRoot(scene) {
+  if (!scene || !(await editingPrefab(scene))) return scene; // normal scene editing → unchanged
+  const wrap = (scene.children || []).find(isWrapper);
+  const base = wrap || scene; // descend into the preview Canvas if present, else the temp Scene
+  const kids = (base.children || []).filter((c) => c && !isWrapper(c) && !/camera/i.test(c.name || ''));
+  return kids[0] || base; // the prefab root (skip a preview camera)
+}
+
 // "Name" 或 "Name[i]" → { name, idx|null }；idx = 同名兄弟中的 0-based 位置（coir 的 [i] 語法）。
 function parseSeg(s) {
   const m = /^(.*?)\[(\d+)\]$/.exec(s);
@@ -32,8 +58,9 @@ function resolvePath(root, raw) {
   const segs = path.split('/').map((s) => s.trim()).filter(Boolean);
   if (!segs.length) return { error: T('goto_empty', '請輸入節點路徑') };
 
-  // coir 路徑是絕對的、以場景根節點名開頭。segs[0] 對到 root 就吃掉它；
-  // 否則把 segs 當成 root 底下的相對路徑（寬鬆處理）。
+  // `root` is already the logical root (prefab root in prefab-edit mode, scene
+  // root otherwise). coir paths start at the root's name; segs[0] matching it is
+  // consumed, else segs are treated as relative (lenient).
   let cur = root;
   let i = parseSeg(segs[0]).name === root.name ? 1 : 0;
   for (; i < segs.length; i++) {
@@ -50,6 +77,8 @@ function resolvePath(root, raw) {
 
 // 反向：在活場景樹裡找到 uuid → 回傳含 [i] 消歧的 coir nodePath（root→node）。找不到回 null。
 function pathOfUuid(root, uuid) {
+  // `root` is the logical root (prefab root in prefab-edit, scene root otherwise);
+  // the path includes its name, matching coir's file nodePaths.
   let found = null;
   (function dfs(node, segs, siblings) {
     if (found) return;
@@ -96,7 +125,7 @@ async function jump(panel) {
     return r.error ? setMsg('err', r.error) : setMsg('ok', `${T('goto_asset_ok', '已選取資源')} ✓ ${r.ok}`);
   }
 
-  const root = await sceneRoot();
+  const root = await logicalRoot(await sceneRoot());
   if (!root) return setMsg('err', T('goto_no_scene', '請先開啟一個場景'));
   const r = resolvePath(root, raw);
   if (r.error) return setMsg('err', r.error);
@@ -122,7 +151,7 @@ async function reflect(panel) {
   const uuid = ids[ids.length - 1];
   if (!uuid) return;
   if (type === 'node') {
-    const root = await sceneRoot();
+    const root = await logicalRoot(await sceneRoot());
     const p = root && pathOfUuid(root, uuid);
     if (p) panel.$.sel.value = p;
   } else if (type === 'asset') {
@@ -140,8 +169,7 @@ async function renderVerify(panel) {
   if (!panel.$ || !panel.$.vinfo) return;
   const s = await vstatus();
   if (!s) { panel.$.vinfo.innerText = ''; if (panel.$.vtoggle) panel.$.vtoggle.style.display = 'none'; return; }
-  const ver = s.version && s.version !== '?' ? ` · cocos ${s.version}` : '';
-  panel.$.vinfo.innerText = s.running ? `native-verify :${s.port}${ver}` : `native-verify off${ver}`;
+  panel.$.vinfo.innerText = s.running ? `native-verify :${s.port}` : 'native-verify off';
   panel.$.vinfo.className = s.running ? 'on' : '';
   if (panel.$.vtoggle) { panel.$.vtoggle.style.display = ''; panel.$.vtoggle.innerText = s.running ? 'stop' : 'start'; }
 }
@@ -158,18 +186,20 @@ module.exports = Editor.Panel.define({
         <ui-input id="sel"></ui-input>
         <ui-button id="go"></ui-button>
       </div>
-      <div id="msg"></div>
-      <div class="foot"><span id="vinfo"></span><ui-button id="vtoggle" type="text"></ui-button></div>
+      <div class="foot"><span id="msg"></span><span class="grow"></span><span id="vinfo"></span><ui-button id="vtoggle" type="text"></ui-button></div>
     </div>`,
   style: `
     .coir-goto { padding: 8px; display: flex; flex-direction: column; gap: 6px; height: 100%; box-sizing: border-box; }
     .row { display: flex; gap: 6px; align-items: center; }
     #sel { flex: 1; }
-    #msg { font-size: 11px; line-height: 1.4; white-space: pre-wrap; opacity: .9; min-height: 14px; }
-    #msg.err { color: var(--color-danger, #f66); }
-    #msg.ok  { color: var(--color-success, #6c6); }
-    .foot { margin-top: auto; display: flex; justify-content: flex-end; align-items: center; gap: 4px; font-size: 10px; opacity: .65; }
-    #vinfo.on { color: var(--color-success, #6c6); opacity: .95; }`,
+    /* msg (Selected/errors) shares ONE footer line with the native-verify status, same colour scheme. */
+    .foot { margin-top: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: .8; min-height: 16px; }
+    .grow { flex: 1; }
+    #msg, #vinfo { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #msg { max-width: 55%; }
+    #msg.err { color: var(--color-danger, #f66); opacity: 1; }
+    #msg.ok  { color: #5fd75f; opacity: 1; }
+    #vinfo.on { color: #5fd75f; opacity: 1; }`,
   $: { sel: '#sel', go: '#go', msg: '#msg', vinfo: '#vinfo', vtoggle: '#vtoggle' },
   ready() {
     this.$.go.innerText = T('goto_go', '跳轉');
