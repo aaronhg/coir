@@ -55,6 +55,14 @@ These are **deleted at the end** (`project_delete_asset db://assets/_coirtest`).
 - `RESULTS.md` — per-test execution log: command, exit, observation, PASS/FAIL, raw editor readback.
 - `COVERAGE.md` — adversarial audit of coverage gaps / weak verifications.
 
+**Round 2 — set-ref · P2/P3 · field/value guards · `--reimport`** (this session's new ops,
+verified through coir's **own** `cocos-extension/` native-verify endpoint on `:3789`, not the
+third-party MCP): `PLAN-nested.md`, `RESULTS-nested.md`, `COVERAGE-nested.md`. 38 PASS · 0 fail ·
+2 findings (FINDING-A: native node-ref readback proves liveness not target identity; FINDING-B:
+CLI `-o json` omits `reimportReason`). Highlight: **P3b** resolves a cross-boundary reference
+from a `cc.TargetOverrideInfo` with an inline `null` and *no baked branch* — proven by the engine,
+not by coir reading its own output.
+
 **MCP-server verification** (the `coir mcp` *wrapper*, not the engine — registered as the
 `coir-edit` MCP alongside `cocos-creator`): `PLAN-mcp.md`, `RESULTS-mcp.md`, `COVERAGE-mcp.md`,
 `_mcp_design_raw.json`. Covers tool dispatch/arg-shapes, error→`isError` mapping, `fs.watch`

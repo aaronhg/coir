@@ -129,7 +129,7 @@ async function maybeReimport(flags, r) {
 async function applyResult(flags, r, desc) {
   printDiff(flags, r.writes);
   if (!flags.dryRun) commitOrExit(r, flags);
-  if (flags.json) console.log(JSON.stringify({ file: r.asset.path, ...r.json, dryRun: !!flags.dryRun, needsReimport: !!r.needsReimport, ...(r.warning ? { warning: r.warning } : {}) }));
+  if (flags.json) console.log(JSON.stringify({ file: r.asset.path, ...r.json, dryRun: !!flags.dryRun, needsReimport: !!r.needsReimport, ...(r.needsReimport && r.reimportReason ? { reimportReason: r.reimportReason } : {}), ...(r.warning ? { warning: r.warning } : {}) }));
   else {
     const lines = [desc + (flags.dryRun ? EM.dryRunSuffix : '')];
     if (r.warning) lines.push(`  ⚠ ${r.warning}`);

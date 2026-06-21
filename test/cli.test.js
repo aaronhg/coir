@@ -863,6 +863,7 @@ test('set: a non-existent property is refused (exit 2); --force creates it but f
   // --force creates it + marks needsReimport (coir can't tell a real @property from a typo)
   const d = json(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._nope', '--int', '7', '--force', '-o', 'json', '--dry-run'));
   assert.equal(d.needsReimport, true);
+  assert.match(d.reimportReason, /_nope/); // -o json carries the reason too (parity with text output + MCP)
   // an array append (numeric index) is NOT blocked — setDeep's bounds check governs it
   assert.equal(cli('edit', 'EditAdd.prefab', 'set', 'Root:cc.Sprite._arr.2', '--json', '{"h":"z"}').status, 0);
 });
