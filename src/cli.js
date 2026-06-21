@@ -36,7 +36,7 @@ import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareDa
 import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from './core/rules.js';
-import { cmdEdit, cmdVerify, cmdNativeVerify } from './editCli.js';
+import { cmdEdit, cmdVerify, cmdVerifyAll, cmdRoundtrip, cmdNativeVerify } from './editCli.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (cli.js is in src/)
 const VERSION = (() => { try { return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version; } catch { return '?'; } })();
@@ -94,6 +94,10 @@ Edit (in-place — WRITES the file; preview with --dry-run, snapshot with --back
 
 Validate:
   coir verify <file> [-o json]               offline structural check (also: edit <file> verify); EXITS 1 on a broken file
+  coir verify --all [-o json]                same check over EVERY prefab/scene (no target) — one CI gate for project structural health; EXITS 1 if any file is broken
+  coir verify --all --roundtrip [-o json]    offline, read-only edit-engine audit (no editor) over every prefab/scene:
+                                     byte round-trip (serializer fidelity, WARN) + add-then-remove invertible probe
+                                     (compaction/clone corruption, ERROR); per-file with <file>; EXITS 1 on any failure
   coir native-verify <file> [--port N] [-o json]   verify's LIVE twin — the running Cocos editor (the coir
                                      extension's opt-in endpoint) reimports+instantiates the file and confirms the engine
                                      builds what coir parsed; EXITS 1 on mismatch, 2 if unreachable / wrong project
@@ -164,6 +168,7 @@ function parseArgs(argv) {
     else if (a === '--values') flags.values = true; // edit tree: inline node/component values (deep read)
     else if (a === '--diff') flags.diff = true; // edit: print a unified diff of the change (works with --dry-run)
     else if (a === '--verify') flags.verify = true; // edit: structurally validate the result before writing
+    else if (a === '--roundtrip') flags.roundtrip = true; // verify: serializer-fidelity + invertible-edit audit (with --all = whole project)
     else if (a === '--port') flags.port = parseInt(argv[++i], 10) || undefined; // native-verify: endpoint port (default: auto-probe 3789..3809)
     else if (a.startsWith('--port=')) flags.port = parseInt(a.slice(7), 10) || undefined;
     else if (a === '-o' || a === '--output') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.json = argv[++i] === 'json'; } // output format (text default)
@@ -625,7 +630,8 @@ async function main() {
   if (command === 'duplicates') { await cmdDuplicates(scan, fp, target, flags); return; } // redundant assets (byte / structural)
   if (command === 'check') { await cmdCheck(scan, fp, projectDir, flags, plugins); return; } // declarative CI gate (exits non-zero on failure)
   if (command === 'edit') { cmdEdit(scan, projectDir, flags, pos); return; }
-  if (command === 'verify') { cmdVerify(scan, projectDir, flags, [target]); return; } // offline structural validation of a prefab/scene
+  if (command === 'verify') { if (flags.roundtrip) cmdRoundtrip(scan, projectDir, flags, [target]); else if (flags.all) cmdVerifyAll(scan, projectDir, flags); else cmdVerify(scan, projectDir, flags, [target]); return; } // offline structural validation (--all: whole project · --roundtrip: serializer-fidelity / invertible-edit audit)
+  if (command === 'roundtrip') { cmdRoundtrip(scan, projectDir, flags, [target]); return; } // alias: verify --roundtrip
   if (command === 'native-verify') { await cmdNativeVerify(scan, projectDir, flags, [target]); return; } // live-engine cross-check (needs the cocos-extension endpoint)
 
   // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).

@@ -11,7 +11,7 @@ import { componentName, typeToken } from '../core/selector.js';
 import { resolveTarget } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
-  nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc } from './editPrefab.js';
+  nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc, roundTrip, probeInvertible } from './editPrefab.js';
 
 // Operation-level messages — byte-identical to the CLI's prior strings so output
 // is unchanged. (Usage / value-flag messages stay CLI-side in editCli's EM.)
@@ -281,6 +281,86 @@ export function verifyData(scan, projectDir, file) {
   const ld = loadOrErr(rf.absPath, rf.asset); if (ld.error) return ld;
   const { errors, warnings } = verifyDoc(ld.doc.arr, { compName: compNameFor(scan) });
   return { ok: true, file: rf.asset.path, entries: ld.doc.arr.length, errors, warnings, valid: errors.length === 0 };
+}
+
+/**
+ * Project-wide structural validation: run verifyDoc over EVERY prefab/scene and
+ * aggregate. Unlike the per-file form this needs no target, so CI can gate the
+ * whole project's structural health in one call (the offline counterpart of a
+ * project-wide health check). A file that won't even load (not a 3.x array doc)
+ * is a failure here — verify is about file validity (cf. roundtrip, which skips
+ * such files since it audits the EDIT engine). Returns { ok, scope, total,
+ * passed, failures, warnCount, valid }.
+ * @param {any} scan @param {string} projectDir
+ */
+export function verifyAllData(scan, projectDir) {
+  const assets = [...scan.assets.values()]
+    .filter((a) => (a.type === 'prefab' || a.type === 'scene') && a.hasSource && a.path && !a.virtual)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const compName = compNameFor(scan);
+  const failures = []; let warnCount = 0;
+  for (const a of assets) {
+    const abs = path.join(projectDir, 'assets', a.path);
+    let doc;
+    try { doc = loadDoc(abs); } catch (e) { failures.push({ file: a.path, errors: [{ code: 'unloadable', msg: e instanceof Error ? e.message : String(e) }] }); continue; }
+    const { errors, warnings } = verifyDoc(doc.arr, { compName });
+    warnCount += warnings.length;
+    if (errors.length) failures.push({ file: a.path, errors });
+  }
+  return { ok: true, scope: 'all', total: assets.length, passed: assets.length - failures.length, failures, warnCount, valid: failures.length === 0 };
+}
+
+/**
+ * Offline, READ-ONLY round-trip audit of prefab/scene files — the headless,
+ * editor-free trust proof for the edit engine (complements `native-verify`,
+ * which needs the live engine). For each file: (a) BYTE round-trip — does coir's
+ * serializer reproduce the source verbatim (diff hygiene, WARN); (b) INVERTIBLE
+ * probe — add-then-remove a node through the real engine and require the result
+ * to equal the original (compaction/clone corruption, ERROR), plus a verifyDoc
+ * on the probed result. Never writes. `all` sweeps every prefab/scene; else one
+ * `file`. Returns { ok, scope, total, passed, byteDivergent[], failures[],
+ * unprobed[], valid } or { error, code }.
+ * @param {any} scan @param {string} projectDir @param {{all?:boolean, file?:string|null}} [opts]
+ */
+export function auditRoundtripData(scan, projectDir, { all = false, file = null } = {}) {
+  let assets;
+  if (all) {
+    assets = [...scan.assets.values()]
+      .filter((a) => (a.type === 'prefab' || a.type === 'scene') && a.hasSource && a.path && !a.virtual)
+      .sort((a, b) => a.path.localeCompare(b.path));
+  } else {
+    const rf = resolveEditFile(scan, projectDir, file);
+    if (rf.error) return rf;
+    assets = [rf.asset];
+  }
+  const compName = compNameFor(scan);
+  const byteDivergent = []; const failures = []; const unprobed = [];
+  for (const a of assets) {
+    const abs = path.join(projectDir, 'assets', a.path);
+    let doc;
+    try { doc = loadDoc(abs); } catch (e) { unprobed.push({ file: a.path, reason: 'unloadable' }); continue; } // not a 3.x array doc — plain `verify` owns it
+    // Round-trip audits whether the engine safely edits OTHERWISE-VALID files; a
+    // file that's already structurally broken is plain `verify`'s job, not this —
+    // skip it (its missing/dangling refs would make any add/remove behave oddly).
+    if (verifyDoc(doc.arr, { compName }).errors.length) { unprobed.push({ file: a.path, reason: 'pre-broken' }); continue; }
+    const rt = roundTrip(doc.raw);
+    if ('error' in rt) { unprobed.push({ file: a.path, reason: rt.code }); continue; } // defensive: loadDoc already guaranteed an array
+    if (!rt.byteEqual) byteDivergent.push({ file: a.path, bytesIn: rt.bytesIn, bytesOut: rt.bytesOut });
+    const pr = probeInvertible(doc.arr, { compName });
+    if ('error' in pr) {
+      // rm-failed = added a node but couldn't remove it → a genuine engine asymmetry.
+      // no-node / no-template (add-failed) = the file just has nothing to probe → skip.
+      if (pr.code === 'rm-failed') failures.push({ file: a.path, kind: pr.code, detail: pr.error });
+      else unprobed.push({ file: a.path, reason: pr.code === 'add-failed' ? 'no-template' : pr.code });
+      continue;
+    }
+    if (!pr.invertible) failures.push({ file: a.path, kind: 'not-invertible', detail: 'add-then-remove did not restore the original (compaction/clone bug)' });
+    else if (pr.verifyErrors.length) failures.push({ file: a.path, kind: 'verify', detail: `${pr.verifyErrors.length} structural error(s) after a probe edit: ${pr.verifyErrors.slice(0, 3).map((e) => e.msg).join('; ')}` });
+  }
+  const failed = new Set(failures.map((f) => f.file));
+  const skipped = new Set(unprobed.map((u) => u.file));
+  const passed = assets.length - failed.size - skipped.size;
+  return { ok: true, scope: all ? 'all' : 'file', total: assets.length, passed, byteDivergent, failures, unprobed, valid: failures.length === 0 };
 }
 
 /**

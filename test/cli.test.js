@@ -723,6 +723,84 @@ test('verify -o json: structured { valid, errors[] }', () => {
   assert.ok(d.errors.length >= 1 && d.errors[0].code && d.errors[0].msg);
 });
 
+// ---- verify --all (project-wide structural validation) --------------------
+test('verify --all: sweeps every prefab/scene, flags broken ones, exit 1', () => {
+  const r = cli('verify', '--all', '-o', 'json');
+  assert.equal(r.status, 1); // the fixture deliberately includes broken files
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.scope, 'all');
+  assert.ok(d.total > 1, `expected several files, got ${d.total}`);
+  assert.equal(d.valid, false);
+  // Broken.prefab (dangling #99) must be among the failures, with its errors
+  const broken = d.failures.find((f) => f.file === 'Broken.prefab');
+  assert.ok(broken, 'Broken.prefab should be flagged');
+  assert.ok(broken.errors.some((e) => e.code === 'bad-ref' || e.code === 'bad-child'));
+});
+
+test('verify --all (text): prints a per-file breakdown and a summary line', () => {
+  const r = cli('verify', '--all');
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /verify \(all\)/);
+  assert.match(r.stdout, /Broken\.prefab/);
+});
+
+// ---- verify --roundtrip (offline serializer-fidelity + invertible-edit audit) -
+test('verify --roundtrip <file>: a sound prefab is invertible → exit 0, passed', () => {
+  const r = cli('verify', 'EditAdd.prefab', '--roundtrip', '-o', 'json');
+  assert.equal(r.status, 0);
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.valid, true);
+  assert.equal(d.total, 1);
+  assert.equal(d.passed, 1);
+  assert.equal(d.failures.length, 0);
+});
+
+test('verify --roundtrip: minified fixture bytes ≠ coir 2-space serialize → byte-divergent (WARN, not a failure)', () => {
+  // a DEDICATED minified fixture: other tests edit shared prefabs (rewriting them
+  // with coir's own 2-space serializer, which would realign the bytes), so this
+  // one is written fresh here and never touched elsewhere.
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'ByteRT.prefab'),
+    JSON.stringify([{ __type__: 'cc.Prefab', _name: 'ByteRT', data: { __id__: 1 } },
+      { __type__: 'cc.Node', _name: 'ByteRT', _parent: null, _children: [], _components: [], _prefab: null, _active: true }]));
+  fsSync.writeFileSync(path.join(projectDir, 'assets', 'ByteRT.prefab.meta'),
+    JSON.stringify({ importer: 'prefab', uuid: '99999999-9999-9999-9999-999999999999' }));
+  const d = JSON.parse(cli('verify', 'ByteRT.prefab', '--roundtrip', '-o', 'json').stdout);
+  // minified source (no indent) vs coir's 2-space serialize → byte-divergent, but
+  // that is a WARNING, not a hard failure (the file is still invertible/valid).
+  assert.equal(d.byteDivergent.length, 1);
+  assert.equal(d.valid, true);
+  assert.equal(d.failures.length, 0);
+});
+
+test('verify --roundtrip: an already-broken file is SKIPPED (pre-broken — plain verify owns it), not failed', () => {
+  // Broken.prefab has a dangling #99 — plain `verify` flags it. The round-trip only
+  // audits otherwise-valid files, so it skips this one rather than false-flagging.
+  const r = cli('verify', 'Broken.prefab', '--roundtrip', '-o', 'json');
+  assert.equal(r.status, 0);
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.valid, true);
+  assert.equal(d.failures.length, 0);
+  assert.equal(d.unprobed.length, 1);
+  assert.equal(d.unprobed[0].reason, 'pre-broken');
+});
+
+test('verify --all --roundtrip: sweeps every prefab/scene; clean files pass, malformed ones skip → exit 0', () => {
+  const r = cli('verify', '--all', '--roundtrip', '-o', 'json');
+  assert.equal(r.status, 0);
+  const d = JSON.parse(r.stdout);
+  assert.equal(d.scope, 'all');
+  assert.ok(d.total > 1, `expected several files, got ${d.total}`);
+  assert.equal(d.failures.length, 0, `unexpected failures: ${JSON.stringify(d.failures)}`);
+  assert.ok(d.unprobed.some((u) => u.file === 'Broken.prefab'), 'Broken.prefab should be skipped as pre-broken');
+  assert.equal(d.passed, d.total - d.unprobed.length); // every probed file was invertible
+});
+
+test('roundtrip alias == verify --roundtrip', () => {
+  const a = JSON.parse(cli('roundtrip', 'EditAdd.prefab', '-o', 'json').stdout);
+  const b = JSON.parse(cli('verify', 'EditAdd.prefab', '--roundtrip', '-o', 'json').stdout);
+  assert.deepEqual(a, b);
+});
+
 // ---- tree --values (deep read) --------------------------------------------
 test('tree --values -o json: each node + component carries its raw value', () => {
   const t = json(cli('edit', 'EditAdd.prefab', 'tree', '--values', '-o', 'json'));

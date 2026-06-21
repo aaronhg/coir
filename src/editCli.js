@@ -11,7 +11,7 @@
 import { mainUuid } from './core/uuid.js';
 import { componentName } from './core/selector.js';
 import { resolveAsset, edgeMaps, locText } from './seam/shared.js';
-import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyText } from './edit/ops.js';
+import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyAllData, verifyText, auditRoundtripData } from './edit/ops.js';
 import { unifiedDiff } from './edit/diff.js';
 import * as nv from './verify/nativeClient.js';
 import fs from 'node:fs';
@@ -217,6 +217,46 @@ export function cmdVerify(scan, projectDir, flags, pos) {
   for (const e of r.errors) console.log(`  ✗ [${e.code}] ${e.msg}`);
   for (const w of r.warnings) console.log(`  ⚠ [${w.code}] ${w.msg}`);
   process.exit(r.valid ? 0 : 1); // non-zero on structural errors → CI-gateable
+}
+
+// ---- verify --all: project-wide structural validation (no target) ------------
+// Runs verifyDoc over every prefab/scene → one CI gate for the whole project's
+// structural health; exits 1 if any file is broken (incl. unloadable ones).
+export function cmdVerifyAll(scan, projectDir, flags) {
+  const r = verifyAllData(scan, projectDir);
+  if (r.error) failExit(r);
+  if (flags.json) { console.log(JSON.stringify(r)); process.exit(r.valid ? 0 : 1); }
+  const parts = [`${r.passed}/${r.total} valid`];
+  if (r.failures.length) parts.push(`${r.failures.length} BROKEN`);
+  if (r.warnCount) parts.push(`${r.warnCount} warning(s)`);
+  console.log(`verify (all) — ${parts.join(', ')}  ${r.valid ? '✓' : '✗'}`);
+  for (const f of r.failures) {
+    console.log(`  ✗ ${f.file} — ${f.errors.length} error(s)`);
+    for (const e of f.errors) console.log(`      [${e.code}] ${e.msg}`);
+  }
+  process.exit(r.valid ? 0 : 1); // non-zero on any broken file → CI-gateable
+}
+
+// ---- verify --roundtrip: offline, read-only round-trip audit (no live engine) -
+// `verify <file> --roundtrip` (one file) or `verify --all --roundtrip` (sweep
+// every prefab/scene). byte round-trip = serializer fidelity (WARN); add-then-
+// remove invertible probe = compaction/clone corruption (ERROR). Exits non-zero
+// on any hard failure → CI-gateable, and runs WITHOUT the editor (unlike
+// native-verify), so it gates the edit engine on real project data in cloud CI.
+export function cmdRoundtrip(scan, projectDir, flags, pos) {
+  if (!flags.all && !pos[0]) { console.error('verify --roundtrip needs a <file>, or --all to sweep the project'); process.exit(1); }
+  const r = auditRoundtripData(scan, projectDir, { all: !!flags.all, file: pos[0] });
+  if (r.error) failExit(r);
+  if (flags.json) { console.log(JSON.stringify(r)); process.exit(r.valid ? 0 : 1); }
+  const parts = [`${r.passed}/${r.total} ok`];
+  if (r.failures.length) parts.push(`${r.failures.length} FAIL`);
+  if (r.byteDivergent.length) parts.push(`${r.byteDivergent.length} byte-divergent`);
+  if (r.unprobed.length) parts.push(`${r.unprobed.length} unprobed`);
+  console.log(`round-trip audit (${r.scope}) — ${parts.join(', ')}  ${r.valid ? '✓' : '✗'}`);
+  for (const f of r.failures) console.log(`  ✗ [${f.kind}] ${f.file} — ${f.detail}`);
+  for (const b of r.byteDivergent) console.log(`  ⚠ [byte] ${b.file} — serializer ${b.bytesOut}B ≠ source ${b.bytesIn}B (reformats untouched lines on edit)`);
+  for (const u of r.unprobed) console.log(`  · [skip] ${u.file} — ${u.reason}`);
+  process.exit(r.valid ? 0 : 1); // non-zero on any hard failure → CI-gateable
 }
 
 // ---- native-verify: cross-check coir's read against the LIVE engine ----------

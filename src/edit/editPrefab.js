@@ -660,3 +660,66 @@ export function verifyDoc(arr, { compName = null } = {}) {
 
   return { errors, warnings };
 }
+
+/**
+ * Byte-fidelity round-trip: does coir's serializer reproduce the file verbatim?
+ * (`serialize(parse(raw)) === raw`). A mismatch is NOT corruption — the parse is
+ * lossless for valid JSON — it means coir's formatting diverges from the editor's
+ * (float notation, unicode escaping, …), so an edit would reformat untouched
+ * lines and bloat the diff. The audit reports this at WARN level. Returns
+ * { byteEqual, bytesIn, bytesOut } or { error, code } on a parse failure /
+ * non-array document (the file-wide `{error}`-on-failure convention).
+ * @param {string} raw
+ * @returns {{byteEqual:boolean, bytesIn:number, bytesOut:number}|{error:string, code:string}}
+ */
+export function roundTrip(raw) {
+  let arr;
+  try { arr = JSON.parse(raw); } catch (e) { return { error: e instanceof Error ? e.message : String(e), code: 'parse' }; }
+  if (!Array.isArray(arr)) return { error: 'document is not a JSON array', code: 'not-array' };
+  const out = serialize(arr, raw);
+  return { byteEqual: out === raw, bytesIn: raw.length, bytesOut: out.length };
+}
+
+// Canonicalize for the invertibility compare: an empty/null `_children` or
+// `_components` is equivalent to an absent one (the engine treats them the same),
+// so addNode's ONE benign side effect — initializing a parent's `_children` to []
+// when it had none — doesn't read as corruption. Empty is never equated with
+// NON-empty, so a genuinely dropped child/component is still caught.
+function probeCanon(s) {
+  return JSON.stringify(JSON.parse(s), (k, v) =>
+    ((k === '_children' || k === '_components') && (v == null || (Array.isArray(v) && v.length === 0)) ? undefined : v));
+}
+
+/**
+ * Invertible-edit probe: run a semantically-NULL op pair through the REAL engine —
+ * add a throw-away node under the first node (exercising addNode's template-by-
+ * example clone + PrefabInfo path) then real-delete it (exercising removeNode's
+ * global `__id__` compaction) — and assert the result canonicalizes back to the
+ * ORIGINAL. The added entries are the highest indices, so a correct compaction
+ * renumbers nothing and restores the input; if "add then remove" does NOT return
+ * to the start (modulo empty-vs-absent `_children`, see probeCanon), the clone/
+ * compaction path mutated something it shouldn't — a corruption class the
+ * synthetic fixtures never surface. `verifyErrors` is the DELTA — structural
+ * errors present after the probe that weren't there before, so an already-broken
+ * file (which plain `verify` flags) still passes as long as the engine PRESERVES
+ * its state. PURE: copies `arr` first, never mutates the input, never writes.
+ * Returns { invertible, verifyErrors } or { error, code } when it couldn't probe
+ * (no node to attach to / engine refused).
+ * @param {any[]} arr @param {{compName?:((rawType:any)=>string)|null}} [opts]
+ * @returns {{invertible:boolean, verifyErrors:Array<{code:string,msg:string,index?:number}>}|{error:string, code:string}}
+ */
+export function probeInvertible(arr, { compName = null } = {}) {
+  if (!Array.isArray(arr) || !arr.length) return { error: 'not a document array', code: 'empty' };
+  const before = JSON.stringify(arr);
+  const work = JSON.parse(before); // a private copy — the engine ops mutate in place
+  const baseErrors = new Set(verifyDoc(work, { compName }).errors.map((e) => `${e.code}|${e.msg}`)); // pre-existing, before any probe
+  let parentIdx = -1;
+  for (let i = 0; i < work.length; i++) { if (work[i] && isNodeType(work[i].__type__)) { parentIdx = i; break; } }
+  if (parentIdx < 0) return { error: 'no cc.Node/cc.Scene to attach a probe to', code: 'no-node' };
+  const add = addNode(work, parentIdx, '__coir_probe__');
+  if (add.error || add.index == null) return { error: add.error || 'addNode returned no index', code: 'add-failed' };
+  const rm = removeNode(work, add.index);
+  if (rm.error || !rm.newArr) return { error: rm.error || 'removeNode returned no array', code: 'rm-failed' };
+  const newErrors = verifyDoc(rm.newArr, { compName }).errors.filter((e) => !baseErrors.has(`${e.code}|${e.msg}`));
+  return { invertible: probeCanon(JSON.stringify(rm.newArr)) === probeCanon(before), verifyErrors: newErrors };
+}

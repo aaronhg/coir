@@ -11,7 +11,7 @@ import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
 import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, collectPluginCheckers } from '../core/rules.js';
-import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyText } from '../edit/ops.js';
+import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyAllData, verifyText, auditRoundtripData } from '../edit/ops.js';
 import { unifiedDiff } from '../edit/diff.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
@@ -188,13 +188,26 @@ export const TOOLS = [
   },
   {
     name: 'verify',
-    description: 'OFFLINE structural validation of a prefab/scene (no live engine needed): checks every {__id__} reference resolves, node↔child↔parent and component back-refs, null gaps, orphan entries, and __type__ resolvability. Returns { valid, errors[], warnings[] }. Run after an edit_* (or before relying on a file) to catch corruption the engine would reject.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['file'],
-      properties: { file: { type: 'string', description: 'The prefab/scene file.' } } },
+    description: 'OFFLINE structural validation of a prefab/scene (no live engine needed): checks every {__id__} reference resolves, node↔child↔parent and component back-refs, null gaps, orphan entries, and __type__ resolvability. Returns { valid, errors[], warnings[] } for one file, or with all:true runs the same check over EVERY prefab/scene and returns { valid, total, passed, failures[] } (one project-wide structural gate). Run after an edit_* (or before relying on a file) to catch corruption the engine would reject.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: { file: { type: 'string', description: 'The prefab/scene file (omit when all:true).' }, all: { type: 'boolean', description: 'Validate every prefab/scene in the project (no file needed).' } } },
     run: (ctx, a) => {
+      if (a.all) return { data: verifyAllData(ctx.scan, ctx.projectDir) };
+      if (!a.file) return { error: 'verify needs a file (or all:true)' };
       const r = verifyData(ctx.scan, ctx.projectDir, a.file);
       if (r.error) return { error: r.error, candidates: r.candidates };
       return { data: { file: r.file, entries: r.entries, valid: r.valid, errors: r.errors, warnings: r.warnings } };
+    },
+  },
+  {
+    name: 'roundtrip',
+    description: 'OFFLINE, READ-ONLY round-trip audit of prefab/scene files (no live engine — the headless complement to native-verify). For each file: byte round-trip (does coir reproduce the source verbatim — serializer/diff fidelity, a warning) and an invertible-edit probe (add-then-remove a node through the real edit engine; the result MUST equal the original, else a compaction/clone corruption bug). Set all:true to sweep every prefab/scene, or pass file for one. Never writes. Returns { total, passed, failures[], byteDivergent[], unprobed[], valid }.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: { file: { type: 'string', description: 'A single prefab/scene to audit (omit when all:true).' }, all: { type: 'boolean', description: 'Audit every prefab/scene in the project.' } } },
+    run: (ctx, a) => {
+      const r = auditRoundtripData(ctx.scan, ctx.projectDir, { all: !!a.all, file: a.file });
+      if (r.error) return { error: r.error, candidates: r.candidates };
+      return { data: r };
     },
   },
   {

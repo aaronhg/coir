@@ -205,6 +205,33 @@ test('mcp: verify tool — sound prefab valid, broken prefab reports errors', as
   assert.ok(bad.errors.some((e) => e.code === 'bad-ref' || e.code === 'bad-child'));
 });
 
+test('mcp: verify all:true — project-wide structural gate flags the broken prefab', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [call(1, 'verify', { all: true })]);
+  const d = dataOf(r[1]);
+  assert.equal(d.scope, 'all');
+  assert.equal(d.valid, false);
+  assert.ok(d.failures.some((f) => f.file === 'Broken.prefab'));
+});
+
+test('mcp: roundtrip tool — sound prefab invertible; broken prefab skipped (pre-broken), all valid', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'roundtrip', { file: 'Foo.prefab' }),
+    call(2, 'roundtrip', { file: 'Broken.prefab' }),
+    call(3, 'roundtrip', { all: true }),
+  ]);
+  assert.equal(dataOf(r[1]).valid, true);
+  assert.equal(dataOf(r[1]).passed, 1);
+  const broken = dataOf(r[2]);
+  assert.equal(broken.valid, true); // skipped, not failed — plain verify owns it
+  assert.equal(broken.unprobed[0].reason, 'pre-broken');
+  const all = dataOf(r[3]);
+  assert.equal(all.scope, 'all');
+  assert.equal(all.failures.length, 0);
+  assert.ok(all.unprobed.some((u) => u.file === 'Broken.prefab'));
+});
+
 test('mcp: tree values:true inlines node + component raw values', async () => {
   const dir = await mk();
   const r = await rpc(dir, [call(1, 'tree', { file: 'Foo.prefab', values: true })]);
