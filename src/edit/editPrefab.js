@@ -7,6 +7,7 @@
 //
 // See docs/EDITING.md for the full design.
 import fs from 'node:fs';
+import { nodePathOf as classifyNodePathOf } from '../core/classify.js';
 
 /**
  * Read a scene/prefab and verify it is a 3.x file (a JSON array of tagged
@@ -78,19 +79,10 @@ export function writeAtomic(absPath, text, { backup = false, expectMtime = null 
 
 const isNodeType = (t) => t === 'cc.Node' || t === 'cc.Scene';
 
-/** node path (`/`-joined `_name` from the root) for the node at `idx`. */
-function nodePathOf(arr, idx) {
-  const names = []; let cur = idx; const seen = new Set();
-  while (cur != null && !seen.has(cur)) {
-    seen.add(cur);
-    const o = arr[cur];
-    if (!o || !isNodeType(o.__type__)) break;
-    names.push(o._name ?? '');
-    const p = o._parent;
-    cur = p && typeof p.__id__ === 'number' ? p.__id__ : null;
-  }
-  return names.reverse().join('/');
-}
+/** node path (`/`-joined `_name` from the root) for the node at `idx`. The canonical
+ *  impl lives in classify.js (shared with the browser report); editPrefab keys an
+ *  unnamed node as '' (its selector-index map relies on that). */
+const nodePathOf = (arr, idx) => classifyNodePathOf(arr, idx, () => '');
 
 /** Map node path → [arrayIndex…]; a path with >1 entry means same-name siblings. */
 export function buildNodeIndex(arr) {
@@ -726,47 +718,10 @@ export function probeInvertible(arr, { compName = null } = {}) {
   return { invertible: probeCanon(JSON.stringify(rm.newArr)) === probeCanon(before), verifyErrors: newErrors };
 }
 
-/**
- * Classify every nested-instance `propertyOverride` in a parsed prefab/scene as
- * **on-root** vs **deeper**. An override targets the instance ROOT iff its
- * `TargetInfo.localID` is the single fileId of the host instance node's
- * `PrefabInfo` — that's the placement/identity layer (`_lpos`/`_name`/… the
- * editor pins on every instance). Anything else (a different/longer `localID`)
- * is a property of a node/component **inside** the instance. `cc.TargetOverrideInfo`
- * (reference wiring) is NOT a propertyOverride and is intentionally ignored here.
- * Pure read; drives the `no-deep-instance-override` check rule. See
- * docs/NESTED-PREFABS.md. Returns one record per override:
- * `{ instance, prop, localID, onRoot }`.
- * @param {any[]} arr
- * @returns {Array<{instance:string, prop:string, localID:string[], onRoot:boolean}>}
- */
-export function findInstanceOverrides(arr) {
-  if (!Array.isArray(arr)) return [];
-  const at = (ref) => (ref && typeof ref.__id__ === 'number') ? arr[ref.__id__] : null;
-  // PrefabInstance index → { host node name, that node's PrefabInfo.fileId }
-  const hostByInstance = new Map();
-  arr.forEach((n, j) => {
-    if (!n || !isNodeType(n.__type__) || !n._prefab) return;
-    const pi = at(n._prefab);
-    if (pi && pi.__type__ === 'cc.PrefabInfo' && pi.instance && typeof pi.instance.__id__ === 'number') {
-      hostByInstance.set(pi.instance.__id__, { name: n._name || `#${j}`, fileId: pi.fileId });
-    }
-  });
-  const out = [];
-  arr.forEach((o, i) => {
-    if (!o || o.__type__ !== 'cc.PrefabInstance') return;
-    const host = hostByInstance.get(i) || { name: `#${i}`, fileId: null };
-    for (const ref of o.propertyOverrides || []) {
-      const ov = at(ref);
-      if (!ov || ov.__type__ !== 'CCPropertyOverrideInfo') continue;
-      const ti = at(ov.targetInfo);
-      const localID = ti && Array.isArray(ti.localID) ? ti.localID : [];
-      const onRoot = localID.length === 1 && host.fileId != null && localID[0] === host.fileId;
-      out.push({ instance: host.name, prop: (ov.propertyPath || []).join('.'), localID, onRoot });
-    }
-  });
-  return out;
-}
+// findInstanceOverrides / findPreviewCanvasLeaks live in the pure, fs-free
+// classify.js (so the browser 報告 tab can import them); re-exported here for the
+// existing ops.js/rules.js import sites.
+export { findInstanceOverrides, findPreviewCanvasLeaks } from '../core/classify.js';
 
 const samePropPath = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => String(x) === String(b[i]));
 
@@ -850,17 +805,3 @@ export function setCrossRef(arr, sourceCompIndex, propertyPath, instanceRootInde
   return { ok: true };
 }
 
-/**
- * Detect a leaked editor PREVIEW CANVAS: a node named `should_hide_in_hierarchy`
- * (or `…_should_hide_in_hierarchy`) is the hidden Canvas+Camera the editor injects
- * into the live tree to render a prefab in isolation (prefab edit mode). It is
- * `LockedInEditor` and must NEVER be saved into a file — when it is, the prefab
- * has gained a stray Canvas. Returns the offending node names (empty = clean).
- * See docs/NESTED-PREFABS.md.
- * @param {any[]} arr @returns {string[]}
- */
-export function findPreviewCanvasLeaks(arr) {
-  if (!Array.isArray(arr)) return [];
-  return arr.filter((o) => o && isNodeType(o.__type__) && typeof o._name === 'string' && o._name.includes('should_hide_in_hierarchy'))
-    .map((o) => o._name);
-}

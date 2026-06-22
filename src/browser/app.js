@@ -114,7 +114,7 @@ async function openRoot(root) {
   for (const p of projectP) srcOf.set(p, 'project');
   for (const p of runtimePlugins) srcOf.set(p, 'use');
   const plugins = dedupePlugins([...PLUGINS, ...globalP, ...projectP, ...runtimePlugins]);
-  const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress });
+  const scan = await scanProject(provider, { plugins, onProgress: ui.onProgress, env: 'browser' });
   scan.adjacency = buildAdjacency(scan.edges);
   ui.setScan(scan, provider.projectName, { plugins, provider });
   // Show the active NON-builtin plugins, each prefixed `source.name`.

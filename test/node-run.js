@@ -34,6 +34,7 @@ async function main() {
   const t0 = Date.now();
   const scan = await scanProject(makeFsProvider(assetsRoot), {
     plugins,
+    env: 'cli',
     onProgress: ({ phase, done, total }) => {
       if (done === total) process.stderr.write(`  ${phase}: ${done}/${total}\n`);
     },

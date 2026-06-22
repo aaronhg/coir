@@ -612,7 +612,7 @@ async function main() {
 
   let scan;
   const fp = makeFsProvider(path.join(projectDir, 'assets'));
-  try { scan = await scanProject(fp, { plugins }); }
+  try { scan = await scanProject(fp, { plugins, env: 'cli' }); }
   catch (e) {
     console.error(M.scanFail(e.message));
     if (flags.project == null && /ENOENT/.test(e.message)) console.error(M.scanHint); // default cwd had no assets/ → likely meant -C

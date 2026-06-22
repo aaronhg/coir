@@ -28,7 +28,7 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
   const assetsDir = path.join(projectDir, 'assets');
   const fp = makeFsProvider(assetsDir);
   const state = { scan: null, dirty: false, projectDir, plugins }; // plugins → the `check` tool's plugin checkers
-  async function rescan() { state.scan = await scanProject(fp, { plugins }); state.dirty = false; }
+  async function rescan() { state.scan = await scanProject(fp, { plugins, env: 'mcp' }); state.dirty = false; }
   state.markDirty = () => { state.dirty = true; };
   state.forceRescan = rescan;
   state.readText = (p) => fp.readText(p); // plugin MCP tools read sources under assets/ via ctx.readText

@@ -88,6 +88,8 @@ export interface Adjacency {
 
 /** The contract object scanProject returns — the boundary between core and UI. */
 export interface ScanResult {
+  /** The host that ran the scan, if the host set it. */
+  env?: 'cli' | 'mcp' | 'browser' | 'editor';
   assets: Map<string, Asset>;
   byPath: Map<string, Asset>;
   edges: Edge[];
@@ -109,6 +111,8 @@ export interface ScanResult {
  * nothing — it uses only ctx — so a third-party plugin needs no build step.
  */
 export interface PluginContext {
+  /** The host that ran the scan: 'cli' | 'mcp' | 'browser' | 'editor' (cocos-extension). Undefined if an embedder didn't set it. Lets a plugin branch by environment (e.g. skip a browser-only report under the CLI). */
+  env?: 'cli' | 'mcp' | 'browser' | 'editor';
   assets: Map<string, Asset>;
   byPath: Map<string, Asset>;
   subOwner: Map<string, SubOwner>;
@@ -142,6 +146,17 @@ export interface PluginContext {
     subOf(ref: string): string | null;
     looksCompressed(token: string): boolean;
     decompressUuid(token: string): string;
+  };
+  /** Pure prefab/scene array classifiers — parse a prefab's JSON (via `readText`) then call these. See src/core/classify.js. */
+  prefab: {
+    /** nodePath of the node at `index` (walk `_parent` to the root). Unnamed node → `unnamed(i)` (default `#i`). */
+    nodePathOf(arr: any[], index: number, unnamed?: (i: number) => string): string;
+    /** Map a `PrefabInfo.fileId` to the owning node's nodePath within `arr` (e.g. a source prefab). */
+    fileIdToPath(arr: any[], fileId: string): string | null;
+    /** Classify nested-instance propertyOverrides as on-root vs deeper. */
+    findInstanceOverrides(arr: any[]): Array<{ instance: string; instancePath: string; sourceUuid: string | null; prop: string; localID: string[]; onRoot: boolean }>;
+    /** Names of leaked editor-preview Canvas nodes (`should_hide_in_hierarchy`). */
+    findPreviewCanvasLeaks(arr: any[]): string[];
   };
   /** Read-only view of the component/extends graph built during script pruning. */
   scripts: {
@@ -339,4 +354,6 @@ export interface CommandContext {
 export interface ScanOptions {
   plugins?: Plugin[];
   onProgress?(p: { phase: string; done: number; total: number }): void;
+  /** The host running the scan. Surfaced to plugins as `ctx.env` + on the result as `scan.env`. */
+  env?: 'cli' | 'mcp' | 'browser' | 'editor';
 }
