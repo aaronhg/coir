@@ -30,7 +30,7 @@ async function mk() {
     { __type__: 'cc.Prefab', _name: 'Foo', data: { __id__: 1 } },
     { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }], _components: [{ __id__: 3 }], _active: true },
     { __type__: 'cc.Node', _name: 'Title', _parent: { __id__: 1 }, _children: [], _components: [{ __id__: 4 }], _active: true },
-    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, _num: 0, _col: null, _target: null }, // fields edit_set/edit_set_ref tests touch (must pre-exist — coir only edits existing fields)
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, _enabled: true, _num: 0, _col: null, _target: null, nums: [1, 2, 3] }, // fields edit_set/edit_set_ref/array-item tests touch (must pre-exist — coir only edits existing fields)
     { __type__: 'cc.Label', node: { __id__: 2 }, _string: 'Hi', _sub: '' },
   ]);
   await w('Foo.prefab.meta', { importer: 'prefab', uuid: 'f0f0f0f0-f0f0-f0f0-f0f0-f0f0f0f0f0f0' });
@@ -78,7 +78,7 @@ test('mcp: initialize + tools/list expose the read/write surface', async () => {
   assert.equal(r[1].result.protocolVersion, '2025-06-18'); // echoes the client's
   assert.ok(r[1].result.capabilities.tools);
   const names = r[2].result.tools.map((t) => t.name);
-  for (const n of ['find', 'deps', 'tree', 'get', 'edit_set', 'edit_rm_node', 'native_verify', 'roundtrip']) assert.ok(names.includes(n), `missing ${n}`);
+  for (const n of ['find', 'deps', 'tree', 'get', 'edit_set', 'edit_rm_node', 'native_verify', 'roundtrip', 'edit_reorder_array', 'edit_add_array_item', 'edit_rm_array_item']) assert.ok(names.includes(n), `missing ${n}`);
   assert.ok(names.filter((n) => n.startsWith('edit_')).length >= 10); // the write surface
 });
 
@@ -94,6 +94,21 @@ test('mcp: read tools (find / tree / get) return shared query data', async () =>
   assert.equal(tree.nodes[0].path, 'Root/Title');
   assert.equal(tree.nodes[0].components[0].selector, 'Root/Title:cc.Label');
   assert.equal(dataOf(r[3]).value, 'Hi');
+});
+
+test('mcp: array-item ops (reorder / add / rm) through the shared seam', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'edit_reorder_array', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums', perm: [2, 0, 1] }),
+    call(2, 'get', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums' }),
+    call(3, 'edit_add_array_item', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums', value: 99, at: 0 }),
+    call(4, 'get', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums' }),
+    call(5, 'edit_rm_array_item', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums', index: 0 }),
+    call(6, 'get', { file: 'Foo.prefab', selector: 'Root:cc.Sprite.nums' }),
+  ]);
+  assert.deepEqual(dataOf(r[2]).value, [3, 1, 2]);      // reorder [2,0,1] of [1,2,3]
+  assert.deepEqual(dataOf(r[4]).value, [99, 3, 1, 2]);  // add 99 at 0
+  assert.deepEqual(dataOf(r[6]).value, [3, 1, 2]);      // rm index 0
 });
 
 test('mcp: deps depth>1 returns the multi-hop tree shape; depth 1 stays flat (CLI/MCP aligned)', async () => {

@@ -12,7 +12,7 @@ import {
   summary, unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, closureReport,
 } from '../src/core/analyze.js';
 import { fileURLToPath } from 'node:url';
-import { makeFsProvider } from '../src/node/fsProvider.js';
+import { makeFsProvider, readCocosVersion } from '../src/node/fsProvider.js';
 import { PLUGINS, dedupePlugins } from '../src/core/plugins/index.js';
 import { loadConfigPlugins, loadProjectConfigPlugins } from '../src/node/loadPlugins.js';
 
@@ -25,7 +25,7 @@ async function main() {
   const assetsRoot = path.join(projectDir, 'assets');
 
   const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
-  const trustProject = process.env.COIR_TRUST_PROJECT_PLUGINS === '1'; // project-local config runs its own code → opt-in
+  const trustProject = process.env.COIR_TRUST_PROJECT_PLUGINS !== '0'; // project-local config loads by default (opt out with =0)
   const plugins = dedupePlugins([
     ...PLUGINS,
     ...await loadConfigPlugins(COIR_ROOT),
@@ -36,6 +36,8 @@ async function main() {
   const scan = await scanProject(makeFsProvider(assetsRoot), {
     plugins,
     env: 'cli',
+    projectDir,
+    cocosVersion: readCocosVersion(projectDir),
     onProgress: ({ phase, done, total }) => {
       if (done === total) process.stderr.write(`  ${phase}: ${done}/${total}\n`);
     },

@@ -1525,3 +1525,99 @@ test('-C <dir> supplies the project dir (verb-first), either position', () => {
   // and edit works with -C too
   assert.equal(json(cliRaw('-C', projectDir, 'edit', 'EditNode.prefab', 'get', 'Root', '-o', 'json')).__type__, 'cc.Node');
 });
+
+// ---- edit array-item ops (reorder-array / rm-array-item / add-array-item) ----
+// Self-contained temp project (these mutate, and exercise the GC-on-remove path).
+test('edit array-item: reorder / rm (value + owned-GC) / add (value·clone·class) + guards', () => {
+  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'coir-arr-'));
+  fsSync.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  const wr = (rel, body) => fsSync.writeFileSync(path.join(dir, 'assets', rel), typeof body === 'string' ? body : JSON.stringify(body));
+  wr('Arr.prefab', [
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [], _components: [{ __id__: 2 }] },
+    { __type__: 'cc.Sprite', node: { __id__: 1 }, nums: [10, 20, 30], cfgs: [{ __id__: 3 }] },
+    { __type__: 'NewConfig', v: 1 }, // an owned data sub-object the cfgs array exclusively holds
+  ]);
+  wr('Arr.prefab.meta', { importer: 'prefab', uuid: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
+  const E = (...a) => spawnSync('node', [CLI, '-C', dir, 'edit', 'Arr.prefab', ...a], { encoding: 'utf8' });
+  const get = (sel) => JSON.parse(E('get', sel, '-o', 'json').stdout.trim());
+
+  // reorder (full permutation)
+  assert.equal(E('reorder-array', 'Root:cc.Sprite.nums', '2,0,1').status, 0);
+  assert.deepEqual(get('Root:cc.Sprite.nums'), [30, 10, 20]);
+  // remove a value element
+  assert.equal(E('rm-array-item', 'Root:cc.Sprite.nums', '0').status, 0);
+  assert.deepEqual(get('Root:cc.Sprite.nums'), [10, 20]);
+  // add a value at a position
+  assert.equal(E('add-array-item', 'Root:cc.Sprite.nums', '--int', '99', '--at', '0').status, 0);
+  assert.deepEqual(get('Root:cc.Sprite.nums'), [99, 10, 20]);
+
+  // clone an owned {__id__} element (NewConfig) → 2 cfgs, offline-complete (no fileId)
+  const c = JSON.parse(E('add-array-item', 'Root:cc.Sprite.cfgs', '--clone', '-o', 'json').stdout.trim());
+  assert.equal(c.needsReimport, false);
+  assert.equal(get('Root:cc.Sprite.cfgs').length, 2);
+  // remove one cfg → the now-orphaned NewConfig is GC'd; the file verifies clean (no orphan-entry)
+  const rm = JSON.parse(E('rm-array-item', 'Root:cc.Sprite.cfgs', '0', '-o', 'json').stdout.trim());
+  assert.equal(rm.gc, 1);
+  assert.match(E('verify').stdout, /structurally valid/);
+  assert.doesNotMatch(E('verify').stdout, /orphan-entry/);
+
+  // empty the cfgs array, then add the first element via --class (stub → needsReimport)
+  assert.equal(E('rm-array-item', 'Root:cc.Sprite.cfgs', '0').status, 0);
+  assert.equal(get('Root:cc.Sprite.cfgs').length, 0);
+  const stub = JSON.parse(E('add-array-item', 'Root:cc.Sprite.cfgs', '--class', 'NewConfig', '-o', 'json').stdout.trim());
+  assert.equal(stub.needsReimport, true);
+  assert.equal(get('Root:cc.Sprite.cfgs').length, 1);
+  // --clone on an empty array (no sibling template) → refused
+  assert.equal(E('rm-array-item', 'Root:cc.Sprite.cfgs', '0').status, 0);
+  assert.notEqual(E('add-array-item', 'Root:cc.Sprite.cfgs', '--clone').status, 0);
+
+  // guards: structural list routed away; non-array refused; bad permutation refused
+  assert.equal(E('reorder-array', '#1._children', '0').status, 2);
+  assert.equal(E('add-array-item', 'Root:cc.Sprite.node', '--int', '1').status, 2);
+  assert.equal(E('reorder-array', 'Root:cc.Sprite.nums', '0,0').status, 2);
+  fsSync.rmSync(dir, { recursive: true, force: true });
+});
+
+// Edge cases: shared/duplicate refs (no GC), owned-closure GC, --ref, kind warning.
+test('edit array-item edge cases: shared/dup refs · owned-closure GC · --ref · kind warning', () => {
+  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'coir-arr2-'));
+  fsSync.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  const fresh = () => fsSync.writeFileSync(path.join(dir, 'assets', 'E.prefab'), JSON.stringify([
+    { __type__: 'cc.Prefab', data: { __id__: 1 } },
+    { __type__: 'cc.Node', _name: 'Root', _parent: null, _children: [{ __id__: 2 }, { __id__: 3 }], _components: [{ __id__: 4 }] },
+    { __type__: 'cc.Node', _name: 'A', _parent: { __id__: 1 }, _children: [], _components: [] },
+    { __type__: 'cc.Node', _name: 'B', _parent: { __id__: 1 }, _children: [], _components: [] },
+    { __type__: 'Comp', node: { __id__: 1 }, noderefs: [{ __id__: 2 }], dups: [{ __id__: 7 }, { __id__: 7 }], owned: [{ __id__: 5 }, { __id__: 6 }], nested: { inner: [10, 20, 30] } },
+    { __type__: 'Owned', x: 1 },                       // #5
+    { __type__: 'OwnerWithChild', child: { __id__: 8 } }, // #6 — OWNS #8
+    { __type__: 'Dup', y: 2 },                          // #7 — referenced by dups[0] AND dups[1]
+    { __type__: 'GrandChild', z: 3 },                   // #8 — owned by #6
+  ]));
+  fsSync.writeFileSync(path.join(dir, 'assets', 'E.prefab.meta'), '{"importer":"prefab","uuid":"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"}');
+  const J = (...a) => JSON.parse(spawnSync('node', [CLI, '-C', dir, 'edit', 'E.prefab', ...a, '-o', 'json'], { encoding: 'utf8' }).stdout.trim());
+  const get = (sel) => JSON.parse(spawnSync('node', [CLI, '-C', dir, 'edit', 'E.prefab', 'get', sel, '-o', 'json'], { encoding: 'utf8' }).stdout.trim());
+  const ver = () => spawnSync('node', [CLI, '-C', dir, 'edit', 'E.prefab', 'verify'], { encoding: 'utf8' }).stdout;
+
+  // a SHARED node ref (A is also in Root._children) → ref dropped, node NOT deleted
+  fresh(); assert.equal(J('rm-array-item', 'Root:Comp.noderefs', '0').gc, 0);
+  assert.equal(get('Root/A').__type__, 'cc.Node'); // A survives
+  // a DUPLICATE ref (#7 twice) → removing one leaves it referenced → no GC
+  fresh(); assert.equal(J('rm-array-item', 'Root:Comp.dups', '0').gc, 0);
+  assert.equal(get('Root:Comp.dups').length, 1);
+  // an OWNED object that itself owns a nested entry (#6 → #8) → GC the whole closure
+  fresh(); assert.equal(J('rm-array-item', 'Root:Comp.owned', '1').gc, 2);
+  assert.match(ver(), /structurally valid/);
+  assert.doesNotMatch(ver(), /orphan-entry/);
+  // reorder a nested array path
+  fresh(); J('reorder-array', 'Root:Comp.nested.inner', '2,0,1');
+  assert.deepEqual(get('Root:Comp.nested.inner'), [30, 10, 20]);
+  // --ref appends an intra-file {__id__} to an existing node
+  fresh(); J('add-array-item', 'Root:Comp.noderefs', '--ref', 'Root/A');
+  assert.deepEqual(get('Root:Comp.noderefs').at(-1), { __id__: 2 });
+  // kind mismatch (a scalar into a {__id__} array) → applied, but WARNED
+  fresh(); const w = J('add-array-item', 'Root:Comp.noderefs', '--int', '99');
+  assert.match(w.warning || '', /kind mismatch/);
+  assert.equal(get('Root:Comp.noderefs').at(-1), 99); // still inserted (non-blocking)
+  fsSync.rmSync(dir, { recursive: true, force: true });
+});

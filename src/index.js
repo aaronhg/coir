@@ -9,7 +9,7 @@ import path from 'node:path';
 export { scanProject } from './core/scan.js';
 export { buildAdjacency, dependencyClosure, dependentClosure, neighbors } from './core/graph.js';
 export { encodeTopo, decodeTopo, MAX_BLOB_CHARS } from './core/topohash.js';
-export { makeFsProvider } from './node/fsProvider.js';
+export { makeFsProvider, readCocosVersion } from './node/fsProvider.js';
 export { PLUGINS, BUILTIN_PLUGINS, dedupePlugins } from './core/plugins/index.js';
 export { loadConfigPlugins, loadProjectConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 

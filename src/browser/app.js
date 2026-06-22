@@ -23,6 +23,22 @@ window.coir = {
 // to a missing URL (fetch included, not just import), so we skip the request
 // entirely off-localhost; on localhost we fetch + blob-import. Cached (shared).
 const IS_DEV_HOST = ['localhost', '127.0.0.1', '[::1]', ''].includes(location.hostname);
+
+// The browser only uses a plugin's edges / colors / messages / importerTypes /
+// typeByExt / jsonSourceExts / rootTypes / reports. These fields take NO effect
+// here — warn so a config that "loaded fine" but silently does nothing is visible.
+const BROWSER_IGNORES = {
+  commands: 'used only by the CLI/MCP (and often need imports — put them in coir.plugins.node.mjs)',
+  assetMenus: 'used only by the Cocos editor extension',
+  rules: 'used only by `coir check` (CLI/MCP)',
+};
+function warnBrowserIneffective(plugins, source) {
+  for (const p of plugins || []) {
+    const dead = Object.keys(BROWSER_IGNORES).filter((k) => Array.isArray(p[k]) && p[k].length);
+    if (dead.length) console.warn(`coir: plugin "${p.name || '(unnamed)'}" (${source} coir.plugins.mjs) — ${dead.map((k) => `${k} ${BROWSER_IGNORES[k]}`).join('; ')}`);
+  }
+}
+
 let globalPluginsP = null;
 function loadGlobalPlugins() {
   if (!globalPluginsP) globalPluginsP = (async () => {
@@ -37,17 +53,20 @@ function loadGlobalPlugins() {
       const exp = mod.default ?? mod.plugins;
       const arr = (exp == null ? [] : (Array.isArray(exp) ? exp : [exp])).filter((p) => p && typeof p === 'object');
       console.info(`coir: global coir.plugins.mjs loaded (${arr.length} plugin${arr.length === 1 ? '' : 's'})`);
+      warnBrowserIneffective(arr, 'global');
       return arr;
-    } catch (e) { console.info('coir: global coir.plugins.mjs skipped —', (e && e.message) || e); return []; } // non-fatal: fall back to built-ins
+    } catch (e) { console.warn('coir: global coir.plugins.mjs skipped —', (e && e.message) || e, '\n  (a browser config must be self-contained — move imports / node APIs / commands to coir.plugins.node.mjs, which only node hosts load)'); return []; } // non-fatal: fall back to built-ins
     finally { URL.revokeObjectURL(blob); }
   })();
   return globalPluginsP;
 }
 loadGlobalPlugins(); // warm it at startup so it's ready by the time a project is picked
 
-// Per-project config: read `coir.plugins.mjs` from the picked directory handle
-// (sibling of assets/) and import it via a blob URL — re-read each pick, so edits
-// apply on reselect. Only works if the user picked the PROJECT root (not assets/).
+// Per-project config: read the PORTABLE `coir.plugins.mjs` from the picked directory
+// handle (sibling of assets/) and import it via a blob URL — re-read each pick, so
+// edits apply on reselect. Only works if the user picked the PROJECT root (not assets/).
+// The NODE config (`coir.plugins.node.mjs`) is deliberately NOT loaded here — the
+// browser can't resolve its imports / run its node APIs (node hosts load it instead).
 async function loadProjectPlugins(root) {
   for (const name of ['coir.plugins.mjs', 'coir.plugins.js']) {
     let text;
@@ -57,9 +76,10 @@ async function loadProjectPlugins(root) {
     try {
       const mod = await import(/* webpackIgnore: true */ url);
       const exp = mod.default ?? mod.plugins;
-      const arr = exp == null ? [] : (Array.isArray(exp) ? exp : [exp]);
-      return arr.filter((p) => p && typeof p === 'object');
-    } catch (e) { console.info(`coir: ${name} skipped —`, (e && e.message) || e); return []; } // non-fatal: fall back to built-ins
+      const arr = (exp == null ? [] : (Array.isArray(exp) ? exp : [exp])).filter((p) => p && typeof p === 'object');
+      warnBrowserIneffective(arr, 'project');
+      return arr;
+    } catch (e) { console.warn(`coir: ${name} skipped —`, (e && e.message) || e, '\n  (a browser config must be self-contained — move imports / node APIs / commands to coir.plugins.node.mjs, which only node hosts load)'); return []; } // non-fatal: fall back to built-ins
     finally { URL.revokeObjectURL(url); }
   }
   return [];

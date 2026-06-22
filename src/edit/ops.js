@@ -12,7 +12,8 @@ import { resolveTarget } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
   nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc, roundTrip, probeInvertible,
-  findInstanceOverrides, findPreviewCanvasLeaks, setRootOverride, setCrossRef } from './editPrefab.js';
+  findInstanceOverrides, findPreviewCanvasLeaks, setRootOverride, setCrossRef,
+  reorderArray, rmArrayItem, addArrayItem } from './editPrefab.js';
 
 // Operation-level messages — byte-identical to the CLI's prior strings so output
 // is unchanged. (Usage / value-flag messages stay CLI-side in editCli's EM.)
@@ -32,6 +33,9 @@ export const OM = {
   refNeedInstance: (s) => `✗ set-ref --into needs "${s}" to be a nested-instance ROOT (the instance you reference a node inside of)`,
   noSuchProp: (sel, prop) => `✗ "${sel}" has no existing property "${prop}" — coir only edits fields that already exist (a typo, or a field Cocos Creator hasn't written yet). Add it in the editor first, or pass --force to create it (the result then needs a Creator reimport).`,
   notRefField: (sel, kind) => `✗ "${sel}" currently holds a ${kind} value, not a reference — set-ref only points a property that is a node/component reference (its existing value is null or a {__id__}). Use set/set-uuid for a value/asset, or --force to override.`,
+  needArrayProp: (s) => `✗ "${s}" must select an array property (…:Type.arrayProp) for this op`,
+  arrayRoute: (p) => `✗ "${p}" is a structural node/component list — use add-node/rm-node/set-parent (_children) or add-component/rm-component (_components), not the array-item ops`,
+  addArraySource: '✗ add-array-item needs an element source: a value-flag (--str/--int/--json…) / --uuid <asset> / --ref <node|comp> / --clone / --type <Class>',
   selErr: (e) => `✗ ${e}`,
 };
 
@@ -62,6 +66,7 @@ export const REIMPORT = {
   template: (kind) => `the new node's ${kind} was cloned from a minimal fallback (no existing one to template) — open in Cocos Creator to complete it`,
   crossRef: 'a cross-boundary reference (cc.TargetOverrideInfo, no baked branch) was written — reimport in Cocos Creator to refresh the library + let the editor bake its display branch',
   newField: (prop) => `a new property "${prop}" was force-created — coir can't tell a real @property from a typo, so reimport in Cocos Creator to reconcile (accept it, or drop it on save)`,
+  arrayElement: 'the new array element is not yet editor-canonical (a {__type__} stub, or a clone with a regenerated fileId) — reimport in Cocos Creator to finalize it (fill the class @property defaults / a real fileId)',
 };
 
 // True if `propPath` targets a MISSING object key on `obj` (intermediate missing
@@ -156,6 +161,22 @@ function instanceWrite(arr, index) {
   if (root == null) return { root: false };
   if (root === index) return { root: true };
   return { error: OM.deepInstanceEdit((arr[root] && arr[root]._name) || `#${root}`), code: 2 };
+}
+// Array-item ops only touch arbitrary array PROPERTIES — the structural node/
+// component lists have their own ops. Route those away rather than corrupt them.
+function arrayRouteGuard(prop) {
+  const last = String(prop).split('.').pop();
+  return (last === '_children' || last === '_components') ? { error: OM.arrayRoute(prop), code: 2 } : null;
+}
+// The shared head of every array-item op: resolve to a property on an editable
+// (non-instance, non-structural-list) entry. Returns { res } or an error result.
+function resolveArrayTarget(arr, selector, compName) {
+  const res = resolveSelector(arr, selector, compName);
+  if ('error' in res) return selError(res);
+  if (res.kind !== 'property') return { error: OM.needArrayProp(selector), code: 2 };
+  const g = editableGuard(arr, res.index); if (g) return g;
+  const ag = arrayRouteGuard(res.prop); if (ag) return ag;
+  return { res };
 }
 // Resolve a selector to an editable NODE index, or an error result.
 function resolveNode(arr, sel, compName) {
@@ -340,6 +361,45 @@ function applyArrayOp(scan, doc, op, params, projectDir) {
       if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
       doc.arr = r.newArr;
       return { json: { op, component: params.selector, removed: r.removed, cleared: r.cleared } };
+    }
+    case 'reorder-array': {
+      const t = resolveArrayTarget(doc.arr, params.selector, compName); if (t.error) return t;
+      const r = reorderArray(doc.arr, t.res.index, t.res.prop, params.perm);
+      if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+      return { json: { op, selector: params.selector, prop: t.res.prop, perm: params.perm, len: r.len } };
+    }
+    case 'rm-array-item': {
+      const t = resolveArrayTarget(doc.arr, params.selector, compName); if (t.error) return t;
+      const r = rmArrayItem(doc.arr, t.res.index, t.res.prop, params.index);
+      if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+      if (r.newArr) doc.arr = r.newArr; // GC'd a now-orphaned owned sub-object → swap in the compacted array
+      return { json: { op, selector: params.selector, prop: t.res.prop, index: params.index, gc: r.gc || 0 } };
+    }
+    case 'add-array-item': {
+      const t = resolveArrayTarget(doc.arr, params.selector, compName); if (t.error) return t;
+      let spec;
+      if (params.clone) spec = { clone: true };
+      else if (params.elemType != null) spec = { stub: params.elemType };          // --class: minimal {__type__} stub (verbatim name)
+      else if (params.asset != null) { const ra = resolveAssetData(scan, params.asset); if (ra.error) return ra; spec = { value: { __uuid__: ra.uuid } }; }
+      else if (params.ref != null) {                                              // --ref: {__id__} to an existing node/component (intra-file)
+        const tr = resolveSelector(doc.arr, params.ref, compName);
+        if ('error' in tr) return { error: OM.selErr(tr.error), code: 2, candidates: (tr.candidates || []).slice(0, 20) };
+        if (tr.kind === 'property') return { error: OM.refNotNode(params.ref), code: 2 };
+        if (nestedInstanceRoot(doc.arr, tr.index) != null) return { error: OM.instanceGuard(params.ref), code: 2 }; // P1 only — no cross-instance ref
+        spec = { value: { __id__: tr.index } };
+      } else if ('value' in params) spec = { value: params.value };               // a value-flag / --json literal
+      else return { error: OM.addArraySource, code: 1 };
+      // Non-blocking kind warning (like set/set-uuid): inserting an element whose
+      // kind differs from the array's existing elements is allowed (you may mean it)
+      // but flagged — catches a scalar dropped into a {__id__}/{__uuid__} array etc.
+      const cur = getDeep(doc.arr[t.res.index], t.res.prop);
+      const existingKind = (cur && !('error' in cur) && Array.isArray(cur.value) && cur.value.length) ? valueKind(cur.value[0]) : null;
+      const insertedKind = (spec.clone || spec.stub) ? 'ref' : valueKind(spec.value);
+      const r = addArrayItem(doc.arr, t.res.index, t.res.prop, params.at == null ? null : params.at, spec);
+      if ('error' in r) return { error: OM.selErr(r.error), code: 2 };
+      const out = { op, selector: params.selector, prop: t.res.prop, at: r.index };
+      const warning = (existingKind && existingKind !== insertedKind) ? `inserted a ${insertedKind} element into an array of ${existingKind} — kind mismatch (the engine may ignore or degrade it)` : undefined;
+      return r.needsReimport ? { json: out, needsReimport: true, reimportReason: REIMPORT.arrayElement, warning } : { json: out, warning };
     }
     default: return { error: `unknown edit op "${op}"`, code: 1 };
   }

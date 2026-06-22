@@ -14,7 +14,7 @@ The type badges under the banner are shared by all tabs: they filter List/Report
 Fuzzy-matches name/path/uuid, highlighting matched characters. Scopes: <kbd>@</kbd> sprite-frame, <kbd>#</kbd> type, <kbd>></kbd> usage/node, <kbd>~</kbd> edge-kind (type <kbd>~</kbd> to list them); <kbd>#</kbd>/<kbd>~</kbd> are two-part (`#type query`, `~kind query`). Paste a uuid to jump.
 
 ### Shortcuts
-- <kbd>Tab</kbd> switch tab (<kbd>Delete</kbd> reverse), <kbd>Esc</kbd> clear type filter
+- <kbd>]</kbd> next tab, <kbd>[</kbd> previous tab, <kbd>Esc</kbd> clear type filter
 - <kbd>/</kbd> or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>P</kbd> quick search
 - Topology: <kbd>↑</kbd> <kbd>↓</kbd> within a column, <kbd>←</kbd> <kbd>→</kbd> (or two-finger swipe) across columns, <kbd>Enter</kbd> set as new centre, <kbd>−</kbd> back, <kbd>+</kbd> forward, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> find in this topology, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>C</kbd> copy name
 - Size map: arrows move the cell cursor, <kbd>Enter</kbd> drill, <kbd>−</kbd>/<kbd>+</kbd> centre history; single-click drills, double-click jumps to Topology

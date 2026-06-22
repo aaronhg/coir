@@ -31,7 +31,7 @@ import { knownTypes } from './core/meta.js';
 import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { collectPluginCommands, mapPositionals } from './seam/pluginCommands.js';
 import { loadConfigPlugins, loadProjectConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
-import { makeFsProvider } from './node/fsProvider.js';
+import { makeFsProvider, readCocosVersion } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareData } from './seam/shared.js';
 import { depsData, depsTreeData, buildEdgeTree, pruneTreeByType, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
@@ -91,6 +91,8 @@ Edit (in-place — WRITES the file; --dry-run previews · --backup snapshots · 
          set-parent <nodeSel> <newParentSel> [--index i]
          add-node   <parentSel> <name> [--index i]   rm-node <nodeSel>        (real delete + compaction)
          add-component <nodeSel> <ccType>            rm-component <sel:Type>
+         reorder-array <sel:Type.arrProp> 2,0,1   rm-array-item <sel:Type.arrProp> <i>   (arbitrary array props; not _children/_components)
+         add-array-item <sel:Type.arrProp> [--at i] <value-flag | --uuid <asset> | --ref <node|comp> | --clone | --class <Class>>
     value-flags: --str --int --num --enum --bool --color #RRGGBBAA --vec2/3/4 --size --quat --uuid <asset> --null
                  --json '<json>'  (set a whole object/array; a class-name __type__ → compressed token)
 
@@ -127,9 +129,8 @@ Exit codes:  0 ok (incl. no-op)    1 usage/value error    2 not found / ambiguou
 --type   : keep only the given asset types (comma-separated); on the deps/uses tree it keeps the
            intermediate path leading to those types. known: ${KNOWN_TYPES.join(' ')}
 --plugin <file> : load an extra plugin module (repeatable). Auto-loaded: <coirRoot>/coir.plugins.mjs
-           (global). A <projectDir>/coir.plugins.mjs is a trust boundary (runs the project's code) and
-           loads ONLY with --trust-project-plugins (or env COIR_TRUST_PROJECT_PLUGINS=1).
---trust-project-plugins : load the scanned project's coir.plugins.mjs (off by default — it runs arbitrary code).
+           (global) and <projectDir>/coir.plugins.mjs (per project; it runs the project's code).
+--no-trust-project-plugins : do NOT load the scanned project's coir.plugins.mjs (or env COIR_TRUST_PROJECT_PLUGINS=0).
 -C <dir> : the Cocos project dir (git-style; default is the current directory).   -h/--help    -v/--version`;
 
 // Query-side user-facing text (CLI is fixed English). Resolution errors live in
@@ -193,6 +194,11 @@ function parseArgs(argv) {
     else if (a.startsWith('--rules=')) flags.rules = a.slice(8);
     else if (a === '--index') { const v = parseInt(argv[++i], 10); flags.index = Number.isNaN(v) ? null : v; }
     else if (a.startsWith('--index=')) { const v = parseInt(a.slice(8), 10); flags.index = Number.isNaN(v) ? null : v; }
+    else if (a === '--clone') flags.clone = true; // add-array-item: clone a sibling owned element
+    else if (a === '--class') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.class = argv[++i]; } // add-array-item: minimal {__type__} stub class name
+    else if (a === '--ref') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.ref = argv[++i]; } // add-array-item: {__id__} to an existing node/component
+    else if (a === '--at') { const v = parseInt(argv[++i], 10); flags.at = Number.isNaN(v) ? null : v; } // add-array-item: insert position (default append)
+    else if (a.startsWith('--at=')) { const v = parseInt(a.slice(5), 10); flags.at = Number.isNaN(v) ? null : v; }
     else if (a === '--with') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.with = argv[++i]; } // edit tree: keep nodes with this component
     else if (a.startsWith('--with=')) flags.with = a.slice(7);
     else if (a === '--under') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.under = argv[++i]; } // edit tree: scope to a subtree
@@ -203,7 +209,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--kind=')) addKinds(a.slice(7));
     else if (a === '--plugin') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.plugins.push(argv[++i]); }
     else if (a.startsWith('--plugin=')) flags.plugins.push(a.slice(9));
-    else if (a === '--trust-project-plugins') flags.trustProjectPlugins = true; // load the scanned project's coir.plugins.mjs (runs its code)
+    else if (a === '--no-trust-project-plugins') flags.noTrustProjectPlugins = true; // skip the scanned project's coir.plugins.mjs (which runs its code)
     else if (a === '--null') flags.value = { type: 'null', args: [] };
     else if (VALUE_FLAGS[a]) { // typed value for `edit set …`; grab up to arity non-flag tokens (so --vec3 0 0 1 works incl. negatives, but extra positionals aren't swallowed)
       const type = VALUE_FLAGS[a];
@@ -572,13 +578,13 @@ async function main() {
   // Built-ins + coir-root global config + project-local config + --plugin files.
   // External plugins thus live outside the coir repo (most specific last). The
   // project-local config is a trust boundary (runs the scanned project's code) →
-  // gated behind --trust-project-plugins / COIR_TRUST_PROJECT_PLUGINS.
+  // loaded by DEFAULT; opt out with --no-trust-project-plugins / COIR_TRUST_PROJECT_PLUGINS=0.
   const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
-  const trustProject = !!flags.trustProjectPlugins || process.env.COIR_TRUST_PROJECT_PLUGINS === '1';
+  const trustProject = process.env.COIR_TRUST_PROJECT_PLUGINS !== '0' && !flags.noTrustProjectPlugins;
   const plugins = dedupePlugins([
     ...PLUGINS,
     ...await loadConfigPlugins(COIR_ROOT),                       // cross-project / global (the user's own)
-    ...(sameAsRoot ? [] : await loadProjectConfigPlugins(projectDir, { trusted: trustProject })), // this project only (trust-gated)
+    ...(sameAsRoot ? [] : await loadProjectConfigPlugins(projectDir, { trusted: trustProject })), // this project only (loaded by default)
     ...await loadPluginFiles(flags.plugins),                    // --plugin <file>
   ]);
   // Plugin-contributed CLI commands (built-ins always win); also appended to --help.
@@ -594,7 +600,7 @@ async function main() {
 
   let scan;
   const fp = makeFsProvider(path.join(projectDir, 'assets'));
-  try { scan = await scanProject(fp, { plugins, env: 'cli' }); }
+  try { scan = await scanProject(fp, { plugins, env: 'cli', projectDir, cocosVersion: readCocosVersion(projectDir) }); }
   catch (e) {
     console.error(M.scanFail(e.message));
     if (flags.project == null && /ENOENT/.test(e.message)) console.error(M.scanHint); // default cwd had no assets/ → likely meant -C

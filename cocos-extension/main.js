@@ -43,7 +43,7 @@ async function getScan() {
       // each tagged `source.name` — same as the browser UI's status line.
       const active = plugins.filter((p) => !coir.PLUGINS.includes(p)).map((p) => `${srcOf.get(p) || '?'}.${p.name || '(unnamed)'}`);
       if (active.length) console.log(`[coir] plugins: ${active.join(', ')}`);
-      const scan = await coir.scanProject(fp, { plugins, env: 'editor' });
+      const scan = await coir.scanProject(fp, { plugins, env: 'editor', projectDir: Editor.Project.path, cocosVersion: cocosVersion() });
       scan.adjacency = coir.buildAdjacency(scan.edges);
       return { scan, plugins };
     })().catch((e) => { scanP = null; throw e; }); // don't cache a failed scan

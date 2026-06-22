@@ -22,7 +22,11 @@ import path from 'node:path';
 // instance guard, not-a-prefab, …) come back from ops.js verbatim and are printed
 // by failExit, so they live in ONE place (ops.OM) shared with the MCP server.
 const EM = {
-  editUsage: 'edit needs: <file> <op> …   (op: tree / get / set / set-uuid / set-ref / swap-uuid / rename / set-active / set-layer / set-pos / set-scale / set-rot / set-parent / add-node / rm-node / add-component / rm-component)',
+  editUsage: 'edit needs: <file> <op> …   (op: tree / get / set / set-uuid / set-ref / swap-uuid / rename / set-active / set-layer / set-pos / set-scale / set-rot / set-parent / add-node / rm-node / add-component / rm-component / add-array-item / rm-array-item / reorder-array)',
+  reorderUsage: 'reorder-array needs: <file> reorder-array <arraySelector> <perm>   (perm = a FULL permutation, e.g. 2,0,1)',
+  rmArrayUsage: 'rm-array-item needs: <file> rm-array-item <arraySelector> <index>',
+  addArrayUsage: 'add-array-item needs: <file> add-array-item <arraySelector> [--at i] <source>',
+  addArraySource: '✗ add-array-item needs an element source: a value-flag (--str/--int/--json…) / --uuid <asset> / --ref <node|comp> / --clone / --class <Class>',
   editUnknownOp: (op) => `unknown edit op "${op}"`,
   swapUsage: 'swap-uuid needs: <file> swap-uuid <oldAsset> <newAsset>',
   swapNoop: (q) => `(no references to "${q}" in this file — nothing changed)`,
@@ -78,6 +82,9 @@ export function cmdEdit(scan, projectDir, flags, pos) {
     case 'rm-node': return cmdRmNode(scan, projectDir, flags, pos);
     case 'add-component': return cmdAddComponent(scan, projectDir, flags, pos);
     case 'rm-component': return cmdRmComponent(scan, projectDir, flags, pos);
+    case 'reorder-array': return cmdReorderArray(scan, projectDir, flags, pos);
+    case 'rm-array-item': return cmdRmArrayItem(scan, projectDir, flags, pos);
+    case 'add-array-item': return cmdAddArrayItem(scan, projectDir, flags, pos);
     default: console.error(EM.editUnknownOp(op)); process.exit(1);
   }
 }
@@ -441,6 +448,40 @@ function cmdRmNode(scan, projectDir, flags, pos) {
   const r = runEdit(scan, projectDir, 'rm-node', { file: pos[0], selector: sel });
   if (r.error) failExit(r);
   return applyResult(flags, r, `${r.asset.path}: removed ${sel}  (${r.json.removed} entries, ${r.json.cleared} dangling ref(s) cleared)`);
+}
+
+// ---- Tier 3: array-property structural edits (reorder / remove / add element) ---
+function cmdReorderArray(scan, projectDir, flags, pos) {
+  const sel = pos[2]; const permStr = pos[3];
+  if (!sel || !permStr) { console.error(EM.reorderUsage); process.exit(1); }
+  const perm = permStr.split(',').map((s) => parseInt(s.trim(), 10));
+  if (perm.some((x) => Number.isNaN(x))) { console.error(EM.badValue(`"${permStr}" must be comma-separated indices, e.g. 2,0,1`)); process.exit(1); }
+  const r = runEdit(scan, projectDir, 'reorder-array', { file: pos[0], selector: sel, perm });
+  if (r.error) failExit(r);
+  return applyResult(flags, r, `${r.asset.path}: reorder ${sel} → [${perm.join(',')}]`);
+}
+function cmdRmArrayItem(scan, projectDir, flags, pos) {
+  const sel = pos[2]; const idxStr = pos[3];
+  if (!sel || idxStr === undefined) { console.error(EM.rmArrayUsage); process.exit(1); }
+  const index = parseInt(idxStr, 10);
+  if (Number.isNaN(index)) { console.error(EM.badValue(`"${idxStr}" is not an index`)); process.exit(1); }
+  const r = runEdit(scan, projectDir, 'rm-array-item', { file: pos[0], selector: sel, index });
+  if (r.error) failExit(r);
+  return applyResult(flags, r, `${r.asset.path}: rm ${sel}[${index}]${r.json.gc ? `  (GC'd ${r.json.gc} orphaned entr${r.json.gc > 1 ? 'ies' : 'y'})` : ''}`);
+}
+function cmdAddArrayItem(scan, projectDir, flags, pos) {
+  const sel = pos[2];
+  if (!sel) { console.error(EM.addArrayUsage); process.exit(1); }
+  const params = { file: pos[0], selector: sel, at: flags.at != null ? flags.at : null };
+  let what;
+  if (flags.clone) { params.clone = true; what = 'clone'; }
+  else if (flags.class != null) { params.elemType = flags.class; what = `${flags.class} stub`; }
+  else if (flags.ref != null) { params.ref = flags.ref; what = `ref ${flags.ref}`; }
+  else if (flags.value) { params.value = resolveValueSpec(scan, flags.value); what = 'value'; } // --str/--int/--json/--uuid/--vec3/…
+  else { console.error(EM.addArraySource); process.exit(1); }
+  const r = runEdit(scan, projectDir, 'add-array-item', params);
+  if (r.error) failExit(r);
+  return applyResult(flags, r, `${r.asset.path}: add ${what} to ${sel}  (at ${r.json.at})`);
 }
 
 function cmdRmComponent(scan, projectDir, flags, pos) {

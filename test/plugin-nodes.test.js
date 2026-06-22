@@ -49,3 +49,28 @@ test('plugin ctx.addNode + ctx.files: virtual nodes join the graph, stay out of 
   assert.ok(unused.items.some((i) => i.path === 'lonely.png'), 'a real 0-referrer asset IS unused');
   assert.ok(!unused.items.some((i) => i.type === 'notification'), 'virtual nodes are NOT flagged unused');
 });
+
+test('plugin ctx exposes the host projectDir + cocosVersion (and env)', async () => {
+  let seen = null;
+  const probe = { name: 'ctx-probe', edges(ctx) { seen = { projectDir: ctx.projectDir, cocosVersion: ctx.cocosVersion, env: ctx.env }; } };
+  await scanProject(memFP({ 'x.png': 'A', 'x.png.meta': JSON.stringify({ importer: 'image', uuid: '11111111-1111-1111-1111-111111111111' }) }),
+    { plugins: [probe], projectDir: '/proj/Foo', cocosVersion: '3.8.6', env: 'cli' });
+  assert.deepEqual(seen, { projectDir: '/proj/Foo', cocosVersion: '3.8.6', env: 'cli' });
+  // host didn't supply them → undefined (e.g. the browser, FileProvider rooted at assets/)
+  let s2 = null;
+  await scanProject(memFP({ 'x.png': 'A', 'x.png.meta': JSON.stringify({ importer: 'image', uuid: '11111111-1111-1111-1111-111111111111' }) }), { plugins: [{ name: 'p', edges(ctx) { s2 = ctx; } }] });
+  assert.equal(s2.projectDir, undefined);
+  assert.equal(s2.cocosVersion, undefined);
+});
+
+test('readCocosVersion reads creator.version from a project package.json', async () => {
+  const fsSync = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { readCocosVersion } = await import('../src/node/fsProvider.js');
+  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'coir-ver-'));
+  fsSync.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'p', creator: { version: '3.8.6' } }));
+  assert.equal(readCocosVersion(dir), '3.8.6');
+  fsSync.rmSync(path.join(dir, 'package.json'));
+  assert.equal(readCocosVersion(dir), null);     // no package.json → null (graceful)
+  assert.equal(readCocosVersion(undefined), null);
+  fsSync.rmSync(dir, { recursive: true, force: true });
+});

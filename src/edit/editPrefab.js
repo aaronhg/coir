@@ -578,6 +578,107 @@ export function addComponent(arr, nodeIndex, typeName) {
   return { ok: true, index: compIndex };
 }
 
+// ===========================================================================
+//  Array-property structural edits — change an array PROPERTY's length/order,
+//  complementing `set` (which only REPLACES an element's value). The editor
+//  accepts arbitrary array length/order on reimport (verified live against
+//  3.8.6), so a VALUE array (scalars / {__uuid__} / inline {__type__}) is a pure
+//  splice/permute. A `{__id__}` element is treated as just a REFERENCE — removing
+//  it only drops the array membership; the target entry is left intact (no
+//  owned-vs-shared distinction), so a node-ref array never deletes the node.
+//  NOT for _children/_components — those have add-node/rm-node/add-component/
+//  rm-component/set-parent (callers route there).
+// ===========================================================================
+
+// Resolve a property path inside entry `entryIdx` to a live array reference.
+function arrayAt(arr, entryIdx, prop) {
+  const r = getDeep(arr[entryIdx], prop);
+  if ('error' in r) return r;
+  if (!Array.isArray(r.value)) return { error: `"${prop}" is not an array (it is ${r.value === null ? 'null' : typeof r.value})` };
+  return { array: r.value };
+}
+// How many {__id__:id} references exist across the whole doc (for the orphan note).
+function countRefs(arr, id) {
+  let n = 0;
+  const walk = (v) => {
+    if (Array.isArray(v)) { for (const e of v) walk(e); return; }
+    if (v && typeof v === 'object') {
+      if (typeof v.__id__ === 'number') { if (v.__id__ === id) n++; return; } // a ref object — don't recurse
+      for (const k of Object.keys(v)) walk(v[k]);
+    }
+  };
+  for (const e of arr) walk(e);
+  return n;
+}
+
+/** reorder-array: permute the property array by a FULL permutation of 0..len-1. */
+export function reorderArray(arr, entryIdx, prop, perm) {
+  const r = arrayAt(arr, entryIdx, prop); if ('error' in r) return r;
+  const a = r.array; const n = a.length;
+  if (!Array.isArray(perm) || perm.length !== n) return { error: `reorder needs exactly ${n} indices — a permutation of 0..${n - 1}` };
+  const seen = new Set();
+  for (const i of perm) {
+    if (!Number.isInteger(i) || i < 0 || i >= n) return { error: `index ${i} out of range (0..${n - 1})` };
+    if (seen.has(i)) return { error: `duplicate index ${i} — reorder must be a permutation` };
+    seen.add(i);
+  }
+  a.splice(0, n, ...perm.map((i) => a[i])); // rebuild in place (same array object) — refs move, no remap
+  return { ok: true, len: n };
+}
+
+/** rm-array-item: remove element `idx`. A VALUE is dropped. A {__id__} element loses
+ *  its array membership; if that leaves the target UNREFERENCED it was an OWNED
+ *  sub-object → real-delete its owned closure + compact (`ownedClosure`+`removeEntries`,
+ *  the same path rm-node/rm-component use) so no orphan entry lingers (coir's own
+ *  `verify` would flag one). A target still referenced elsewhere (a node also in
+ *  _children, a component also in _components) is NEVER touched. When it GCs, returns
+ *  `newArr` (the caller swaps doc.arr, like rm-node). */
+export function rmArrayItem(arr, entryIdx, prop, idx) {
+  const r = arrayAt(arr, entryIdx, prop); if ('error' in r) return r;
+  const a = r.array;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= a.length) return { error: `index ${idx} out of range (0..${a.length - 1})` };
+  const [removed] = a.splice(idx, 1);
+  if (isRef(removed) && countRefs(arr, removed.__id__) === 0) {
+    const set = ownedClosure(arr, new Set([removed.__id__]));
+    const { keep, cleared } = removeEntries(arr, set);
+    return { ok: true, removed, gc: set.size, cleared, newArr: keep };
+  }
+  return { ok: true, removed, gc: 0 };
+}
+
+/** add-array-item: insert `element` at `at` (default append). For a NEW owned
+ *  sub-object pass {clone:true}: clone a sibling {__id__} target (reset identity),
+ *  append it, and insert its {__id__} — like add-component, so result is
+ *  needsReimport (the editor finalizes any fileId). Else {value} inserts a literal
+ *  value / {__uuid__} / {__id__}-to-existing verbatim. */
+export function addArrayItem(arr, entryIdx, prop, at, spec) {
+  const r = arrayAt(arr, entryIdx, prop); if ('error' in r) return r;
+  const a = r.array;
+  const pos = at == null ? a.length : at;
+  if (!Number.isInteger(pos) || pos < 0 || pos > a.length) return { error: `index ${pos} out of range (0..${a.length})` };
+  let element, needsReimport = false;
+  if (spec.clone) {                       // clone a sibling owned {__id__} element (template-by-example)
+    const ref = a.find((e) => isRef(e));
+    if (!ref) return { error: 'no sibling {__id__} element to clone — supply --json <object> or --type <Class> for the first element', code: 'no-template' };
+    const tmpl = arr[ref.__id__];
+    if (!tmpl) return { error: `template entry #${ref.__id__} is missing` };
+    const clone = JSON.parse(JSON.stringify(tmpl));
+    if ('_id' in clone) clone._id = pad22(`a${arr.length}`);
+    if ('fileId' in clone) { clone.fileId = pad22(`f${arr.length}`); needsReimport = true; } // editor regenerates a real fileId
+    if (isRef(clone.__prefab)) { clone.__prefab = null; needsReimport = true; }
+    const newIdx = arr.length; arr.push(clone);
+    element = { __id__: newIdx };
+  } else if (spec.stub) {                 // --type: a minimal {__type__} owned sub-object, editor fills @property defaults
+    const newIdx = arr.length; arr.push({ __type__: spec.stub });
+    element = { __id__: newIdx };
+    needsReimport = true;
+  } else {                                // --json / value-flag / --uuid / --ref — a verbatim element
+    element = spec.value;
+  }
+  a.splice(pos, 0, element);
+  return { ok: true, index: pos, needsReimport };
+}
+
 /**
  * Offline STRUCTURAL validation of a parsed prefab/scene array — catches the
  * corruption an in-place edit could introduce, WITHOUT needing the live engine

@@ -311,8 +311,8 @@ function onKey(e) {
   }
   if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); return; }
   if (typing) return;
-  if (e.key === 'Tab') { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; } // Tab 切分頁
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); cycleTab(-1); return; } // Delete = 反向切分頁
+  if (e.key === ']') { e.preventDefault(); cycleTab(1); return; }  // ] 下一個分頁
+  if (e.key === '[') { e.preventDefault(); cycleTab(-1); return; } // [ 上一個分頁
   // − / + step the shared centre history in any centred view (清單/拓撲/體積圖; not 報告).
   if (e.key === '-' && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navBack(); return; }
   if ((e.key === '+' || e.key === '=') && !e.metaKey && !e.ctrlKey && S.tab !== 'reports') { e.preventDefault(); navForward(); return; }

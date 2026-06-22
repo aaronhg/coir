@@ -3,5 +3,8 @@ dist/
 .DS_Store
 
 # Cross-project / global plugin config, auto-loaded from the coir root (never shipped)
+# .mjs/.js = PORTABLE (browser + node); .node.mjs/.node.js = node-only (CLI/MCP/editor)
 /coir.plugins.mjs
 /coir.plugins.js
+/coir.plugins.node.mjs
+/coir.plugins.node.js

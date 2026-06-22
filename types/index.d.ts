@@ -114,6 +114,10 @@ export interface ScanResult {
 export interface PluginContext {
   /** The host that ran the scan: 'cli' | 'mcp' | 'browser' | 'editor' (cocos-extension). Undefined if an embedder didn't set it. Lets a plugin branch by environment (e.g. skip a browser-only report under the CLI). */
   env?: 'cli' | 'mcp' | 'browser' | 'editor';
+  /** The host's ABSOLUTE project dir (root, above `assets/`), if provided — for a plugin that needs to read files OUTSIDE `assets/` (project settings, package.json…). Undefined when the host didn't supply it (e.g. the browser, whose FileProvider is rooted at assets/). */
+  projectDir?: string;
+  /** The project's Cocos Creator version (e.g. '3.8.6'), if known — `creator.version` from package.json for node hosts, `Editor.App.version` for the editor host; null/undefined otherwise. Lets a plugin branch by engine version. */
+  cocosVersion?: string | null;
   assets: Map<string, Asset>;
   byPath: Map<string, Asset>;
   subOwner: Map<string, SubOwner>;
@@ -357,4 +361,8 @@ export interface ScanOptions {
   onProgress?(p: { phase: string; done: number; total: number }): void;
   /** The host running the scan. Surfaced to plugins as `ctx.env` + on the result as `scan.env`. */
   env?: 'cli' | 'mcp' | 'browser' | 'editor';
+  /** The host's absolute project dir (root, above `assets/`). Surfaced as `ctx.projectDir`. */
+  projectDir?: string;
+  /** The project's Cocos Creator version (e.g. '3.8.6'). Surfaced as `ctx.cocosVersion`. */
+  cocosVersion?: string | null;
 }

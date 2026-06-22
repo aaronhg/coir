@@ -62,11 +62,13 @@ a same-name sibling with no `[i]` resolves to `[0]`.
 coir `nodePath` (`[i]`-disambiguated) / filename — except while you're typing in it.
 
 It runs [coir](https://github.com/aaronhg/coir)'s core **in-process** (cached
-scan), so the menu is instant and stays fresh as the project changes. The scan
-also loads `coir.plugins.mjs` from the **coir repo root** (global) and the
-**project root** — exactly like the CLI/browser — so editor-side edges include
-custom plugin edges (e.g. audio-call `audioPlay('x')` → `x.mp3`); the active
-plugins are logged as `source.name` (`global.audio-call`, `project.…`).
+scan), so the menu is instant and stays fresh as the project changes. As a **node
+host** the scan loads BOTH `coir.plugins.mjs` (portable) and `coir.plugins.node.mjs`
+(node-only — free imports / `fs` / `commands`) from the **coir repo root** (global)
+and the **project root** — so editor-side edges include custom plugin edges (e.g.
+audio-call `audioPlay('x')` → `x.mp3`); the active plugins are logged as `source.name`
+(`global.audio-call`, `project.…`). The scan also passes `projectDir` (`Editor.Project.path`)
+and `cocosVersion` (`Editor.App.version`) into the plugin `ctx`.
 
 ## Native-verify endpoint (for `coir native-verify`)
 
@@ -82,15 +84,24 @@ missing script). It exposes exactly the **three primitives** a native verify nee
 POST /reimport {url}                 asset-db reimport-asset      (validity gate)
 POST /read     {uuid, selectors[]}   scene readback (scene.js)    (terse — only the asked selectors)
 POST /fixture  {action,…}            asset-db copy/create/delete  (isolated test assets)
-POST /ready                          → { ready, version, project }
+POST /ready                          → { ready, version, project, token }
 POST /uuid     {url}                 → { uuid }
 ```
+
+**Token-authenticated**: a fresh per-session `X-Coir-Token` is generated on start and
+handed out by `/ready` (the one unauthenticated route); **every other route requires
+it**, so a stray browser page can POST to localhost but — unable to read `/ready`'s
+body cross-origin, hence not knowing the token — can't drive the destructive `/fixture`
+(create/delete assets). The client (`coir native-verify` / the edit-verify harness)
+reads the token from `/ready` and sends it; a pre-token extension (no `token` in `/ready`)
+still works, the client just sends none (back-compat).
 
 **Start it**: menu **Coir ▸ native-verify: start** (or the **toggle in the 跳轉
 panel's footer**, which also shows the bound port + cocos version). 127.0.0.1
 only, `unref`'d; it auto-increments from **3789** if the port is taken, so
 several editor windows each get their own. The CLI client (`coir native-verify`)
-probes 3789..3809 and picks the endpoint whose **open project matches** `-C`.
+probes 3789..3809 and picks the endpoint whose **open project matches** `-C`. The same
+`nativeVerifyData` core also backs the **MCP `native_verify` tool**.
 
 Implementation: `main.js` (the HTTP server + `asset-db` calls, runs in the editor
 process where coir-core already lives) + **`scene.js`** (the readback — the one
@@ -111,8 +122,8 @@ right-click asset → onAssetMenu(assetInfo)            (assets-menu.js, rendere
    click a dep/dependent → Editor.Selection.select('asset', uuid)
    click 開啟拓撲圖       → open-topo(uuid)
                                                        (main.js, editor process)
-main: cached scanProject(<project>/assets, { plugins }) via coir-core (in-process),
-      plugins = built-ins + coir-root + project coir.plugins.mjs (deduped)
+main: cached scanProject(<project>/assets, { plugins, projectDir, cocosVersion }) via coir-core (in-process),
+      plugins = built-ins + coir-root + project (coir.plugins.mjs + coir.plugins.node.mjs) (deduped)
    all-graph  → compact out/inc graph (uuids/names + indices), pushed to the
                 menu (request to prime + `coir:graph` broadcast to refresh)
    all-asset-menus → plugin assetMenus rows (anim/skel/…), precomputed by calling
@@ -174,9 +185,10 @@ asset → **Coir 依賴拓撲**.
 - **Snapshot size**: the neighborhood auto-shrinks its depth to keep the URL
   under coir's `MAX_BLOB_CHARS` cap; boundary nodes (trimmed neighbours) are
   marked `⋯` in the viewer.
-- **Plugins**: the scan loads `coir.plugins.mjs` from the coir repo root (global)
-  and the project root, like the CLI/browser, and logs the active ones. Node
-  caches the import — edit the config, then RELOAD the extension to re-read it.
+- **Plugins**: as a node host the scan loads BOTH `coir.plugins.mjs` (portable) and
+  `coir.plugins.node.mjs` (node-only) from the coir repo root (global) and the project
+  root, and logs the active ones. Node caches the import — edit the config, then RELOAD
+  the extension to re-read it.
 - **3.5–3.8**: `editor: ">=3.5.0"`. The editor APIs used (assets.menu / Message /
   Selection / I18n / Project.path) exist since 3.0; the Node-18 deps the snapshot
   needs (`CompressionStream` + `btoa`) have `zlib` + `globalThis.Buffer` fallbacks

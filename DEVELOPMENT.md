@@ -449,6 +449,20 @@ The editor (§11.28) *refused* every nested-instance edit. This round opens the 
 
 All in the shared `src/edit/ops.js` seam (`applyArrayOp`/`runEdit`/`runBatch`), so CLI + MCP inherit each identically. `npm test` 196/196 + typecheck + build clean.
 
+### 11.32 Depth-assessment follow-ups · array-item editing · two-file plugins · ctx host metadata
+
+A `docs/DEPTH-ASSESSMENT.md` audit (read the source, not the README's claims) drove a batch of closes:
+
+- **Analysis**: atlas utilization gained **area-weighted** waste (`areaRatio`/`wastedArea` px², from sprite-frame sizes); bundle cycles via SCC (`bundleCycleGroups`, Tarjan) catch **3+ loops** A→B→C→A (not just pairwise); `forbid-dep` gained **regex** (`pathRegex`/`basenameRegex`), **`not`** negation, and a **`transitive`** reachability mode (reports the offending path).
+- **Edit/verify**: **array-property structural editing** — `add-array-item` / `rm-array-item` / `reorder-array` (docs/EDITING.md §11b). `set` only replaced/appended; these change length/order. `rm` GC's an owned sub-object it orphans (reusing `ownedClosure`+`removeEntries`) but **never** a still-referenced node/component; `add` takes a value / `{__uuid__}` / `--ref` `{__id__}` / `--clone` sibling / `--class` `{__type__}` stub (the empty-array "nothing to reference" path, alongside `--json`); a kind-mismatched insert is applied but **warned**. Live-verified (RESULTS-array.md): the editor accepts arbitrary array length/order on reimport, a plain `@ccclass` data clone is offline-complete, a `--class` stub is filled with class defaults on reimport, a typo'd type silently degrades (same hazard as `add-component`'s `cc.Nope`). `probeInvertible` (roundtrip) became an **op-matrix suite** (node/component/setParent there-and-back).
+- **CLI/MCP alignment**: MCP gained **`native_verify`** (shared `src/verify/nativeVerify.js` `nativeVerifyData` with the CLI) and **`deps` depth** (multi-hop tree via a shared seam builder `buildEdgeTree`/`pruneTreeByType`/`depsTreeData`; CLI `-o json --depth N` matches the MCP shape).
+- **Surfaces/safety**: the 清單 table is **windowed-virtualized** like 拓撲 (no row cap, measured row height) + its own `Ctrl/⌘+F` find; reports render in full (no silent slice). Plugin `edges()` runs in a try-catch (a throw → `scan.pluginErrors`, not a dead scan); the native-verify endpoint requires a per-session **`X-Coir-Token`** (CSRF guard on the destructive `/fixture`); a project-root config is **trust-gated** (default ON; `--no-trust-project-plugins` / `COIR_TRUST_PROJECT_PLUGINS=0` to opt out). Fixed the no-`<file>` `verify`/`native-verify` crash; removed dead code in `refs.js`.
+- **Two-file plugins** (host-capability split): `coir.plugins.mjs` PORTABLE (browser + node, self-contained) + `coir.plugins.node.mjs` NODE-only (free imports / `fs` / `commands` — the browser can't resolve or run it, so it skips it). `loadConfigPlugins`/`loadProjectConfigPlugins` load both; the browser warns both about a config it can't load AND about portable plugins whose `commands`/`assetMenus`/`rules` take no effect there.
+- **Plugin ctx host metadata**: `ctx.projectDir` (absolute project root, for reads outside `assets/`) + `ctx.cocosVersion` (`readCocosVersion` from package.json `creator.version`; `Editor.App.version` in the editor host) — let a plugin branch by engine version / read project settings.
+- **UI**: tab cycling moved from `Tab`/`Delete` to **`]`/`[`**.
+
+Dynamic-load is reframed in the depth doc as **by-design (plugin territory), not a gap**; the remaining real gaps are multi-layer nested-prefab instance-internal edits and browser a11y. All in the shared seams (no host duplication). `npm test` 212/212 + typecheck + build clean.
+
 ---
 
 ## 12. Declarative CI Rules Layer (`coir check`) — SHIPPED (§11.23–§11.24)

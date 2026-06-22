@@ -376,6 +376,36 @@ export const TOOLS = [
       properties: { file: { type: 'string' }, selector: { type: 'string', description: 'Component selector, e.g. "Canvas/Btn:cc.Button".' }, ...WRITE_FLAGS } },
     run: (ctx, a) => applyEdit(ctx, 'rm-component', { file: a.file, selector: a.selector }, a),
   },
+  {
+    name: 'edit_reorder_array',
+    description: 'Reorder an array PROPERTY by a FULL permutation of its indices (e.g. perm [2,0,1]). For arbitrary array props (clickEvents / _materials / a custom @property array) — NOT _children/_components (use the node/component ops). Pure reorder; no element added/removed.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector', 'perm'],
+      properties: { file: { type: 'string' }, selector: { type: 'string', description: 'An array property: nodePath:Type.arrayProp.' }, perm: { type: 'array', items: { type: 'number' }, description: 'A full permutation of 0..len-1.' }, ...WRITE_FLAGS } },
+    run: (ctx, a) => applyEdit(ctx, 'reorder-array', { file: a.file, selector: a.selector, perm: a.perm }, a),
+  },
+  {
+    name: 'edit_rm_array_item',
+    description: 'Remove the element at `index` from an array PROPERTY. A value is dropped; a {__id__} element loses its array membership and, if that leaves an OWNED sub-object unreferenced, it is real-deleted + compacted — a still-referenced node/component is never touched (so a node-ref / component-ref array just loses the reference).',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector', 'index'],
+      properties: { file: { type: 'string' }, selector: { type: 'string', description: 'An array property.' }, index: { type: 'number' }, ...WRITE_FLAGS } },
+    run: (ctx, a) => applyEdit(ctx, 'rm-array-item', { file: a.file, selector: a.selector, index: a.index }, a),
+  },
+  {
+    name: 'edit_add_array_item',
+    description: 'Insert an element into an array PROPERTY at `at` (default append). Give exactly ONE source: `value` (a literal — scalar / {__type__:cc.*} / {__uuid__}), `asset` (uuid → {__uuid__}), `ref` (a node/component selector → an intra-file {__id__}), `clone` (clone a sibling OWNED element — offline-complete for a plain data class), or `elemType` (a class NAME → a minimal {__type__} stub the engine fills with @property defaults on reimport; needsReimport). For the first element of an empty owned-object array, use `value` (the full object) or `elemType`.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file', 'selector'],
+      properties: { file: { type: 'string' }, selector: { type: 'string', description: 'An array property.' }, at: { type: 'number', description: 'Insert position (default: append).' },
+        value: { description: 'A literal element (any JSON).' }, asset: { type: 'string', description: 'Asset → a {__uuid__} element.' }, ref: { type: 'string', description: 'Node/component selector → a {__id__} element (intra-file).' }, clone: { type: 'boolean', description: 'Clone a sibling owned {__id__} element.' }, elemType: { type: 'string', description: 'Class name → a minimal {__type__} stub (needsReimport).' }, ...WRITE_FLAGS } },
+    run: (ctx, a) => {
+      const p = { file: a.file, selector: a.selector, at: a.at == null ? null : a.at };
+      if (a.clone) p.clone = true;
+      else if (a.elemType != null) p.elemType = a.elemType;
+      else if (a.ref != null) p.ref = a.ref;
+      else if (a.asset != null) p.asset = a.asset;
+      else if ('value' in a) p.value = a.value;
+      return applyEdit(ctx, 'add-array-item', p, a);
+    },
+  },
 ];
 
 export const TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

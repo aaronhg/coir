@@ -63,6 +63,20 @@ CLI `-o json` omits `reimportReason`). Highlight: **P3b** resolves a cross-bound
 from a `cc.TargetOverrideInfo` with an inline `null` and *no baked branch* — proven by the engine,
 not by coir reading its own output.
 
+**Array-property structural edits** (`add-array-item`/`rm-array-item`/`reorder-array`):
+[PLAN-array.md](PLAN-array.md) — design + the live pre-flight experiments that settled the
+behavior (the editor accepts arbitrary array length/order; an owned-object remove must GC
+the orphan or coir's own `verify` flags it; the empty-array "nothing to reference" case →
+`--json`/`--class` stub). Native pass through coir's real ops → [RESULTS-array.md](RESULTS-array.md) (5 PASS · 0 fail).
+
+**Round 3 — edit/verify refactor regression** (2026-06-22): [RESULTS-refactor.md](RESULTS-refactor.md).
+A focused regression after this session's changes — `probeInvertible` gained an op-matrix suite
+(offline; `verify --all --roundtrip` = 11/11 ok) and the native-verify **client** was refactored
+(helpers take the `conn` + an `X-Coir-Token`; `cmdNativeVerify` + the new MCP `native_verify` tool
+now share `src/verify/nativeVerify.js`). 8 PASS · 0 fail · 1 finding (FINDING-C: the `X-Coir-Token`
+path is unverified live — the editor ran the pre-token extension; re-install to exercise it). Not a
+full matrix walk — the edit ops were unchanged.
+
 **MCP-server verification** (the `coir mcp` *wrapper*, not the engine — registered as the
 `coir-edit` MCP alongside `cocos-creator`): `PLAN-mcp.md`, `RESULTS-mcp.md`, `COVERAGE-mcp.md`,
 `_mcp_design_raw.json`. Covers tool dispatch/arg-shapes, error→`isError` mapping, `fs.watch`

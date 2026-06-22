@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { scanProject } from '../core/scan.js';
-import { makeFsProvider } from '../node/fsProvider.js';
+import { makeFsProvider, readCocosVersion } from '../node/fsProvider.js';
 import { TOOLS, TOOLS_BY_NAME } from './tools.js';
 import { collectPluginCommands } from '../seam/pluginCommands.js';
 import { base, kb, resolveTarget, edgeMaps } from '../seam/shared.js';
@@ -27,8 +27,9 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
 
   const assetsDir = path.join(projectDir, 'assets');
   const fp = makeFsProvider(assetsDir);
+  const cocosVersion = readCocosVersion(projectDir);
   const state = { scan: null, dirty: false, projectDir, plugins }; // plugins → the `check` tool's plugin checkers
-  async function rescan() { state.scan = await scanProject(fp, { plugins, env: 'mcp' }); state.dirty = false; }
+  async function rescan() { state.scan = await scanProject(fp, { plugins, env: 'mcp', projectDir, cocosVersion }); state.dirty = false; }
   state.markDirty = () => { state.dirty = true; };
   state.forceRescan = rescan;
   state.readText = (p) => fp.readText(p); // plugin MCP tools read sources under assets/ via ctx.readText
