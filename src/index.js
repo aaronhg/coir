@@ -11,7 +11,7 @@ export { buildAdjacency, dependencyClosure, dependentClosure, neighbors } from '
 export { encodeTopo, decodeTopo, MAX_BLOB_CHARS } from './core/topohash.js';
 export { makeFsProvider } from './node/fsProvider.js';
 export { PLUGINS, BUILTIN_PLUGINS, dedupePlugins } from './core/plugins/index.js';
-export { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
+export { loadConfigPlugins, loadProjectConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 
 // The coir repo root (this file is <root>/src/index.js). A host — e.g. the Cocos
 // extension — passes this to loadConfigPlugins to pick up the repo-root GLOBAL

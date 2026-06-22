@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scanProject } from '../src/core/scan.js';
 import { buildBundleGraph, bundleKey, isBundleKey } from '../src/core/bundleGraph.js';
-import { bundleDuplication } from '../src/core/analyze.js';
+import { bundleDuplication, bundleReport } from '../src/core/analyze.js';
+import { evaluateRules } from '../src/core/rules.js';
 
 const memFP = (files) => ({
   listFiles: async () => Object.keys(files),
@@ -95,6 +96,30 @@ test('axis D: DIFFERENT priorities → placed in the top one, no duplication', a
   };
   const dup = bundleDuplication(await scanProject(memFP(files)));
   assert.equal(dup.totalWasted, 0, 'unique top priority → a single home + stubs, no copy');
+});
+
+test('bundle graph: a 3-bundle cycle A→B→C→A is detected (cycleGroups); pairwise cycles misses it', async () => {
+  const IMGA = U('7'), IMGB = U('8'), IMGC = U('9');
+  const pf = (ref) => JSON.stringify([{ __type__: 'cc.Prefab' }, { __type__: 'cc.Sprite', _spriteFrame: { __uuid__: ref } }]);
+  const files = {
+    'A.meta': meta({ importer: 'directory', uuid: U('a'), userData: { isBundle: true, bundleName: 'A', priority: 1 } }),
+    'A/pa.prefab': pf(IMGB), 'A/pa.prefab.meta': meta({ importer: 'prefab', uuid: U('1') }), // A → B
+    'A/imga.png': 'A', 'A/imga.png.meta': meta({ importer: 'image', uuid: IMGA }),
+    'B.meta': meta({ importer: 'directory', uuid: U('b'), userData: { isBundle: true, bundleName: 'B', priority: 1 } }),
+    'B/pb.prefab': pf(IMGC), 'B/pb.prefab.meta': meta({ importer: 'prefab', uuid: U('2') }), // B → C
+    'B/imgb.png': 'B', 'B/imgb.png.meta': meta({ importer: 'image', uuid: IMGB }),
+    'C.meta': meta({ importer: 'directory', uuid: U('c'), userData: { isBundle: true, bundleName: 'C', priority: 1 } }),
+    'C/pc.prefab': pf(IMGA), 'C/pc.prefab.meta': meta({ importer: 'prefab', uuid: U('3') }), // C → A
+    'C/imgc.png': 'C', 'C/imgc.png.meta': meta({ importer: 'image', uuid: IMGC }),
+  };
+  const scan = await scanProject(memFP(files));
+  const rep = bundleReport(scan);
+  assert.equal(rep.cycleGroups.length, 1, 'one cyclic group');
+  assert.deepEqual(rep.cycleGroups[0], ['A', 'B', 'C']);
+  assert.deepEqual(rep.cycles, [], 'no mutual A⇄B pair — the old pairwise check would miss this loop entirely');
+  const res = evaluateRules(scan, [{ name: 'no-bundle-cycle', level: 'error' }]);
+  assert.equal(res.errors, 1);
+  assert.ok(/A ⇄ B ⇄ C/.test(res.violations[0].message), res.violations[0] && res.violations[0].message);
 });
 
 test('bundle graph: a project with no bundles produces nothing (no lone "main")', async () => {

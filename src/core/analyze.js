@@ -3,7 +3,7 @@
 
 import { buildAdjacency, dependencyClosure } from './graph.js';
 import { mainUuid } from './uuid.js';
-import { buildBundleGraph, bundleName } from './bundleGraph.js';
+import { buildBundleGraph, bundleName, bundleCycleGroups } from './bundleGraph.js';
 
 // Scenes are loaded by name at runtime, so they are roots, never "unused".
 // Scripts with no editor reference are flagged separately (they may be entry
@@ -75,7 +75,20 @@ export function droppedMetaReport(scan) {
   return { items, total: items.length, referencedCount: items.filter((i) => i.referenced).length };
 }
 
-// Per-atlas / multi-frame-image utilization: how many sprite-frames are used.
+// A sprite-frame's packed pixel area (trimmed), from its subMeta userData; 0 when
+// the importer didn't record dimensions (then area-level numbers are unavailable).
+function frameArea(f) {
+  const ud = f.userData || {};
+  const w = ud.width ?? (ud.rect && ud.rect.width) ?? ud.rawWidth ?? 0;
+  const h = ud.height ?? (ud.rect && ud.rect.height) ?? ud.rawHeight ?? 0;
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+// Per-atlas / multi-frame-image utilization: how many sprite-frames are used, AND
+// — when the frames' dimensions are known — the area-weighted utilization, since
+// a few large unused frames waste far more than many tiny ones. `wastedArea` is the
+// summed pixel area of the unused frames (the atlas's real dead weight); `areaRatio`
+// is used-area / total-area (null when no frame recorded a size).
 export function atlasUtilizationReport(scan) {
   // Atlases referenced AS A WHOLE (a SpriteAtlas object, no @sub) have their
   // frames picked by name in code at runtime, so per-frame utilization is
@@ -90,6 +103,9 @@ export function atlasUtilizationReport(scan) {
     if (frames.length === 0) continue;
     const used = scan.subUsage.get(a.uuid) || new Set();
     const unusedFrames = frames.filter((f) => !used.has(f.subId)).map((f) => f.name);
+    let totalArea = 0, usedArea = 0;
+    for (const f of frames) { const ar = frameArea(f); totalArea += ar; if (used.has(f.subId)) usedArea += ar; }
+    const areaKnown = totalArea > 0;
     items.push({
       uuid: a.uuid,
       path: a.path,
@@ -98,14 +114,19 @@ export function atlasUtilizationReport(scan) {
       total: frames.length,
       used: frames.length - unusedFrames.length,
       ratio: frames.length ? (frames.length - unusedFrames.length) / frames.length : 0,
+      totalArea: areaKnown ? totalArea : null,            // px² across all frames (null = dimensions unknown)
+      usedArea: areaKnown ? usedArea : null,
+      wastedArea: areaKnown ? totalArea - usedArea : null, // px² of unused frames — the real dead weight
+      areaRatio: areaKnown ? usedArea / totalArea : null,  // area-weighted utilization (null when unknown)
       unusedFrames,
       referenced: a.in > 0,
       wholeReferenced: wholeRef.has(a.uuid), // frames accessed dynamically by name
     });
   }
   // Surface genuine waste first: referenced-but-low-utilization atlases whose
-  // frames are addressed individually (not whole-atlas dynamic access).
-  items.sort((x, y) => Number(x.wholeReferenced) - Number(y.wholeReferenced) || x.ratio - y.ratio);
+  // frames are addressed individually (not whole-atlas dynamic access). Tie-break
+  // by the absolute wasted AREA so a big atlas with dead frames outranks a tiny one.
+  items.sort((x, y) => Number(x.wholeReferenced) - Number(y.wholeReferenced) || x.ratio - y.ratio || (y.wastedArea || 0) - (x.wastedArea || 0));
   return { items };
 }
 
@@ -197,7 +218,10 @@ export function bundleReport(scan, { limit = Infinity } = {}) {
       refs: d.refs.slice(0, limit).map((r) => ({ from: pathOf2(r.from), to: pathOf2(r.to), kind: r.kind })),
     }))
     .sort((a, b) => Number(b.cycle) - Number(a.cycle) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
-  // Unordered bundle pairs linked in BOTH directions.
+  // Every cycle = a strongly-connected component of size >=2 (catches A<->B AND a
+  // longer loop A->B->C->A that the pairwise both-ways check below would miss).
+  const cycleGroups = bundleCycleGroups(depEdges);
+  // Unordered bundle pairs linked in BOTH directions (a backward-compatible subset).
   const seen = new Set(); const cycles = [];
   for (const d of depEdges) {
     if (!inCycle(d)) continue;
@@ -207,7 +231,7 @@ export function bundleReport(scan, { limit = Infinity } = {}) {
   }
   const dd = bundleDuplication(scan); // axis D: bytes the build copies into ≥2 same-priority bundles
   const dup = { items: dd.items.slice(0, limit), total: dd.items.length, totalWasted: dd.totalWasted };
-  return { bundles, links, cycles, dup, total: bundles.length };
+  return { bundles, links, cycles, cycleGroups, dup, total: bundles.length };
 }
 
 export function summary(scan) {

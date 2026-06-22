@@ -8,12 +8,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { edgeMaps, resolveTarget, shareData } from '../seam/shared.js';
-import { depsData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
+import { depsData, depsTreeData, infoData, findData, closureData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from '../seam/query.js';
 import { duplicatesData } from '../core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, needsInstanceOverrides, needsPreviewLeaks, collectPluginCheckers } from '../core/rules.js';
 import { runEdit, runSwapAll, runBatch, commitWrites, resolveRawTypes, getData, treeData, verifyData, verifyAllData, verifyText, auditRoundtripData, collectInstanceOverridesData, collectPreviewLeaksData } from '../edit/ops.js';
 import { unifiedDiff } from '../edit/diff.js';
 import * as nv from '../verify/nativeClient.js';
+import { nativeVerifyData } from '../verify/nativeVerify.js';
 
 const setOf = (t) => (t ? new Set([t]) : new Set());
 function resolveUuid(scan, query) {
@@ -45,7 +46,7 @@ async function commitResult(ctx, r, a) {
   }
   // --reimport: after writing, ask the running Cocos editor to reimport the file.
   if (a.reimport && !a.dryRun && r.writes && r.writes.length) {
-    try { const conn = await nv.connect({ project: ctx.projectDir }); const rep = await nv.reimport(conn.base, `db://assets/${r.asset.path}`); out.reimported = !(rep && rep.error); if (rep && rep.error) out.reimportError = rep.error; }
+    try { const conn = await nv.connect({ project: ctx.projectDir }); const rep = await nv.reimport(conn, `db://assets/${r.asset.path}`); out.reimported = !(rep && rep.error); if (rep && rep.error) out.reimportError = rep.error; }
     catch (e) { out.reimported = false; out.reimportError = e instanceof Error ? e.message : String(e); }
   }
   return { data: out };
@@ -76,19 +77,22 @@ export const TOOLS = [
   },
   {
     name: 'deps',
-    description: 'Dependencies of an asset (what it depends on / who depends on it), 1 hop, with usage locations as paste-able selectors.',
+    description: "Dependencies of an asset (what it depends on / who depends on it), with usage locations as paste-able selectors. Default 1 hop (flat dependsOn/usedBy); set depth>1 for the multi-hop dependency TREE (each neighbour gets nested children; a revisited node is marked revisit:true and not re-expanded).",
     inputSchema: { type: 'object', additionalProperties: false, required: ['asset'],
       properties: {
         asset: { type: 'string', description: 'Asset by full path / basename / uuid / uuid@sub.' },
         direction: { type: 'string', enum: ['both', 'out', 'in'], description: 'out = what it depends on; in = who depends on it (uses); both (default).' },
-        type: { type: 'string', description: 'Keep only neighbours of this asset type.' },
+        depth: { type: 'number', description: 'How many hops to follow (default 1 = direct neighbours; >1 returns a nested tree).' },
+        type: { type: 'string', description: 'Keep only neighbours of this asset type (on a tree, keeps branches that REACH the type).' },
         kind: { type: 'string', description: 'Keep only edges of this kind (e.g. texture, script, extends, audio-call).' },
-        limit: { type: 'number', description: 'Cap neighbours per side.' },
+        limit: { type: 'number', description: 'Cap neighbours per side / per level.' },
       } },
     run: (ctx, a) => {
       const u = resolveUuid(ctx.scan, a.asset); if (u.error) return u;
       const dir = a.direction || 'both';
-      return { data: depsData(ctx.scan, edgeMaps(ctx.scan), u.uuid, { showOut: dir !== 'in', showIn: dir !== 'out', types: setOf(a.type), kinds: setOf(a.kind), limit: a.limit ?? Infinity }) };
+      const opts = { showOut: dir !== 'in', showIn: dir !== 'out', types: setOf(a.type), kinds: setOf(a.kind), limit: a.limit ?? Infinity };
+      const maps = edgeMaps(ctx.scan);
+      return { data: a.depth && a.depth > 1 ? depsTreeData(ctx.scan, maps, u.uuid, { ...opts, depth: a.depth }) : depsData(ctx.scan, maps, u.uuid, opts) };
     },
   },
   {
@@ -218,6 +222,17 @@ export const TOOLS = [
     run: (ctx, a) => {
       const r = auditRoundtripData(ctx.scan, ctx.projectDir, { all: !!a.all, file: a.file });
       if (r.error) return { error: r.error, candidates: r.candidates };
+      return { data: r };
+    },
+  },
+  {
+    name: 'native_verify',
+    description: "LIVE cross-check against the RUNNING Cocos editor (the live twin of the offline `verify`). Needs the cocos-extension native-verify endpoint started for THIS project; reimports + instantiates the file, then confirms every node/component coir parses is one the engine actually BUILDS — catching engine-semantic breakage offline verify can't (an import-rejecting file, a silently-dropped bogus cc.* component, a missing script). Returns { valid, file, nodes, components, engine, fails[] }, or { error } with code 'no-endpoint' (start it in the editor) / 'not-imported'. Follow a needsReimport edit with this.",
+    inputSchema: { type: 'object', additionalProperties: false, required: ['file'],
+      properties: { file: { type: 'string', description: 'The prefab/scene file (path or basename).' }, port: { type: 'number', description: 'Endpoint port (default: auto-probe 3789..3809 for the one serving this project).' } } },
+    run: async (ctx, a) => {
+      const r = await nativeVerifyData(ctx.scan, ctx.projectDir, a.file, { port: a.port });
+      if (r.error) return { error: r.error, candidates: r.candidates }; // no-endpoint / not-imported / bad file → clean tool error
       return { data: r };
     },
   },

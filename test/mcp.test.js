@@ -78,7 +78,7 @@ test('mcp: initialize + tools/list expose the read/write surface', async () => {
   assert.equal(r[1].result.protocolVersion, '2025-06-18'); // echoes the client's
   assert.ok(r[1].result.capabilities.tools);
   const names = r[2].result.tools.map((t) => t.name);
-  for (const n of ['find', 'deps', 'tree', 'get', 'edit_set', 'edit_rm_node']) assert.ok(names.includes(n), `missing ${n}`);
+  for (const n of ['find', 'deps', 'tree', 'get', 'edit_set', 'edit_rm_node', 'native_verify', 'roundtrip']) assert.ok(names.includes(n), `missing ${n}`);
   assert.ok(names.filter((n) => n.startsWith('edit_')).length >= 10); // the write surface
 });
 
@@ -94,6 +94,17 @@ test('mcp: read tools (find / tree / get) return shared query data', async () =>
   assert.equal(tree.nodes[0].path, 'Root/Title');
   assert.equal(tree.nodes[0].components[0].selector, 'Root/Title:cc.Label');
   assert.equal(dataOf(r[3]).value, 'Hi');
+});
+
+test('mcp: deps depth>1 returns the multi-hop tree shape; depth 1 stays flat (CLI/MCP aligned)', async () => {
+  const dir = await mk();
+  const r = await rpc(dir, [
+    call(1, 'deps', { asset: 'Foo.prefab', direction: 'out' }),           // default depth 1 → flat depsData
+    call(2, 'deps', { asset: 'Foo.prefab', direction: 'out', depth: 2 }), // depth 2 → depsTreeData (tree)
+  ]);
+  const flat = dataOf(r[1]); const tree = dataOf(r[2]);
+  assert.ok(Array.isArray(flat.dependsOn) && flat.depth === undefined, 'depth 1 = flat record (no depth field)');
+  assert.ok(Array.isArray(tree.dependsOn) && tree.depth === 2, 'depth 2 = nested tree (carries depth)');
 });
 
 test('mcp: edit_set — dry-run does not write, real write persists (verified by a follow-up read)', async () => {

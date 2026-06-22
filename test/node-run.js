@@ -14,7 +14,7 @@ import {
 import { fileURLToPath } from 'node:url';
 import { makeFsProvider } from '../src/node/fsProvider.js';
 import { PLUGINS, dedupePlugins } from '../src/core/plugins/index.js';
-import { loadConfigPlugins } from '../src/node/loadPlugins.js';
+import { loadConfigPlugins, loadProjectConfigPlugins } from '../src/node/loadPlugins.js';
 
 const COIR_ROOT = fileURLToPath(new URL('../', import.meta.url)); // <repo>/ (node-run.js is in test/)
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`;
@@ -25,10 +25,11 @@ async function main() {
   const assetsRoot = path.join(projectDir, 'assets');
 
   const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
+  const trustProject = process.env.COIR_TRUST_PROJECT_PLUGINS === '1'; // project-local config runs its own code → opt-in
   const plugins = dedupePlugins([
     ...PLUGINS,
     ...await loadConfigPlugins(COIR_ROOT),
-    ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)),
+    ...(sameAsRoot ? [] : await loadProjectConfigPlugins(projectDir, { trusted: trustProject })),
   ]);
 
   const t0 = Date.now();

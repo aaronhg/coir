@@ -10,13 +10,16 @@ import path from 'node:path';
 /** Resolve a project dir to a canonical path (realpath handles symlinks). */
 const norm = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 
-/** POST JSON to base+route, resolve the parsed JSON reply. */
-function post(base, route, body, timeoutMs = 8000) {
+/** POST JSON to base+route, resolve the parsed JSON reply. `token` (when set) is
+ * sent as X-Coir-Token — the endpoint requires it on every route except /ready. */
+function post(base, route, body, timeoutMs = 8000, token = null) {
   return new Promise((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(body || {}));
     const u = new URL(base + route);
+    const headers = { 'content-type': 'application/json', 'content-length': data.length };
+    if (token) headers['x-coir-token'] = token;
     const req = http.request(
-      { hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'content-type': 'application/json', 'content-length': data.length } },
+      { hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers },
       (res) => { let s = ''; res.on('data', (d) => { s += d; }); res.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(new Error('bad JSON from endpoint')); } }); },
     );
     req.on('error', reject);
@@ -31,8 +34,10 @@ function post(base, route, body, timeoutMs = 8000) {
  * is taken) — so several editors can run at once on adjacent ports. When
  * `project` is set, KEEPS probing until it finds the endpoint whose open project
  * matches (you can have many Cocos windows open); without it, the first answer
- * wins. Returns { base, port, version, project } or throws (the message lists
- * any other-project endpoints that answered, so the mismatch is obvious).
+ * wins. Returns { base, port, version, project, token } or throws (the message
+ * lists any other-project endpoints that answered, so the mismatch is obvious).
+ * The `token` is read from /ready and must ride on every later call (the helpers
+ * below take the whole conn object and forward it).
  * @param {{port?:number, project?:string}} [opts]
  */
 export async function connect({ port, project } = {}) {
@@ -45,7 +50,7 @@ export async function connect({ port, project } = {}) {
     let r;
     try { r = await post(base, '/ready', {}, 1200); } catch (e) { continue; } // refused/timeout → next port
     if (!r || r.ready === undefined) continue;
-    const ep = { base, port: p, version: r.version, project: r.project };
+    const ep = { base, port: p, version: r.version, project: r.project, token: r.token || null }; // token absent on a pre-token extension → calls run unauthenticated (back-compat)
     if (!want || (r.project && norm(r.project) === want)) return ep; // matching project (or no filter)
     others.push(`:${p} ${r.project ? path.basename(r.project) : '?'}`); // answered, but a different project
   }
@@ -53,7 +58,11 @@ export async function connect({ port, project } = {}) {
   throw new Error(`no native-verify endpoint on 127.0.0.1:${fixed || '3789-3809'}`);
 }
 
-export const reimport = (base, url) => post(base, '/reimport', { url });
-export const read = (base, uuid, selectors) => post(base, '/read', { uuid, selectors });
-export const uuidOf = (base, url) => post(base, '/uuid', { url }).then((r) => r && r.uuid);
-export const fixture = (base, body) => post(base, '/fixture', body);
+// Each helper takes the conn object from connect() (carrying base + token); a
+// bare base string is still accepted (back-compat — runs unauthenticated).
+const baseOf = (c) => (typeof c === 'string' ? c : c.base);
+const tokenOf = (c) => (typeof c === 'string' ? null : (c && c.token) || null);
+export const reimport = (conn, url) => post(baseOf(conn), '/reimport', { url }, 8000, tokenOf(conn));
+export const read = (conn, uuid, selectors) => post(baseOf(conn), '/read', { uuid, selectors }, 8000, tokenOf(conn));
+export const uuidOf = (conn, url) => post(baseOf(conn), '/uuid', { url }, 8000, tokenOf(conn)).then((r) => r && r.uuid);
+export const fixture = (conn, body) => post(baseOf(conn), '/fixture', body, 8000, tokenOf(conn));

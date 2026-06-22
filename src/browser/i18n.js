@@ -48,7 +48,7 @@ const MESSAGES = {
     'col.out.t': '直接依賴的資源數',
     'col.cout.t': '依賴閉包：載入時會連帶拉進來的資源總數',
     'list.count': '{n} 項',
-    'list.cap': '（顯示前 {cap}）',
+    'list.findPh': '在清單中尋找…',
     // 拓撲
     'topo.hint': '從「清單」選一個資源，或按 / 搜尋，作為中心。',
     'topo.layer': '層',
@@ -181,7 +181,7 @@ const MESSAGES = {
     'col.out.t': 'Assets this directly references',
     'col.cout.t': 'Dependency closure: total assets transitively pulled in when loaded',
     'list.count': '{n} items',
-    'list.cap': ' (first {cap})',
+    'list.findPh': 'Find in the list…',
     'topo.hint': 'Pick an asset in the List, or press / to search, as the centre.',
     'topo.layer': 'L',
     'topo.copyPath': 'Copy full path',

@@ -3,7 +3,7 @@
 import { S, $, base, dirOf, esc, kb, typeColor } from './state.js';
 import { t } from './i18n.js';
 import { unusedReport, orphanRefReport, atlasUtilizationReport, sizeReport, droppedMetaReport, bundleDuplication } from '../core/analyze.js';
-import { buildBundleGraph, bundleName } from '../core/bundleGraph.js';
+import { buildBundleGraph, bundleName, bundleCycleGroups } from '../core/bundleGraph.js';
 import { typeAllowed } from './filterbar.js';
 import { visualSectionHTML, hydrateVisualSection } from './visualreport.js';
 import { findInstanceOverrides, fileIdToPath } from '../core/classify.js';
@@ -39,11 +39,12 @@ function bundleSection() {
         `<span class="meta">×${i.copies} · ${esc(kb(i.wasted))} · ${esc(i.bundles.join(', '))}</span></div>`).join('') +
       `</details>`
     : '';
-  const linkSet = new Set(bg.depEdges.map((d) => `${d.from} ${d.to}`));
-  const inCyc = (d) => linkSet.has(`${d.to} ${d.from}`);
-  const seen = new Set(); const cycPairs = [];
-  for (const d of bg.depEdges) { if (!inCyc(d)) continue; const pr = [bundleName(d.from), bundleName(d.to)].sort(); const k = pr.join(' '); if (!seen.has(k)) { seen.add(k); cycPairs.push(pr); } }
-  const cycBanner = cycPairs.length ? `<div class="bdl-cyc">⚠ ${cycPairs.map(([a, b]) => `${esc(a)} ⇄ ${esc(b)}`).join(' · ')}</div>` : '';
+  // Every cycle = an SCC of size ≥2 (A⇄B AND a longer A→B→C→A loop); a link is
+  // cyclic when both its endpoints sit in the same group.
+  const cycGroups = bundleCycleGroups(bg.depEdges);
+  const groupOf = new Map(); cycGroups.forEach((g, gi) => g.forEach((n) => groupOf.set(n, gi)));
+  const inCyc = (d) => { const ga = groupOf.get(bundleName(d.from)); return ga !== undefined && ga === groupOf.get(bundleName(d.to)); };
+  const cycBanner = cycGroups.length ? `<div class="bdl-cyc">⚠ ${cycGroups.map((g) => g.map(esc).join(' ⇄ ')).join(' · ')}</div>` : '';
   const links = bg.depEdges.slice().sort((a, b) => Number(inCyc(b)) - Number(inCyc(a))
     || bundleName(a.from).localeCompare(bundleName(b.from)) || bundleName(a.to).localeCompare(bundleName(b.to)));
   const linksHtml = links.map((d) => {
@@ -52,7 +53,7 @@ function bundleSection() {
       ` <span class="sub">${d.refs.length}${cyc ? ' ⇄' : ''}</span></summary>${d.refs.map(bundleRefRow).join('')}</details>`;
   }).join('') || `<div class="empty">${esc(t('rep.none'))}</div>`;
   const sub = t('rep.bundleSub', { n: bg.nodes.length })
-    + (cycPairs.length ? ` · ${t('rep.bundleCyc', { n: cycPairs.length })}` : '')
+    + (cycGroups.length ? ` · ${t('rep.bundleCyc', { n: cycGroups.length })}` : '')
     + (dup.totalWasted > 0 ? ` · ${t('rep.bundleDupTag', { size: kb(dup.totalWasted) })}` : '');
   // copy all: the cross-bundle links (from → to), plus any axis-D duplicated assets
   const copyLines = links.map((d) => `${bundleName(d.from)} → ${bundleName(d.to)} (${d.refs.length})`)
@@ -72,14 +73,14 @@ export function renderReports() {
   const unusedCands = (unused.candidates || []).filter((i) => typeAllowed(i.type)); // 0-ref but in a bundle (a2)
   const candBlock = unusedCands.length
     ? `<h4 class="rsubh">${esc(t('rep.unusedCand', { n: unusedCands.length }))}${copyAllBtn(unusedCands.map((i) => i.path))}</h4>`
-      + unusedCands.slice(0, 200).map((i) => refRow(i.uuid, i.path, i.type, `${kb(i.size)} · ${esc(i.bundle)}`)).join('')
+      + unusedCands.map((i) => refRow(i.uuid, i.path, i.type, `${kb(i.size)} · ${esc(i.bundle)}`)).join('')
     : '';
   const unusedBody = (unusedItems.length
-    ? unusedItems.slice(0, 300).map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('')
+    ? unusedItems.map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('')
     : `<div class="empty">${esc(t('rep.none'))}</div>`) + candBlock;
 
   const orphanBody = orphans.items.length // orphans have no asset type → unfiltered
-    ? orphans.items.slice(0, 200).map((i) => i.missingSource
+    ? orphans.items.map((i) => i.missingSource
       ? `<div class="ref orphan missing" title="${esc(t('orphan.missingTitle', { ref: i.ref, count: i.count }))}">` +
         `<span class="dot" style="background:${typeColor('orphan')}"></span>` +
         `<span class="nm">${esc(base(i.path))}</span><span class="rdir">${esc(dirOf(i.path) || '/')}</span>` +
@@ -87,12 +88,15 @@ export function renderReports() {
       : `<div class="ref orphan"><code>${esc(i.ref)}</code><span class="meta">${esc(t('rep.sources', { n: i.count }))}</span></div>`).join('')
     : `<div class="empty">${esc(t('rep.none'))}</div>`;
 
+  const px = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : `${n}`);
   const atlasItems = atlas.items.filter((i) => typeAllowed(i.type));
   const atlasBody = atlasItems.map((i) => {
     const tag = !i.referenced ? `<span class="warn">${esc(t('tag.unrefd'))}</span>` : i.wholeReferenced ? `<span class="dyn">${esc(t('tag.whole'))}</span>` : '';
+    // area-weighted utilization + wasted pixel area (only when the frames' sizes are known)
+    const area = i.areaRatio != null ? ` · <span title="area-weighted utilization · wasted pixel area">${(i.areaRatio * 100).toFixed(0)}% area, waste ${px(i.wastedArea)}px²</span>` : '';
     return `<div class="ref" data-uuid="${i.uuid}"><span class="dot" style="background:${typeColor(i.type)}"></span>` +
       `<span class="nm">${esc(base(i.path))}</span><span class="rdir" title="${esc(dirOf(i.path))}">${esc(dirOf(i.path) || '/')}</span>` +
-      `<span class="meta">${i.used}/${i.total} (${(i.ratio * 100).toFixed(0)}%) ${tag}</span></div>`;
+      `<span class="meta">${i.used}/${i.total} (${(i.ratio * 100).toFixed(0)}%)${area} ${tag}</span></div>`;
   }).join('') || `<div class="empty">${esc(t('rep.noAtlas'))}</div>`;
 
   const sizeTypes = Object.entries(size.byType).filter(([ty]) => typeAllowed(ty)).sort((a, b) => b[1].size - a[1].size);
@@ -103,7 +107,7 @@ export function renderReports() {
     sizeTypes.map(([ty, v]) =>
       `<tr><td><span class="dot" style="background:${typeColor(ty)}"></span>${ty}</td><td>${v.count}</td><td>${kb(v.size)}</td></tr>`).join('') +
     `<tr class="tot"><td>${esc(t('size.sum'))}</td><td></td><td>${kb(sizeTotal)}</td></tr></table>` +
-    `<h4>${esc(t('size.largest'))}${copyAllBtn(sizeItems.map((i) => i.path))}</h4>` + sizeItems.slice(0, 100).map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('');
+    `<h4>${esc(t('size.largest'))}${copyAllBtn(sizeItems.map((i) => i.path))}</h4>` + sizeItems.map((i) => refRow(i.uuid, i.path, i.type, kb(i.size))).join('');
 
   const droppedBody = dropped.items.length
     ? dropped.items.map((i) =>

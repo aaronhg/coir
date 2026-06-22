@@ -28,6 +28,7 @@ export async function shareData(scan, uuid, { depth = null, cap = null, base: vi
 
 // ---- target resolution: path / basename / uuid / uuid@sub ----------------
 export function resolveTarget(scan, query) {
+  if (typeof query !== 'string' || !query) return { notFound: true }; // no/blank target — never throw (e.g. `verify` with no <file>)
   const main = query.includes('@') ? query.slice(0, query.indexOf('@')) : query;
   if (scan.assets.has(main)) return { uuid: main };
   const exact = scan.byPath.get(query);

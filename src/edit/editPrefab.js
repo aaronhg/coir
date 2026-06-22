@@ -685,37 +685,72 @@ function probeCanon(s) {
 }
 
 /**
- * Invertible-edit probe: run a semantically-NULL op pair through the REAL engine —
- * add a throw-away node under the first node (exercising addNode's template-by-
- * example clone + PrefabInfo path) then real-delete it (exercising removeNode's
- * global `__id__` compaction) — and assert the result canonicalizes back to the
- * ORIGINAL. The added entries are the highest indices, so a correct compaction
- * renumbers nothing and restores the input; if "add then remove" does NOT return
- * to the start (modulo empty-vs-absent `_children`, see probeCanon), the clone/
- * compaction path mutated something it shouldn't — a corruption class the
- * synthetic fixtures never surface. `verifyErrors` is the DELTA — structural
- * errors present after the probe that weren't there before, so an already-broken
- * file (which plain `verify` flags) still passes as long as the engine PRESERVES
- * its state. PURE: copies `arr` first, never mutates the input, never writes.
- * Returns { invertible, verifyErrors } or { error, code } when it couldn't probe
- * (no node to attach to / engine refused).
+ * Invertible-edit probe: run several semantically-NULL op pairs through the REAL
+ * engine and assert each canonicalizes back to the ORIGINAL (modulo empty-vs-absent
+ * `_children`, see probeCanon). Each pair appends throw-away entries (the highest
+ * indices) then removes them, so a correct compaction renumbers nothing and
+ * restores the input; if a pair does NOT return to the start, the clone / rewire /
+ * compaction path mutated something it shouldn't — a corruption class the synthetic
+ * fixtures never surface. The probes cover distinct engine paths:
+ *   • add+remove NODE          — addNode template-clone + removeNode subtree compaction
+ *   • add+remove COMPONENT     — addComponent + removeComponent's own ownedClosure path
+ *   • setParent there-and-back — the detach/reattach _children rewire, BOTH directions
+ * The node probe is PRIMARY: its setup errors map to the legacy `add-failed`
+ * (skip — nothing to probe) / `rm-failed` (a real engine asymmetry) codes the
+ * caller special-cases. The secondary probes are best-effort — a setup error (no
+ * second node, addComponent refused) just SKIPS them, so they never false-fail a
+ * legit file; only a probe that RUNS and fails to invert counts. `verifyErrors` is
+ * the DELTA across all run probes (errors not already present), so an already-broken
+ * file still passes as long as the engine PRESERVES its state; `brokeProbes` names
+ * the non-inverting pairs. PURE: every probe runs on a fresh copy; never mutates the
+ * input, never writes. Returns { invertible, verifyErrors, brokeProbes } or
+ * { error, code } when even the primary probe couldn't run.
  * @param {any[]} arr @param {{compName?:((rawType:any)=>string)|null}} [opts]
- * @returns {{invertible:boolean, verifyErrors:Array<{code:string,msg:string,index?:number}>}|{error:string, code:string}}
+ * @returns {{invertible:boolean, verifyErrors:Array<{code:string,msg:string,index?:number}>, brokeProbes:string[]}|{error:string, code:string}}
  */
 export function probeInvertible(arr, { compName = null } = {}) {
   if (!Array.isArray(arr) || !arr.length) return { error: 'not a document array', code: 'empty' };
   const before = JSON.stringify(arr);
-  const work = JSON.parse(before); // a private copy — the engine ops mutate in place
-  const baseErrors = new Set(verifyDoc(work, { compName }).errors.map((e) => `${e.code}|${e.msg}`)); // pre-existing, before any probe
-  let parentIdx = -1;
-  for (let i = 0; i < work.length; i++) { if (work[i] && isNodeType(work[i].__type__)) { parentIdx = i; break; } }
-  if (parentIdx < 0) return { error: 'no cc.Node/cc.Scene to attach a probe to', code: 'no-node' };
-  const add = addNode(work, parentIdx, '__coir_probe__');
-  if (add.error || add.index == null) return { error: add.error || 'addNode returned no index', code: 'add-failed' };
-  const rm = removeNode(work, add.index);
-  if (rm.error || !rm.newArr) return { error: rm.error || 'removeNode returned no array', code: 'rm-failed' };
-  const newErrors = verifyDoc(rm.newArr, { compName }).errors.filter((e) => !baseErrors.has(`${e.code}|${e.msg}`));
-  return { invertible: probeCanon(JSON.stringify(rm.newArr)) === probeCanon(before), verifyErrors: newErrors };
+  const baseErrors = new Set(verifyDoc(JSON.parse(before), { compName }).errors.map((e) => `${e.code}|${e.msg}`)); // pre-existing
+  const firstNode = (a) => { for (let i = 0; i < a.length; i++) if (a[i] && isNodeType(a[i].__type__)) return i; return -1; };
+  if (firstNode(arr) < 0) return { error: 'no cc.Node/cc.Scene to attach a probe to', code: 'no-node' };
+  const newErrorsOf = (res) => verifyDoc(res, { compName }).errors.filter((e) => !baseErrors.has(`${e.code}|${e.msg}`));
+
+  // --- PRIMARY: add then remove a node (setup errors map to the legacy codes). ---
+  const w0 = JSON.parse(before);
+  const add0 = addNode(w0, firstNode(w0), '__coir_probe__');
+  if (add0.error || add0.index == null) return { error: add0.error || 'addNode returned no index', code: 'add-failed' };
+  const rm0 = removeNode(w0, add0.index);
+  if (rm0.error || !rm0.newArr) return { error: rm0.error || 'removeNode returned no array', code: 'rm-failed' };
+  let invertible = probeCanon(JSON.stringify(rm0.newArr)) === probeCanon(before);
+  let verifyErrors = newErrorsOf(rm0.newArr);
+  const brokeProbes = invertible ? [] : ['add+remove node'];
+
+  // --- SECONDARY: best-effort op pairs on a FRESH copy (a setup error → skip). ---
+  /** @type {[string, (w:any[])=>any[]|null][]} */
+  const secondary = [
+    ['add+remove component', (w) => {
+      const a = addComponent(w, firstNode(w), '__coir_probe_comp__'); if (a.error || a.index == null) return null;
+      const r = removeComponent(w, a.index); return (r.error || !r.newArr) ? null : r.newArr;
+    }],
+    ['setParent there-and-back', (w) => {
+      const A = firstNode(w);
+      const a = addNode(w, A, '__coir_probe_mv__'); if (a.error || a.index == null) return null;
+      const probe = a.index;
+      let B = -1; for (let i = 0; i < w.length; i++) if (i !== A && i !== probe && w[i] && isNodeType(w[i].__type__)) { B = i; break; }
+      if (B < 0) return null;                          // need a second node to move into
+      if (setParent(w, probe, B).error) return null;   // move out…
+      if (setParent(w, probe, A).error) return null;    // …and back (re-appended last, where addNode put it)
+      const r = removeNode(w, probe); return (r.error || !r.newArr) ? null : r.newArr;
+    }],
+  ];
+  for (const [label, fn] of secondary) {
+    let res; try { res = fn(JSON.parse(before)); } catch (e) { res = null; }
+    if (!res) continue;                                // couldn't set up → not a failure
+    if (probeCanon(JSON.stringify(res)) !== probeCanon(before)) { invertible = false; brokeProbes.push(label); }
+    verifyErrors = verifyErrors.concat(newErrorsOf(res));
+  }
+  return { invertible, verifyErrors, brokeProbes };
 }
 
 // findInstanceOverrides / findPreviewCanvasLeaks live in the pure, fs-free

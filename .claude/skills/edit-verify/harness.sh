@@ -28,6 +28,8 @@ vy_init() {                                   # PROJ_DIR
     proj=$(printf '%s' "$r" | sed 's/.*"project":"\([^"]*\)".*/\1/')
     if [ "$(cd "$proj" 2>/dev/null && pwd -P)" = "$VY_PROJ" ]; then
       VY_BASE="http://127.0.0.1:$p"
+      # the endpoint requires X-Coir-Token on every route except /ready (which hands it out)
+      VY_TOKEN=$(printf '%s' "$r" | sed 's/.*"token":"\([^"]*\)".*/\1/'); [ "$VY_TOKEN" = "$r" ] && VY_TOKEN=""
       echo "✓ endpoint :$p ($(printf '%s' "$r" | sed 's/.*"version":"\([^"]*\)".*/\1/')) matches $VY_PROJ"
       trap vy_cleanup EXIT
       return 0
@@ -40,7 +42,7 @@ vy_init() {                                   # PROJ_DIR
 
 # ── primitives ──────────────────────────────────────────────────────────────
 vy_co()   { node "$VY_REPO/src/cli.js" -C "$VY_PROJ" "$@"; }           # run coir CLI
-vy_post() { curl -s -X POST "$VY_BASE/$1" -H 'content-type: application/json' -d "$2"; }
+vy_post() { curl -s -X POST "$VY_BASE/$1" -H 'content-type: application/json' ${VY_TOKEN:+-H "x-coir-token: $VY_TOKEN"} -d "$2"; }
 vy_copy() {                                   # SRC_REL DST_BASE -> echoes new uuid
   # NOTE: the editor renames the copied prefab's ROOT node to DST_BASE — so every
   # selector against this fixture must use DST_BASE as the root (NOT the source root).

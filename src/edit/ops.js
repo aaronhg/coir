@@ -513,7 +513,7 @@ export function auditRoundtripData(scan, projectDir, { all = false, file = null 
       else unprobed.push({ file: a.path, reason: pr.code === 'add-failed' ? 'no-template' : pr.code });
       continue;
     }
-    if (!pr.invertible) failures.push({ file: a.path, kind: 'not-invertible', detail: 'add-then-remove did not restore the original (compaction/clone bug)' });
+    if (!pr.invertible) failures.push({ file: a.path, kind: 'not-invertible', detail: `${(pr.brokeProbes || []).join(', ') || 'a probe'} did not restore the original (compaction/clone/rewire bug)` });
     else if (pr.verifyErrors.length) failures.push({ file: a.path, kind: 'verify', detail: `${pr.verifyErrors.length} structural error(s) after a probe edit: ${pr.verifyErrors.slice(0, 3).map((e) => e.msg).join('; ')}` });
   }
   const failed = new Set(failures.map((f) => f.file));

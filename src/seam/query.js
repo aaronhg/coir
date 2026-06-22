@@ -42,6 +42,77 @@ export function depsData(scan, maps, uuid, { showOut = true, showIn = true, type
   return o;
 }
 
+// Multi-hop dependency tree from `rootUuid`, following edges in `dir`
+// ('out'|'in') up to `depth` hops. ONE global seen-set → a revisited node shows
+// once (revisit:true) and is not re-expanded. `kinds` filters edges; `breadth`
+// caps neighbours per level (Infinity when type-filtering — pruneTreeByType caps
+// the survivors instead). Presentation-free nodes { other, kind, weight,
+// locations, depth, revisit, children }. The CLI's text `deps`/`uses` tree AND the
+// json (depsTreeData / the MCP deps depth) build on this ONE builder.
+/**
+ * @param {any} scan @param {{out:Map<string,any[]>, inc:Map<string,any[]>}} maps
+ * @param {string} rootUuid @param {'out'|'in'} dir
+ * @param {{depth?:number, kinds?:Set<string>, breadth?:number}} [opts]
+ */
+export function buildEdgeTree(scan, maps, rootUuid, dir, { depth = 1, kinds = new Set(), breadth = Infinity } = {}) {
+  const seen = new Set([rootUuid]);
+  const kindOk = (e) => !kinds.size || kinds.has(e.kind);
+  return (function recur(uuid, d) {
+    const edges = ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
+      .filter(kindOk).slice().sort(edgeSort(scan, dir)).slice(0, breadth);
+    const nodes = [];
+    for (const e of edges) {
+      const other = dir === 'out' ? e.to : e.from;
+      const revisit = seen.has(other);
+      let children = [];
+      if (d < depth && !revisit) { seen.add(other); children = recur(other, d + 1); }
+      nodes.push({ other, kind: e.kind, weight: e.weight, locations: e.locations || [], depth: d, revisit, children });
+    }
+    return nodes;
+  })(rootUuid, 1);
+}
+// Keep only branches that REACH one of `types`: a node stays if it (or a kept
+// descendant) matches. A revisited (↻) node carries no children, so the first
+// (expanded) occurrence's verdict is remembered (`reaches`) and inherited. `limit`
+// caps the SURVIVORS per level (post-filter), so a match past `limit` isn't dropped.
+export function pruneTreeByType(scan, nodes, types, limit = Infinity, reaches = new Map()) {
+  const out = [];
+  for (const n of nodes) {
+    const kids = pruneTreeByType(scan, n.children, types, limit, reaches);
+    const oa = scan.assets.get(n.other);
+    const reach = !!((oa && types.has(oa.type)) || kids.length || (n.revisit && reaches.get(n.other)));
+    if (!n.revisit) reaches.set(n.other, reach);
+    if (reach) out.push({ ...n, children: kids });
+  }
+  return out.slice(0, limit);
+}
+function serializeTree(scan, nodes) {
+  return nodes.map((n) => {
+    const oa = scan.assets.get(n.other);
+    return { path: oa ? oa.path : n.other, type: oa ? oa.type : null, uuid: n.other, via: n.kind, weight: n.weight, revisit: n.revisit,
+      locations: (n.locations || []).map((l) => locJson(scan, l)), children: serializeTree(scan, n.children) };
+  });
+}
+/**
+ * Serializable MULTI-HOP dependency tree — the structured form of the CLI's
+ * `deps --depth N` view, so `coir deps -o json --depth N` and the MCP `deps` (with
+ * a depth arg) return the SAME shape. depth 1 should use depsData (the flat form).
+ * @param {any} scan @param {{out:Map<string,any[]>, inc:Map<string,any[]>}} maps @param {string} uuid
+ * @param {{showOut?:boolean, showIn?:boolean, depth?:number, types?:Set<string>, kinds?:Set<string>, limit?:number}} [opts]
+ */
+export function depsTreeData(scan, maps, uuid, { showOut = true, showIn = true, depth = 2, types = new Set(), kinds = new Set(), limit = Infinity } = {}) {
+  const a = scan.assets.get(uuid);
+  const side = (dir) => {
+    let tree = buildEdgeTree(scan, maps, uuid, dir, { depth, kinds, breadth: types.size ? Infinity : limit });
+    if (types.size) tree = pruneTreeByType(scan, tree, types, limit);
+    return serializeTree(scan, tree);
+  };
+  const o = { node: a ? a.path : uuid, type: a ? a.type : null, uuid, depth };
+  if (showOut) o.dependsOn = side('out');
+  if (showIn) o.usedBy = side('in');
+  return o;
+}
+
 /**
  * One asset's record (the `info` json): type/uuid/ext/importer/size, degrees,
  * sub-assets, raw meta userData.

@@ -63,6 +63,9 @@ export const S = {
   navHistory: [],           // topology back-stack of { treeRoot, selectedKey }  (− = 上一動)
   navForward: [],           // topology forward-stack  (+ = 下一動)
   listSel: null,            // 清單鍵盤游標的 uuid (↑↓ 切換、Enter 設為中心)
+  listRows: [],             // 清單當前（排序+篩選後）的完整列模型 — 虛擬化只畫可見區段
+  listRowH: 0,              // 量測到的列高（px），0=尚未量測；虛擬化用它換算可見列
+  listPaintScheduled: false,// 捲動重畫的 rAF 去抖
   listClickTimer: null,     // 清單單擊/雙擊 區分
   cellClickTimer: null,
   paletteItems: [],

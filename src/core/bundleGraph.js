@@ -71,3 +71,36 @@ export function buildBundleGraph(scan) {
   }
   return { nodes, containEdges, depEdges };
 }
+
+// Every CYCLE in the bundle dependency graph — the strongly-connected components
+// with ≥2 members. This catches not just a mutual pair (A⇄B) but a longer loop
+// (A→B→C→A) that a pairwise both-ways check misses entirely. Tarjan's SCC over the
+// bundle-dep edges (the graph is tiny — dozens of bundles — so recursion is fine).
+// Returns arrays of bundle NAMES (each sorted), one per cyclic group.
+/**
+ * @param {{from:string,to:string}[]} depEdges
+ * @returns {string[][]}
+ */
+export function bundleCycleGroups(depEdges) {
+  const adj = new Map(); const allNodes = new Set();
+  for (const d of depEdges) {
+    allNodes.add(d.from); allNodes.add(d.to);
+    let a = adj.get(d.from); if (!a) adj.set(d.from, (a = [])); a.push(d.to);
+  }
+  let idx = 0;
+  const index = new Map(), low = new Map(), onStack = new Set(), stack = []; const groups = [];
+  const connect = (v) => {
+    index.set(v, idx); low.set(v, idx); idx++; stack.push(v); onStack.add(v);
+    for (const w of adj.get(v) || []) {
+      if (!index.has(w)) { connect(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const comp = []; let w;
+      do { w = stack.pop(); onStack.delete(w); comp.push(w); } while (w !== v);
+      if (comp.length >= 2) groups.push(comp.map(bundleName).sort());
+    }
+  };
+  for (const v of allNodes) if (!index.has(v)) connect(v);
+  return groups.sort((a, b) => a[0].localeCompare(b[0]));
+}

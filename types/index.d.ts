@@ -96,6 +96,7 @@ export interface ScanResult {
   subOwner: Map<string, SubOwner>;
   subUsage: Map<string, Set<string>>;
   orphanRefs: { from: string; ref: string; loc?: EdgeLocation | null }[];
+  pluginErrors: { plugin: string; error: string }[]; // a plugin edges() that threw (isolated, non-fatal)
   metaErrors: { metaPath: string; error: string }[];
   missing: Map<string, string>; // uuid (+sub-uuids) -> intended path of a dropped source-less meta
   missingReferenced: Set<string>; // dropped paths something still points at

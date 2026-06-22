@@ -9,7 +9,7 @@ import { summary, bundleDuplication } from '../core/analyze.js';
 import { dependencyClosure, dependentClosure, buildAdjacency } from '../core/graph.js';
 import { buildBundleGraph, isBundleKey } from '../core/bundleGraph.js';
 import { PLUGINS } from '../core/plugins/index.js';
-import { renderTable, moveListSel, scrollListToSelection } from './list.js';
+import { renderTable, moveListSel, scrollListToSelection, paintList, openListFind, closeListFind, isListFindActive, runListFind, listFindStep } from './list.js';
 import { renderTopo, reflowTopo, focus, navTree, onTopoWheel, selectedUuid, selectTopoKey, copyCrumbChain, copyCrumbLink, openTopoFind, closeTopoFind, clearTopoFilter, runTopoFind, topoFindStep, isTopoFindActive } from './topo.js';
 import { closeUsage } from './usage.js';
 import { openPalette, closePalette, renderPalette, movePalette, pickPalette, drillKind } from './palette.js';
@@ -53,7 +53,7 @@ export function initUI({ onPick }) {
   $('search').oninput = () => { saveFilter(); renderTable(); };
   for (const b of document.querySelectorAll('.btabs button')) b.onclick = () => setTab(b.dataset.tab);
   // Back-to-top (清單 / 報告): show once the active tab's scroller is past a screenful.
-  $('tab-list').addEventListener('scroll', updateToTop);
+  $('listbody').addEventListener('scroll', updateToTop);
   $('tab-reports').addEventListener('scroll', updateToTop);
   $('toTop').onclick = () => { const c = scrollContainer(); if (c) smoothScrollTop(c); };
   document.body.addEventListener('click', (e) => {
@@ -95,6 +95,18 @@ export function initUI({ onPick }) {
   $('topoFindNext').onclick = () => { topoFindStep(1); tfi.focus(); };
   $('topoFindPrev').onclick = () => { topoFindStep(-1); tfi.focus(); };
   $('topoFindClose').onclick = () => closeTopoFind();
+  // In-list find (Ctrl/⌘+F) — same floating overlay, over the (virtualized) 清單.
+  const lfi = $('listFindInput');
+  lfi.oninput = () => runListFind();
+  lfi.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); listFindStep(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); listFindStep(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); listFindStep(-1); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeListFind(); }
+  };
+  $('listFindNext').onclick = () => { listFindStep(1); lfi.focus(); };
+  $('listFindPrev').onclick = () => { listFindStep(-1); lfi.focus(); };
+  $('listFindClose').onclick = () => closeListFind();
   // Topo bar — filter box (prunes the tree, debounced) with its own Esc-to-clear.
   const tflt = $('topoFilterInput');
   let filterTimer = 0;
@@ -120,6 +132,7 @@ export function initUI({ onPick }) {
   window.addEventListener('resize', () => { // topo padding + size-map viewBox depend on viewport size → re-fit
     if (S.tab === 'topo' && S.treeRoot) { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(reflowTopo); }
     else if (S.tab === 'sizemap') { clearTimeout(smResizeT); smResizeT = setTimeout(renderSizemap, 200); } // debounce (re-decodes thumbs)
+    else if (S.tab === 'list') { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(paintList); } // viewport changed → re-window the rows
   });
   return { setScan, onProgress, setStatus };
 }
@@ -145,6 +158,7 @@ export function setTab(name) {
   $('tab-reports').hidden = name !== 'reports';
   renderTypeFilters(); // badge 母體隨分頁切換(拓撲→層0鄰域)
   if (name !== 'topo') { closeUsage(); closeTopoFind(); } // the text filter persists (its bar is inside the now-hidden topo tab)
+  if (name !== 'list') closeListFind(); // close the list find when leaving 清單
   if (name === 'topo') renderTopo();
   else if (name === 'sizemap') renderSizemap();      // 體積圖：中心的依賴 closure
   else if (name === 'reports') renderReports(); // reflect the current global filter
@@ -172,7 +186,7 @@ function navForward() {
 }
 // The active tab's scroll container (清單 / 報告 only — 拓撲 has its own nav).
 function scrollContainer() {
-  if (S.tab === 'list') return $('tab-list');
+  if (S.tab === 'list') return $('listbody');
   if (S.tab === 'reports') return $('tab-reports');
   return null;
 }
@@ -279,6 +293,7 @@ function onKey(e) {
   const mod = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
   if ((e.key === 'p' || e.key === 'P') && mod) { e.preventDefault(); openPalette(); return; }        // Ctrl/⌘+P = "/"
   if ((e.key === 'f' || e.key === 'F') && mod && S.tab === 'topo' && S.treeRoot) { e.preventDefault(); openTopoFind(); return; } // Ctrl/⌘+F find in the (virtualized) topology
+  if ((e.key === 'f' || e.key === 'F') && mod && S.tab === 'list') { e.preventDefault(); openListFind(); return; }              // …and in the (virtualized) 清單
 
   if ((e.key === 'c' || e.key === 'C') && mod) {                                                      // Ctrl/⌘+C 複製名稱
     if (typing) return;                                            // copying inside an input
@@ -289,6 +304,7 @@ function onKey(e) {
   }
   if (e.key === 'Escape') {                                        // Esc：先關找尋列、彈窗，再清空類型篩選
     if (isTopoFindActive()) { e.preventDefault(); closeTopoFind(); return; }
+    if (isListFindActive()) { e.preventDefault(); closeListFind(); return; }
     if (!$('usagePopup').hidden) { e.preventDefault(); closeUsage(); return; }
     if (!typing && S.selectedTypes.size) { e.preventDefault(); toggleType('__all'); return; } // 打字中不清篩選
     return;

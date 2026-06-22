@@ -7,6 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('node:http'); // native-verify control endpoint (zero-dep)
+const crypto = require('node:crypto'); // native-verify per-session auth token
 const { shell } = require('electron'); // open the OS browser
 
 // coir's embedder API (package.json "exports" → src/index.js). After the
@@ -148,6 +149,7 @@ function invalidate() { scanP = null; clearTimeout(invT); invT = setTimeout(() =
 // NOTE: the asset-db message names below are the 3.8 set — confirm for 3.5.x.
 let verifyServer = null;
 let verifyPort = null; // the actually-bound port (auto-incremented from VERIFY_PORT if taken)
+let verifyToken = null; // per-session secret; required on every route except /ready (which hands it out)
 const VERIFY_PORT = Number(process.env.COIR_VERIFY_PORT) || 3789;
 const VERIFY_PORT_MAX = VERIFY_PORT + 20; // try 3789..3809 before giving up
 const cocosVersion = () => { try { return Editor.App.version || '?'; } catch (e) { return '?'; } };
@@ -183,13 +185,21 @@ async function fixtureOp(A, b) {
 
 async function handleVerify(req, res) {
   if (req.method !== 'POST') return sendJson(res, 405, { error: 'POST only' });
+  // /ready is the only unauthenticated route — it hands out the per-session token
+  // to a LOCAL client that can READ the response body (a cross-origin webpage can
+  // POST here but the browser blocks it from reading the body, so it can't learn
+  // the token). Every other route — incl. the destructive /fixture (create/delete
+  // assets) — requires the token, so a malicious page's blind CSRF POST is rejected.
+  if (req.url !== '/ready' && (!verifyToken || req.headers['x-coir-token'] !== verifyToken)) {
+    return sendJson(res, 401, { error: 'missing or invalid X-Coir-Token — re-connect to the endpoint (it rotates per start)' });
+  }
   let b; try { b = JSON.parse(await readBody(req)); } catch (e) { return sendJson(res, 400, { error: 'bad JSON body' }); }
   const A = (m, ...a) => Editor.Message.request('asset-db', m, ...a);
   switch (req.url) {
     case '/reimport': await A('reimport-asset', b.url); return sendJson(res, 200, { ok: true }); // engine re-reads from disk; malformed → import error
     case '/read':     return sendJson(res, 200, await Editor.Message.request('scene', 'execute-scene-script', { name: 'coir', method: 'coirRead', args: [b.uuid, b.selectors] })); // instantiate + read selectors (scene.js)
     case '/fixture':  return sendJson(res, 200, await fixtureOp(A, b)); // copy/create/delete + refresh → isolated test assets
-    case '/ready':    { let ready = true; try { ready = await A('query-ready'); } catch (e) { /* */ } return sendJson(res, 200, { ready, version: cocosVersion(), project: Editor.Project.path }); }
+    case '/ready':    { let ready = true; try { ready = await A('query-ready'); } catch (e) { /* */ } return sendJson(res, 200, { ready, version: cocosVersion(), project: Editor.Project.path, token: verifyToken }); }
     case '/uuid':     return sendJson(res, 200, { uuid: await A('query-uuid', b.url).catch(() => null) });
     default:          return sendJson(res, 404, { error: `unknown route ${req.url}` });
   }
@@ -220,13 +230,14 @@ exports.methods = {
   // the goto panel toggle). Resolves to the live status so a caller gets the port.
   startVerify() {
     if (verifyServer) return { running: true, port: verifyPort, version: cocosVersion(), project: Editor.Project.path };
+    verifyToken = crypto.randomBytes(18).toString('hex'); // fresh per start; clients re-read it from /ready
     verifyServer = http.createServer((req, res) =>
       handleVerify(req, res).catch((e) => { try { sendJson(res, 200, { error: String((e && e.message) || e) }); } catch (_) { /* */ } }));
     verifyServer.unref();
     return new Promise((resolve) => listenFrom(verifyServer, VERIFY_PORT, (port) =>
       resolve({ running: port != null, port, version: cocosVersion(), project: Editor.Project.path })));
   },
-  stopVerify() { if (verifyServer) { try { verifyServer.close(); } catch (e) { /* */ } verifyServer = null; verifyPort = null; console.log('[coir] native-verify stopped'); } return { running: false }; },
+  stopVerify() { if (verifyServer) { try { verifyServer.close(); } catch (e) { /* */ } verifyServer = null; verifyPort = null; verifyToken = null; console.log('[coir] native-verify stopped'); } return { running: false }; },
   // Current endpoint status — for the goto panel's footer.
   verifyStatus() { return { running: !!verifyServer, port: verifyPort, version: cocosVersion(), project: Editor.Project.path }; },
 };

@@ -13,8 +13,11 @@ const arr = (v) => (v == null ? [] : (Array.isArray(v) ? v : [v]));
 const base = (p) => p.slice(p.lastIndexOf('/') + 1);
 
 // Match an asset against a from/to spec — every listed field must hold (AND);
-// an absent spec matches anything. Fields: type / bundle / pathStartsWith /
-// pathContains / basename (each a string or array).
+// an absent spec matches anything. Fields (each a string or array):
+//   type / bundle / pathStartsWith / pathContains / basename  — literal
+//   pathRegex / basenameRegex                                 — regular expression
+//   not: { …a nested spec… }                                  — negation (must NOT match)
+const reTest = (pats, s) => arr(pats).some((p) => (p instanceof RegExp ? p : new RegExp(p)).test(s));
 function matchAsset(a, spec) {
   if (!spec) return true;
   if (spec.type && !arr(spec.type).includes(a.type)) return false;
@@ -22,7 +25,46 @@ function matchAsset(a, spec) {
   if (spec.pathStartsWith && !arr(spec.pathStartsWith).some((p) => a.path.startsWith(p))) return false;
   if (spec.pathContains && !arr(spec.pathContains).some((p) => a.path.includes(p))) return false;
   if (spec.basename && !arr(spec.basename).includes(base(a.path))) return false;
+  if (spec.pathRegex && !reTest(spec.pathRegex, a.path)) return false;
+  if (spec.basenameRegex && !reTest(spec.basenameRegex, base(a.path))) return false;
+  if (spec.not && matchAsset(a, spec.not)) return false; // negation
   return true;
+}
+
+// Compile a matcher's regex fields once (string → RegExp), recursing into `not`.
+// An invalid pattern throws here → evaluateRules turns it into a config violation.
+function compileMatcher(spec) {
+  if (!spec || typeof spec !== 'object') return spec;
+  const out = { ...spec };
+  if (spec.pathRegex) out.pathRegex = arr(spec.pathRegex).map((p) => (p instanceof RegExp ? p : new RegExp(p)));
+  if (spec.basenameRegex) out.basenameRegex = arr(spec.basenameRegex).map((p) => (p instanceof RegExp ? p : new RegExp(p)));
+  if (spec.not) out.not = compileMatcher(spec.not);
+  return out;
+}
+
+// Transitive forbid: every from-asset that REACHES a to-asset through ≥1 edge.
+// One reverse-BFS from the to-set marks every asset that can reach it (+ the next
+// hop toward it); each from-asset in that set is reported with the offending path.
+function forbidTransitive(scan, from, to) {
+  const isTo = new Set();
+  for (const a of scan.assets.values()) if (matchAsset(a, to)) isTo.add(a.uuid);
+  if (!isTo.size) return [];
+  const preds = new Map(); // uuid -> [assets pointing INTO it]
+  for (const e of scan.edges) { if (!preds.has(e.to)) preds.set(e.to, []); preds.get(e.to).push(e.from); }
+  const nextHop = new Map(); // uuid -> a neighbor one step closer to a to-asset
+  const q = [...isTo]; const seen = new Set(q);
+  for (let i = 0; i < q.length; i++) {
+    for (const p of preds.get(q[i]) || []) { if (seen.has(p)) continue; seen.add(p); nextHop.set(p, q[i]); q.push(p); }
+  }
+  const out = [];
+  for (const a of scan.assets.values()) {
+    if (!matchAsset(a, from) || !nextHop.has(a.uuid)) continue; // a pure to-asset has no nextHop → ≥1 edge required
+    const pathU = [a.uuid]; let cur = a.uuid;
+    while (!isTo.has(cur) && nextHop.has(cur)) { cur = nextHop.get(cur); pathU.push(cur); }
+    const names = pathU.map((u) => { const x = scan.assets.get(u); return x ? x.path : u; });
+    out.push({ message: `${names[0]} ⇒ ${names[names.length - 1]} (transitively, ${pathU.length - 1} hop(s): ${names.join(' → ')})`, asset: a.path });
+  }
+  return out;
 }
 
 // Each checker: (scan, rule, ctx) -> [{ message, asset?, locations? }] (empty = pass).
@@ -38,7 +80,7 @@ const CHECKERS = {
     return unusedReport(scan).items.filter((i) => !types || types.has(i.type))
       .map((i) => ({ message: `unused ${i.type} · ${i.path}`, asset: i.path }));
   },
-  'no-bundle-cycle': (scan) => bundleReport(scan).cycles.map((c) => ({ message: `bundle cycle ${c.a} ⇄ ${c.b}` })),
+  'no-bundle-cycle': (scan) => bundleReport(scan).cycleGroups.map((g) => ({ message: `bundle cycle ${g.join(' ⇄ ')}` })),
   'max-duplication': (scan, rule) => {
     const max = rule.maxBytes ?? 0;
     const dup = bundleReport(scan).dup;
@@ -56,13 +98,21 @@ const CHECKERS = {
     }
     return out;
   },
-  // phase 2 — general "X must not depend on Y" (dependency-cruiser style).
+  // phase 2 — general "X must not depend on Y" (dependency-cruiser style). The
+  // from/to matchers support literals, regex (pathRegex/basenameRegex) and `not`
+  // negation; `transitive:true` forbids INDIRECT reach (A must not reach B through
+  // any chain), reporting the offending path.
   'forbid-dep': (scan, rule) => {
     if (!rule.from && !rule.to) throw new Error('forbid-dep needs a "from" and/or "to" matcher');
+    const from = compileMatcher(rule.from), to = compileMatcher(rule.to);
+    if (rule.transitive) {
+      if (!rule.from || !rule.to) throw new Error('forbid-dep transitive needs BOTH a "from" and a "to" matcher');
+      return forbidTransitive(scan, from, to);
+    }
     const out = [];
     for (const e of scan.edges) {
       const f = scan.assets.get(e.from), t = scan.assets.get(e.to);
-      if (!f || !t || !matchAsset(f, rule.from) || !matchAsset(t, rule.to)) continue;
+      if (!f || !t || !matchAsset(f, from) || !matchAsset(t, to)) continue;
       out.push({ message: `${f.path} → ${t.path} (${e.kind})`, asset: f.path, locations: (e.locations || []).map((l) => locSelector(scan, l)).filter(Boolean) });
     }
     return out;

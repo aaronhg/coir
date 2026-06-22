@@ -33,7 +33,7 @@
   * { box-sizing: border-box; }
   html, body { overscroll-behavior:none; } /* stop the macOS two-finger swipe-back */
   body { margin:0; font:13px/1.4 -apple-system,"Segoe UI",Roboto,"PingFang TC","Microsoft JhengHei",sans-serif; background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column; overflow:hidden; }
-  #topo, .treebody, #tab-list, #tab-reports { overscroll-behavior:none; }
+  #topo, .treebody, #listbody, #tab-reports { overscroll-behavior:none; }
   /* banner */
   #banner { display:flex; align-items:center; gap:12px; padding:6px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
   #pickBtn { background:var(--acc); color:#04222f; border:0; padding:7px 14px; border-radius:6px; font-weight:600; cursor:pointer; }
@@ -108,7 +108,9 @@
   .welcome-box .ver { margin:12px 0 0; opacity:.75; }
   .tab { position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
   .tab[hidden] { display:none; }
-  #tab-list { padding:0 10px 10px; overflow:auto; } /* NO top padding: a sticky thead top:0 inside a padded scroller leaves a band where rows bleed above the header */
+  #tab-list { padding:0 10px; overflow:hidden; } /* non-scrolling flex column (search box + #listwrap); #listbody scrolls. Horizontal padding only — a sticky thead top:0 needs no top padding above it */
+  #listwrap { position:relative; flex:1; min-height:0; } /* list region below the search box; the floating find overlay positions against it (a non-scrolling wrapper, like #topowrap) */
+  #listbody { position:absolute; inset:0; overflow:auto; padding-bottom:10px; } /* THE list scroller (virtualized rows + sticky thead) */
   #tab-reports { padding:0 10px 10px; overflow:auto; } /* no top padding: the .rtabs sticky bar sits flush at the top */
   /* back-to-top button (清單 / 報告) */
   .totop { position:fixed; right:18px; bottom:46px; z-index:40; width:38px; height:38px; border-radius:50%;
@@ -133,6 +135,10 @@
   table.ptable td { padding:4px 6px; border-bottom:1px solid #20262f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   table.ptable tbody tr { cursor:pointer; }
   table.ptable tbody tr:hover td { background:var(--panel2); }
+  table.ptable tbody tr.vpad, table.ptable tbody tr.vpad td { cursor:default; } /* virtualization spacer rows (reserve scroll height) */
+  table.ptable tbody tr.vpad:hover td { background:none; }
+  table.ptable tbody tr.lfind-hit td { background:rgba(255,183,77,.12); } /* a find match (amber) — after .lsel so find wins while active */
+  table.ptable tbody tr.lfind-cur td { background:rgba(255,183,77,.28); } /* the current find match */
   table.ptable tbody tr.rooted td { background:#243042; box-shadow:inset 2px 0 0 var(--acc); }
   @keyframes rowFlash { from { background-color:rgba(79,195,247,.38); } to { background-color:transparent; } }
   table.ptable tbody tr.flash td { animation:rowFlash 1.1s ease-out; }
@@ -248,12 +254,12 @@
   .th.center { justify-content:center; background:rgba(79,195,247,.12); box-shadow:inset 0 -2px 0 var(--acc); }
   .th .thc { color:var(--fg); background:var(--panel2); border-radius:8px; padding:0 6px; }
   .treebody { flex:1; overflow:auto; min-height:0; }
-  #topoFind { position:absolute; top:8px; right:14px; z-index:30; display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:5px 8px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
-  #topoFind[hidden] { display:none; }
-  #topoFindInput { background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--fg); font-size:12px; padding:4px 8px; width:210px; outline:none; }
-  #topoFindInput:focus { border-color:var(--acc); }
-  #topoFindInput.nomatch { border-color:#e57373; }
-  #topoFind .tf-count { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; min-width:42px; text-align:center; }
+  #topoFind, #listFind { position:absolute; top:8px; right:14px; z-index:30; display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:5px 8px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #topoFind[hidden], #listFind[hidden] { display:none; }
+  #topoFindInput, #listFindInput { background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--fg); font-size:12px; padding:4px 8px; width:210px; outline:none; }
+  #topoFindInput:focus, #listFindInput:focus { border-color:var(--acc); }
+  #topoFindInput.nomatch, #listFindInput.nomatch { border-color:#e57373; }
+  #topoFind .tf-count, #listFind .tf-count { color:var(--mut); font-size:11px; font-variant-numeric:tabular-nums; min-width:42px; text-align:center; }
   .tf-btn { background:transparent; border:0; color:var(--mut); cursor:pointer; font-size:12px; padding:2px 5px; border-radius:4px; line-height:1; }
   .tf-btn:hover { background:var(--panel); color:var(--fg); }
   .tf-btn.ok { color:#81c784; }
@@ -343,7 +349,16 @@
   </div>
   <section id="tab-list" class="tab">
     <input id="search" data-i18n-ph="search.ph" placeholder="搜尋資產路徑…（或按 / 快速開啟）">
-    <div id="nodeList"><div class="empty" data-i18n="empty.pickFirst">先選擇專案目錄</div></div>
+    <div id="listwrap">
+      <div id="listbody"><div id="nodeList"><div class="empty" data-i18n="empty.pickFirst">先選擇專案目錄</div></div></div>
+      <div id="listFind" hidden>
+        <input id="listFindInput" type="text" data-i18n-ph="list.findPh" placeholder="在清單中尋找…" spellcheck="false" autocomplete="off">
+        <span id="listFindCount" class="tf-count"></span>
+        <button id="listFindPrev" class="tf-btn" type="button" data-i18n-title="topo.findPrev" title="上一個 (⇧Enter)">▲</button>
+        <button id="listFindNext" class="tf-btn" type="button" data-i18n-title="topo.findNext" title="下一個 (Enter)">▼</button>
+        <button id="listFindClose" class="tf-btn" type="button" data-i18n-title="topo.findClose" title="關閉 (Esc)">✕</button>
+      </div>
+    </div>
   </section>
   <section id="tab-topo" class="tab" hidden>
     <div id="topobar" hidden>

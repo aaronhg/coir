@@ -40,20 +40,50 @@ async function loadOne(absPath, warn) {
   }
 }
 
+// Locate `<dir>/coir.plugins.mjs` (then .js); null if absent.
+/** @param {string} dir @returns {Promise<string|null>} */
+async function configPluginPath(dir) {
+  for (const name of ['coir.plugins.mjs', 'coir.plugins.js']) {
+    const abs = path.join(dir, name);
+    try { await fs.access(abs); return abs; } catch { /* try next */ }
+  }
+  return null;
+}
+
 // Auto-load `<dir>/coir.plugins.mjs` (then .js) if present. Absent config is
-// normal → []. Used for both the coir-root global config and a project-local one.
+// normal → []. Use this for the COIR-ROOT global config (the user's own) and for
+// explicit paths; a SCANNED PROJECT's config goes through loadProjectConfigPlugins
+// (the trust gate) instead.
 /**
  * @param {string} dir
  * @param {(m: string) => void} [warn]
  * @returns {Promise<Plugin[]>}
  */
 export async function loadConfigPlugins(dir, warn = warnDefault) {
-  for (const name of ['coir.plugins.mjs', 'coir.plugins.js']) {
-    const abs = path.join(dir, name);
-    try { await fs.access(abs); } catch { continue; }
-    return loadOne(abs, warn);
+  const abs = await configPluginPath(dir);
+  return abs ? loadOne(abs, warn) : [];
+}
+
+// A scanned PROJECT's coir.plugins.mjs is a TRUST BOUNDARY: importing it runs
+// arbitrary Node code from a project you may not control (you scanned it, you
+// didn't necessarily write it). So it loads ONLY when explicitly trusted —
+// otherwise its presence is REPORTED (neither silently run nor silently skipped)
+// with how to enable it. The coir-root global config and `--plugin` files are the
+// user's own → always loaded (loadConfigPlugins / loadPluginFiles).
+/**
+ * @param {string} dir
+ * @param {{ trusted?: boolean, warn?: (m: string) => void }} [opts]
+ * @returns {Promise<Plugin[]>}
+ */
+export async function loadProjectConfigPlugins(dir, { trusted = false, warn = warnDefault } = {}) {
+  const abs = await configPluginPath(dir);
+  if (!abs) return [];
+  if (!trusted) {
+    warn(`⚠ ${path.basename(abs)} found in the project but NOT loaded — a project-supplied plugin runs arbitrary code on scan.`);
+    warn('  Trust it with --trust-project-plugins (or env COIR_TRUST_PROJECT_PLUGINS=1) to load it.');
+    return [];
   }
-  return [];
+  return loadOne(abs, warn);
 }
 
 // Load each `--plugin <file>` path (relative paths resolved against the cwd). A

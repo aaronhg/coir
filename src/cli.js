@@ -30,10 +30,10 @@ import { mainUuid, subOf, looksCompressed, decompressUuid } from './core/uuid.js
 import { knownTypes } from './core/meta.js';
 import { PLUGINS, dedupePlugins } from './core/plugins/index.js';
 import { collectPluginCommands, mapPositionals } from './seam/pluginCommands.js';
-import { loadConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
+import { loadConfigPlugins, loadProjectConfigPlugins, loadPluginFiles } from './node/loadPlugins.js';
 import { makeFsProvider } from './node/fsProvider.js';
 import { base, kb, resolveAsset, edgeMaps, orphansOf, locText, edgeSort, shareData } from './seam/shared.js';
-import { depsData, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
+import { depsData, depsTreeData, buildEdgeTree, pruneTreeByType, infoData, analyzeData, analyzeAll, ANALYZE_SECTIONS } from './seam/query.js';
 import { duplicatesData } from './core/duplicates.js';
 import { evaluateRules, DEFAULT_RULES, needsDuplicates, needsInstanceOverrides, needsPreviewLeaks, collectPluginCheckers } from './core/rules.js';
 import { collectInstanceOverridesData, collectPreviewLeaksData } from './edit/ops.js';
@@ -127,7 +127,9 @@ Exit codes:  0 ok (incl. no-op)    1 usage/value error    2 not found / ambiguou
 --type   : keep only the given asset types (comma-separated); on the deps/uses tree it keeps the
            intermediate path leading to those types. known: ${KNOWN_TYPES.join(' ')}
 --plugin <file> : load an extra plugin module (repeatable). Auto-loaded: <coirRoot>/coir.plugins.mjs
-           (global) and <projectDir>/coir.plugins.mjs (per project; both gitignored).
+           (global). A <projectDir>/coir.plugins.mjs is a trust boundary (runs the project's code) and
+           loads ONLY with --trust-project-plugins (or env COIR_TRUST_PROJECT_PLUGINS=1).
+--trust-project-plugins : load the scanned project's coir.plugins.mjs (off by default — it runs arbitrary code).
 -C <dir> : the Cocos project dir (git-style; default is the current directory).   -h/--help    -v/--version`;
 
 // Query-side user-facing text (CLI is fixed English). Resolution errors live in
@@ -201,6 +203,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--kind=')) addKinds(a.slice(7));
     else if (a === '--plugin') { if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.plugins.push(argv[++i]); }
     else if (a.startsWith('--plugin=')) flags.plugins.push(a.slice(9));
+    else if (a === '--trust-project-plugins') flags.trustProjectPlugins = true; // load the scanned project's coir.plugins.mjs (runs its code)
     else if (a === '--null') flags.value = { type: 'null', args: [] };
     else if (VALUE_FLAGS[a]) { // typed value for `edit set …`; grab up to arity non-flag tokens (so --vec3 0 0 1 works incl. negatives, but extra positionals aren't swallowed)
       const type = VALUE_FLAGS[a];
@@ -225,57 +228,19 @@ function parseArgs(argv) {
 const matchesKind = (flags, e) => !flags.kinds.size || flags.kinds.has(e.kind);
 
 // ---- dependency tree: build → (optionally) prune by type → render ---------
-// Build the side tree with the SAME global-seen / depth / limit rules as before
-// (a revisited node is shown with ↻ and not re-expanded). Returns a node tree.
-function buildEdgeTree(scan, maps, rootUuid, dir, flags) {
-  const seen = new Set([rootUuid]);
-  // When filtering by type, build full breadth and let pruneByType apply --limit
-  // to the SURVIVORS, so a match that sorts past --limit is never dropped before
-  // the type filter sees it. Unfiltered, --limit caps breadth here as before.
-  const breadth = flags.types.size ? Infinity : flags.limit;
-  const maxDepth = flags.depth == null ? 1 : flags.depth; // deps/uses default to 1 hop (edit tree uses its own)
-  return (function recur(uuid, depth) {
-    const edges = ((dir === 'out' ? maps.out.get(uuid) : maps.inc.get(uuid)) || [])
-      .filter((e) => matchesKind(flags, e)).slice().sort(edgeSort(scan, dir)).slice(0, breadth);
-    const nodes = [];
-    for (const e of edges) {
-      const other = dir === 'out' ? e.to : e.from;
-      const revisit = seen.has(other);
-      let children = [];
-      if (depth < maxDepth && !revisit) { seen.add(other); children = recur(other, depth + 1); }
-      nodes.push({ e, other, depth, revisit, children });
-    }
-    return nodes;
-  })(rootUuid, 1);
-}
-// Keep only branches that REACH one of `types`: a node stays if it is itself a
-// match or has a kept descendant (中間節點). A revisited (↻) node carries no
-// children of its own, so we remember whether each uuid's first (expanded)
-// occurrence reaches a match (`reaches`) and let later ↻ occurrences inherit that
-// verdict — matching the unfiltered view, which still prints the ↻ pointer row.
-// `limit` caps the SURVIVORS at each level (post-filter), so a match within the
-// limit is never dropped before the type filter runs.
-function pruneByType(scan, nodes, types, limit, reaches = new Map()) {
-  const out = [];
-  for (const n of nodes) {
-    const kids = pruneByType(scan, n.children, types, limit, reaches);
-    const oa = scan.assets.get(n.other);
-    const reach = !!((oa && types.has(oa.type)) || kids.length || (n.revisit && reaches.get(n.other)));
-    if (!n.revisit) reaches.set(n.other, reach);
-    if (reach) out.push({ ...n, children: kids });
-  }
-  return out.slice(0, limit);
-}
+// The multi-hop tree builder + type-prune now live in the shared seam (query.js),
+// so the CLI text tree, the CLI `-o json --depth N`, and the MCP `deps` depth all
+// use ONE builder. renderTreeText reads the presentation-free node fields it emits.
 function renderTreeText(scan, tree, dir, flags, lines) {
   const arrow = dir === 'out' ? '→' : '←';
   (function walk(nodes) {
     for (const n of nodes) {
       const oa = scan.assets.get(n.other);
       const indent = '    '.repeat(n.depth);
-      lines.push(`${indent}${n.e.kind.padEnd(VIA_W)} ${arrow} ${oa.path}` +
-        `${n.e.weight > 1 ? `  (${n.e.weight}×)` : ''}${n.revisit ? '  ↻' : ''}`);
+      lines.push(`${indent}${n.kind.padEnd(VIA_W)} ${arrow} ${oa.path}` +
+        `${n.weight > 1 ? `  (${n.weight}×)` : ''}${n.revisit ? '  ↻' : ''}`);
       if (flags.where) {
-        if (n.e.locations.length) for (const loc of n.e.locations) lines.push(`${indent}    ${locText(scan, loc)}`);
+        if (n.locations.length) for (const loc of n.locations) lines.push(`${indent}    ${locText(scan, loc)}`);
         else lines.push(`${indent}    ${M.metaDerived}`);
       }
       walk(n.children);
@@ -283,8 +248,12 @@ function renderTreeText(scan, tree, dir, flags, lines) {
   })(tree);
 }
 function sideTree(scan, maps, rootUuid, dir, flags) {
-  const tree = buildEdgeTree(scan, maps, rootUuid, dir, flags);
-  return flags.types.size ? pruneByType(scan, tree, flags.types, flags.limit) : tree;
+  // type-filtering builds full breadth → pruneTreeByType caps the survivors at --limit
+  const tree = buildEdgeTree(scan, maps, rootUuid, dir, {
+    depth: flags.depth == null ? 1 : flags.depth, kinds: flags.kinds,
+    breadth: flags.types.size ? Infinity : flags.limit,
+  });
+  return flags.types.size ? pruneTreeByType(scan, tree, flags.types, flags.limit) : tree;
 }
 // Number of nodes whose own type matches — i.e. how many 符合 lines are actually
 // rendered (at every depth), so the header agrees with the tree printed below it.
@@ -305,7 +274,13 @@ function cmdDeps(scan, maps, uuid, flags) {
   const showOut = flags.dir !== 'in';
   const showIn = flags.dir !== 'out';
   const filt = flags.types.size;
-  if (flags.json) { console.log(JSON.stringify(depsData(scan, maps, uuid, { showOut, showIn, types: flags.types, kinds: flags.kinds, limit: flags.limit }))); return; }
+  if (flags.json) { // depth>1 → the multi-hop tree (same shape as the MCP deps depth); else the flat 1-hop record
+    const opts = { showOut, showIn, types: flags.types, kinds: flags.kinds, limit: flags.limit };
+    console.log(JSON.stringify(flags.depth && flags.depth > 1
+      ? depsTreeData(scan, maps, uuid, { ...opts, depth: flags.depth })
+      : depsData(scan, maps, uuid, opts)));
+    return;
+  }
 
   const filtTag = `${filt ? `   [type: ${[...flags.types].join(',')}]` : ''}${flags.kinds.size ? `   [kind: ${[...flags.kinds].join(',')}]` : ''}`;
   const lines = [`${a.path} (${a.type})${filtTag}`];
@@ -437,10 +412,13 @@ function renderOrphans(d, lines) {
   }
 }
 function renderAtlas(d, lines) {
+  const px = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : `${n}`);
   lines.push(`atlas: ${d.total} atlases/multi-frame`);
   for (const i of d.items) {
     const tag = !i.referenced ? '[unreferenced]' : i.wholeReferenced ? '[whole/dynamic]' : '';
-    lines.push(`   ${`${i.used}/${i.total}`.padStart(8)} used (${(i.ratio * 100).toFixed(0)}%) ${tag.padEnd(15)} ${i.path}`);
+    // area-weighted utilization when frame sizes are known (a few big dead frames waste more than many tiny ones)
+    const area = i.areaRatio != null ? `  area ${(i.areaRatio * 100).toFixed(0)}% (waste ${px(i.wastedArea)}px²)` : '';
+    lines.push(`   ${`${i.used}/${i.total}`.padStart(8)} used (${(i.ratio * 100).toFixed(0)}%)${area} ${tag.padEnd(15)} ${i.path}`);
   }
   if (d.total > d.items.length) lines.push(M.moreItems(d.total - d.items.length));
 }
@@ -452,9 +430,10 @@ function renderSize(d, lines) {
 }
 function renderBundles(d, lines) {
   if (!d.total) { lines.push('bundles: none (no Asset Bundles configured)'); return; }
-  lines.push(`bundles: ${d.total}${d.cycles.length ? `, ${d.cycles.length} cycle(s) ⚠` : ''}`);
+  const cyc = d.cycleGroups || (d.cycles || []).map((c) => [c.a, c.b]); // every cycle group (A⇄B and A→B→C→A)
+  lines.push(`bundles: ${d.total}${cyc.length ? `, ${cyc.length} cycle(s) ⚠` : ''}`);
   for (const b of d.bundles) lines.push(`   ${kb(b.size).padStart(11)}  ${String(b.members).padStart(4)} files  ${b.name.padEnd(16)} (deps ${b.out}, dependents ${b.in})`);
-  if (d.cycles.length) { lines.push('  cycles (linked both ways — a leaky boundary):'); for (const c of d.cycles) lines.push(`   ${c.a} ⇄ ${c.b}`); }
+  if (cyc.length) { lines.push('  cycles (a closed dependency loop — a leaky boundary):'); for (const g of cyc) lines.push(`   ${g.join(' ⇄ ')}`); }
   if (d.dup && d.dup.totalWasted > 0) {
     lines.push(`  duplication: ${kb(d.dup.totalWasted)} wasted across ${d.dup.total} assets copied into ≥2 same-priority bundles`);
     for (const i of d.dup.items) lines.push(`   ${kb(i.wasted).padStart(11)}  ×${i.copies}  ${i.type.padEnd(8)} ${i.path}  [${i.bundles.join(', ')}]`);
@@ -591,12 +570,15 @@ async function main() {
   if (flags.version) { console.log(`coir ${VERSION}`); process.exit(0); }
 
   // Built-ins + coir-root global config + project-local config + --plugin files.
-  // External plugins thus live outside the coir repo (most specific last).
+  // External plugins thus live outside the coir repo (most specific last). The
+  // project-local config is a trust boundary (runs the scanned project's code) →
+  // gated behind --trust-project-plugins / COIR_TRUST_PROJECT_PLUGINS.
   const sameAsRoot = path.resolve(projectDir) === path.resolve(COIR_ROOT);
+  const trustProject = !!flags.trustProjectPlugins || process.env.COIR_TRUST_PROJECT_PLUGINS === '1';
   const plugins = dedupePlugins([
     ...PLUGINS,
-    ...await loadConfigPlugins(COIR_ROOT),                       // cross-project / global
-    ...(sameAsRoot ? [] : await loadConfigPlugins(projectDir)), // this project only
+    ...await loadConfigPlugins(COIR_ROOT),                       // cross-project / global (the user's own)
+    ...(sameAsRoot ? [] : await loadProjectConfigPlugins(projectDir, { trusted: trustProject })), // this project only (trust-gated)
     ...await loadPluginFiles(flags.plugins),                    // --plugin <file>
   ]);
   // Plugin-contributed CLI commands (built-ins always win); also appended to --help.
@@ -618,6 +600,9 @@ async function main() {
     if (flags.project == null && /ENOENT/.test(e.message)) console.error(M.scanHint); // default cwd had no assets/ → likely meant -C
     process.exit(1);
   }
+  // A plugin's edges() threw — the scan is otherwise complete, but its edges are
+  // missing. Surface it (isolated in scanProject) so the gap isn't silent.
+  for (const pe of scan.pluginErrors || []) console.error(`⚠ plugin "${pe.plugin}" failed during edge collection: ${pe.error} — its edges are missing`);
 
   // --type matches an asset's TYPE, not the edge KIND printed on each row. Warn on
   // values that no asset carries (typos, or edge kinds like `texture`/`sprite-frame`

@@ -99,6 +99,34 @@ test('rules phase 2: forbid-dep + no-cross-bundle + atlas-min-util', async () =>
   assert.equal(evaluateRules(scan, [{ name: 'atlas-min-util', level: 'warn', min: 0.4 }]).warns, 0);
 });
 
+test('rules: forbid-dep regex + negation + transitive', async () => {
+  // chain A.prefab → B.prefab → art/c.png (two hops)
+  const B = U('5'), C = U('6');
+  const scan = await scanProject(memFP({
+    'A.prefab': prefab(B), 'A.prefab.meta': meta({ importer: 'prefab', uuid: U('1') }),
+    'B.prefab': prefab(C), 'B.prefab.meta': meta({ importer: 'prefab', uuid: B }),
+    'art/c.png': 'C', 'art/c.png.meta': meta({ importer: 'image', uuid: C }),
+  }));
+
+  // regex: any .prefab → any .png  (direct) → only B→c (A does NOT directly depend on c.png)
+  const re = evaluateRules(scan, [{ name: 'forbid-dep', level: 'error', from: { pathRegex: '\\.prefab$' }, to: { pathRegex: '\\.png$' } }]);
+  assert.ok(re.violations.some((v) => /B\.prefab → art\/c\.png/.test(v.message)), 'regex matches B→c');
+  assert.ok(!re.violations.some((v) => /A\.prefab → art\/c\.png/.test(v.message)), 'direct mode: A has no edge to c.png');
+
+  // negation: a .prefab `from` that is NOT B.prefab → only A qualifies → A→B reported
+  const neg = evaluateRules(scan, [{ name: 'forbid-dep', level: 'error', from: { pathRegex: '\\.prefab$', not: { basename: 'B.prefab' } }, to: { basename: 'B.prefab' } }]);
+  assert.ok(neg.violations.some((v) => /A\.prefab → B\.prefab/.test(v.message)), 'A→B kept by negation');
+
+  // transitive: A reaches c.png through B (2 hops) — direct mode misses this
+  const tr = evaluateRules(scan, [{ name: 'forbid-dep', level: 'error', transitive: true, from: { basename: 'A.prefab' }, to: { basename: 'c.png' } }]);
+  assert.equal(tr.errors, 1, 'one transitive violation');
+  assert.ok(/A\.prefab ⇒ art\/c\.png/.test(tr.violations[0].message) && /2 hop/.test(tr.violations[0].message), 'reports the 2-hop path');
+
+  // transitive needs BOTH from and to; an invalid regex is a config error
+  assert.equal(evaluateRules(scan, [{ name: 'forbid-dep', level: 'error', transitive: true, from: { basename: 'A.prefab' } }]).configErrors, 1);
+  assert.equal(evaluateRules(scan, [{ name: 'forbid-dep', level: 'error', from: { pathRegex: '[' }, to: { type: 'image' } }]).configErrors, 1);
+});
+
 test('rules phase 3: a plugin contributes a checker', async () => {
   const scan = await scanProject(memFP({ 'x.png': 'A', 'x.png.meta': meta({ importer: 'image', uuid: U('1') }) }));
   const plugin = { name: 'p', rules: [{ name: 'no-png', check: (s) => [...s.assets.values()].filter((a) => a.ext === '.png').map((a) => ({ message: `png: ${a.path}`, asset: a.path })) }] };

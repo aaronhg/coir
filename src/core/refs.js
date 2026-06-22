@@ -1,30 +1,5 @@
-// Extract outgoing references from asset source files / metas.
-
-// Recursively walk a deserialized prefab/scene/anim/mtl JSON, reporting every
-// `__uuid__` target and every `__type__` token. Cocos 3.x serializes asset
-// references as { "__uuid__": "<uuid>" } or { "__uuid__": "<uuid>@<subid>" },
-// and custom component classes as { "__type__": "<compressed-uuid>" }.
-export function walkJsonRefs(root, onUuid, onType) {
-  const stack = [root];
-  while (stack.length) {
-    const node = stack.pop();
-    if (node == null || typeof node !== 'object') continue;
-    if (Array.isArray(node)) {
-      for (const v of node) if (v && typeof v === 'object') stack.push(v);
-      continue;
-    }
-    const u = node.__uuid__;
-    if (typeof u === 'string' && u) onUuid(u);
-    const t = node.__type__;
-    if (typeof t === 'string' && t) onType(t);
-    for (const k in node) {
-      const v = node[k];
-      if (v && typeof v === 'object') stack.push(v);
-    }
-  }
-}
-
-// Extract references WITH usage context. For a scene/prefab (a flat array where
+// Extract outgoing references from asset source files (prefab/scene/anim/mtl
+// JSON) WITH usage context. For a scene/prefab (a flat array where
 // {"__id__":N} === arr[N]) each ref gets a location {nodePath, component,
 // property}: the owning component's node path (via node.__id__ then the
 // _parent/_name chain), the component __type__, and the property path that led
@@ -114,35 +89,4 @@ function walkOwn(node, path, onUuid, onType) {
     const v = node[k];
     if (v && typeof v === 'object') walkOwn(v, path.concat(k), onUuid, onType);
   }
-}
-
-const IMPORT_RE = /\bimport\b(?:[^'"]*?\bfrom\b)?\s*['"]([^'"]+)['"]/g;
-const REQUIRE_RE = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-
-// Pull relative import/require specifiers out of TypeScript/JavaScript source.
-export function extractTsImports(text) {
-  const specs = new Set();
-  let m;
-  while ((m = IMPORT_RE.exec(text))) {
-    if (m[1].startsWith('.')) specs.add(m[1]);
-  }
-  while ((m = REQUIRE_RE.exec(text))) {
-    if (m[1].startsWith('.')) specs.add(m[1]);
-  }
-  return [...specs];
-}
-
-// Resolve a relative module specifier (from a .ts file) to a candidate asset
-// source path, normalizing "." / ".." segments. Returns the resolved path
-// WITHOUT extension; the caller tries ".ts" and "/index.ts".
-export function resolveImportPath(fromPath, spec) {
-  const dir = fromPath.slice(0, fromPath.lastIndexOf('/'));
-  const parts = (dir ? dir.split('/') : []).concat(spec.split('/'));
-  const out = [];
-  for (const p of parts) {
-    if (p === '' || p === '.') continue;
-    if (p === '..') out.pop();
-    else out.push(p);
-  }
-  return out.join('/');
 }
