@@ -76,6 +76,7 @@ export const S = {
   provider: null,           // the live FileProvider (file()/readText) — null in snapshot/viewer mode
   reportGen: 0,             // bumped each renderReports; stale async plugin-report fills bail
   pluginReportCache: null,  // built Plugin.reports data, per scan (cleared in setScan)
+  deepOverrideCache: null,  // built deep-instance-override report data, per scan (cleared in setScan)
   reportTab: null,          // active 報告 sub-tab id (null → first); persists across re-renders
   reportBodies: null,       // id -> {title,sub,body} for the core sections (sync sub-tab swap)
   sizemapSel: null,         // 體積圖 keyboard cell cursor (uuid)

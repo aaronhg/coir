@@ -93,7 +93,7 @@ const CHECKERS = {
       for (const ov of overrides) {
         if (ov.onRoot && (!allow || allow.has(ov.prop))) continue; // a root (top-node) override is allowed
         if (ignore.has(ov.prop)) continue;                          // engine-baked, not a manual edit
-        out.push({ message: `deep instance override: "${ov.prop}" on a node inside instance "${ov.instance}" (localID ${ov.localID.join('/')})`, asset: file });
+        out.push({ message: `deep instance override: "${ov.prop}" on a node (localID ${ov.localID.join('/')}) inside instance "${ov.instancePath || ov.instance}"`, asset: file });
       }
     }
     return out;

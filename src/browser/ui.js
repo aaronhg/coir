@@ -57,6 +57,12 @@ export function initUI({ onPick }) {
   $('tab-reports').addEventListener('scroll', updateToTop);
   $('toTop').onclick = () => { const c = scrollContainer(); if (c) smoothScrollTop(c); };
   document.body.addEventListener('click', (e) => {
+    const cb = e.target.closest('.cell-copy'); // a copy button (report rows etc.) — topo handles its own + stops propagation
+    if (cb && cb.dataset.copy != null && !cb.closest('#topo')) {
+      e.stopPropagation();
+      copyToClipboard(cb.dataset.copy, () => { cb.innerHTML = CHECK_ICON; cb.classList.add('ok'); setTimeout(() => { cb.innerHTML = COPY_ICON; cb.classList.remove('ok'); }, 1200); setStatus(cb.dataset.copyMsg || t('copy.named', { name: cb.dataset.copy })); });
+      return;
+    }
     const el = e.target.closest('[data-uuid]');
     if (!el || el.closest('#topo') || el.closest('#palette') || el.closest('#nodeList')) return; // 清單列自有單擊/雙擊處理
     if (S.scan && S.scan.assets.has(el.dataset.uuid)) focus(el.dataset.uuid);
@@ -222,6 +228,7 @@ function setScan(s, name, opts = {}) {
   S.plugins = plugins;            // composed set (built-ins + global/project/use) — for Plugin.reports
   S.provider = provider;          // live FileProvider for report thumbnails (null in viewer/snapshot)
   S.pluginReportCache = null;     // a new scan invalidates any built plugin-report data
+  S.deepOverrideCache = null;     // …and the deep-instance-override report data
   S.reportTab = null;             // a new project starts on the first report tab (體積圖)
   S.sizemapSel = null;            // clear the 體積圖 keyboard cursor for the new project
   S.scan = s; S.adj = s.adjacency; S.treeRoot = null; S.selectedKey = null; S.selectedTypes = new Set(); S.navHistory = []; S.navForward = []; S.listSel = null;

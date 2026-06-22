@@ -5,6 +5,7 @@
 // report whose members carry a CropSpec; spine's `spine-dup` is the first user.
 import { S, $, base, esc } from './state.js';
 import { t } from './i18n.js';
+import { copyAllBtn } from './copy.js';
 import { makePageCache, cropThumb, cropSignature, sigDistance } from './imagecrop.js';
 
 const CONFIRM_THRESHOLD = 0.10; // normalized L1; pairwise worst ≤ this → "confirmed"
@@ -20,7 +21,7 @@ export function visualSectionHTML(sectionId, title, report) {
     : `<div class="empty">${esc(t('rep.none'))}</div>`;
   const sub = groups.length ? t('vr.sharedCount', { n: groups.length }) : t('rep.none');
   return `<div id="rep-${esc(sectionId)}" class="vreport">` +
-    `<div class="rbody-head">${esc(t(title))} <span class="sub">${esc(sub)}</span></div>` +
+    `<div class="rbody-head">${esc(t(title))} <span class="sub">${esc(sub)}</span>${copyAllBtn(groups.map((g) => g.label))}</div>` +
     `<div class="rbody">${body}</div></div>`;
 }
 

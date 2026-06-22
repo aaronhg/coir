@@ -1,6 +1,14 @@
 // Clipboard helpers (with a textarea fallback for non-secure contexts).
-import { base, S, setStatus, COPY_ICON, CHECK_ICON } from './state.js';
+import { base, S, setStatus, COPY_ICON, CHECK_ICON, esc } from './state.js';
 import { t } from './i18n.js';
+
+// A "copy all" button for a report section/sub-header — copies every line (one per
+// row). Empty list → no button. The click is handled by the global delegated
+// handler in ui.js (.cell-copy → copyToClipboard); data-copy-msg = the status text.
+export function copyAllBtn(lines) {
+  if (!lines || !lines.length) return '';
+  return ` <button class="cell-copy" type="button" title="${esc(t('rep.copyAll'))}" data-copy="${esc(lines.join('\n'))}" data-copy-msg="${esc(t('rep.copiedN', { n: lines.length }))}">${COPY_ICON}</button>`;
+}
 
 export function copyToClipboard(text, done) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
