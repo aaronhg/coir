@@ -54,6 +54,7 @@ function resolvePath(root, raw) {
   let path = String(raw || '').trim();
   const colon = path.indexOf(':');           // 剝掉 :Component[...] 後綴——選節點
   if (colon >= 0) path = path.slice(0, colon);
+  path = path.replace(/\.(_[A-Za-z]\w*)$/, ''); // 剝掉尾端的節點屬性（._lpos/._name…，深層覆寫報告貼進來的格式）——選那個節點
   path = path.trim();
   const segs = path.split('/').map((s) => s.trim()).filter(Boolean);
   if (!segs.length) return { error: T('goto_empty', '請輸入節點路徑') };
@@ -118,8 +119,9 @@ async function jump(panel) {
   const trimmed = raw.trim();
   if (!trimmed) return setMsg('err', T('goto_empty', '請輸入節點路徑'));
 
-  // 結尾是 .副檔名（剝掉可能的 :Comp 後）→ 當作資源查詢（xxx.prefab / ui/foo.png）。
-  const head = trimmed.split(':')[0].trim();
+  // 結尾是 .副檔名（剝掉可能的 :Comp 與尾端的節點屬性 ._lpos/._name…）→ 當作資源查詢
+  // （xxx.prefab / ui/foo.png）。`._屬性` 是底線開頭，永遠不是真副檔名，先剝掉才不會被誤判成資源。
+  const head = trimmed.split(':')[0].replace(/\.(_[A-Za-z]\w*)$/, '').trim();
   if (/\.\w+$/.test(head)) {
     const r = await selectAsset(head);
     return r.error ? setMsg('err', r.error) : setMsg('ok', `${T('goto_asset_ok', '已選取資源')} ✓ ${r.ok}`);
