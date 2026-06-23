@@ -339,9 +339,9 @@ export type CommandResult =
 export interface CommandContext {
   env: 'cli' | 'mcp';
   command: string; // the invoked command name
-  args: Record<string, any>; // named args (same shape in both hosts)
+  args: Record<string, any>; // named args (same shape in both hosts). CLI: positionals (via `positional`) + any custom `--flags` overlaid (string/true values); MCP: the JSON arguments
   argv?: string[]; // CLI only: raw positionals (escape hatch)
-  flags?: Record<string, any>; // CLI only: parsed flags (json, limit, depth, where, types:Set, …); {} in MCP
+  flags?: Record<string, any>; // CLI only: parsed flags (json, limit, depth, where, types:Set, …) + `extra` = the raw custom-`--flag` bucket; {} in MCP
   projectDir: string;
   scan: ScanResult;
   readText(path: string): Promise<string>; // read any source under assets/ (POSIX-relative)

@@ -35,12 +35,22 @@ before(async () => {
       positional: ['who'],
       run(ctx) {
         return {
-          data: { who: ctx.args.who || null, assets: ctx.scan.assets.size, hasReadText: typeof ctx.readText, env: ctx.env },
+          data: {
+            who: ctx.args.who || null, assets: ctx.scan.assets.size, hasReadText: typeof ctx.readText, env: ctx.env,
+            mode: ctx.args.mode ?? null, verbose: ctx.args.verbose ?? null, // custom --flags overlaid onto ctx.args
+          },
           text: 'HELLO ' + (ctx.args.who || 'world'),
         };
       },
     },
     { name: 'deps', run() { return { text: 'SHADOW' }; } },
+    {
+      // 'limit' is a NON-positional schema prop colliding with coir's reserved --limit.
+      name: 'collide',
+      inputSchema: { type: 'object', required: ['who'], properties: { who: { type: 'string' }, limit: { type: 'number' } } },
+      positional: ['who'],
+      run(ctx) { return { data: { limit: ctx.args.limit ?? null, builtinLimit: ctx.flags?.limit ?? null } }; },
+    },
   ],
 };
 `
@@ -68,6 +78,26 @@ test('-o json prints the data result, with scan + helpers in ctx', () => {
   assert.equal(o.env, 'cli');
   assert.equal(typeof o.assets, 'number'); // scan ran (empty project → 0)
   assert.equal(o.hasReadText, 'function');
+});
+
+test('custom --flag (value + boolean + =form) lands in ctx.args', () => {
+  const r = cli('hello', 'x', '--mode', 'full', '--verbose', '-o', 'json');
+  assert.equal(r.status, 0);
+  const o = JSON.parse(r.stdout.trim());
+  assert.equal(o.mode, 'full');   // --mode full
+  assert.equal(o.verbose, true);  // bare --verbose → boolean true
+  const r2 = cli('hello', 'x', '--mode=fast', '-o', 'json');
+  assert.equal(JSON.parse(r2.stdout.trim()).mode, 'fast'); // --mode=fast
+});
+
+test('a declared arg colliding with a reserved coir flag warns; value goes to ctx.flags', () => {
+  const r = cli('collide', 'x', '--limit', '5', '-o', 'json');
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /collide with reserved coir CLI flags/);
+  assert.match(r.stderr, /\blimit\b/);
+  const o = JSON.parse(r.stdout.trim());
+  assert.equal(o.limit, null);       // --limit did NOT reach ctx.args
+  assert.equal(o.builtinLimit, 5);   // coir ate it → ctx.flags.limit
 });
 
 test('plugin command appears under "Plugin commands" in --help', () => {

@@ -56,6 +56,21 @@ const VALUE_FLAGS = {
 // doesn't swallow trailing positionals (color #hex is 1, rgba is up to 4).
 const VALUE_ARITY = { str: 1, int: 1, num: 1, enum: 1, bool: 1, uuid: 1, json: 1, color: 4, vec2: 2, vec3: 3, vec4: 4, size: 2, quat: 4 };
 
+// The long-flag names parseArgs() consumes — reserved across ALL commands, plugin
+// ones included. A plugin command's custom `--flag` must avoid these: on the CLI a
+// reserved name is parsed as coir's OWN flag (lands in `flags.<name>`), so its value
+// never reaches `ctx.args` / `flags.extra`. Keep this in sync when adding a flag
+// above; `reservedDeclaredFlags` warns a plugin author who declares a colliding arg.
+// (MCP has no CLI flags — a plugin's inputSchema may use any name there.)
+const RESERVED_FLAGS = new Set([
+  'help', 'version', 'project', 'in', 'out', 'where', 'dry-run', 'backup', 'force',
+  'all', 'values', 'diff', 'verify', 'roundtrip', 'into', 'reimport', 'port', 'output',
+  'list', 'dropped', 'depth', 'limit', 'base', 'blob', 'rules', 'index', 'clone',
+  'class', 'ref', 'at', 'with', 'under', 'type', 'kind', 'plugin',
+  'no-trust-project-plugins', 'null',
+  ...Object.keys(VALUE_FLAGS).map((f) => f.slice(2)), // str/int/color/vec3/json/…
+]);
+
 const USAGE = `coir ${VERSION} — headless asset-dependency query + in-place prefab/scene editor for Cocos Creator 3.x.
 
 Usage:  coir <command> [args] [flags]      (runs on the current dir; point elsewhere with -C <projectDir>)
@@ -153,7 +168,7 @@ const M = {
 };
 
 function parseArgs(argv) {
-  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), kinds: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false, base: null, blob: false };
+  const flags = { dir: null, depth: null, where: false, json: false, list: false, limit: Infinity, types: new Set(), kinds: new Set(), plugins: [], dryRun: false, backup: false, value: null, index: null, all: false, help: false, version: false, project: null, with: null, under: null, force: false, dropped: false, base: null, blob: false, extra: {} };
   const addTypes = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.types.add(v); } };
   const addKinds = (s) => { for (const t of String(s || '').split(',')) { const v = t.trim(); if (v) flags.kinds.add(v); } };
   const pos = []; // positionals, in order, from anywhere in argv
@@ -220,6 +235,16 @@ function parseArgs(argv) {
         if (type === 'color' && args.length === 1 && args[0].startsWith('#')) max = 1; // #hex is a single token
       }
       flags.value = { type, args };
+    }
+    // Unknown long flag → generic bucket for PLUGIN commands (built-ins don't read it).
+    // `--k=v` / `--k v` capture a value; a bare `--k` is boolean true. Merged into
+    // ctx.args by makeCmdCtx so a plugin reads `--mode full` at ctx.args.mode — the
+    // same key MCP fills from inputSchema (CLI values are strings; coerce in run()).
+    else if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) flags.extra[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) flags.extra[a.slice(2)] = argv[++i];
+      else flags.extra[a.slice(2)] = true;
     }
     else if (!a.startsWith('-')) pos.push(a);
   }
@@ -551,14 +576,26 @@ function renderPluginCommandsHelp(cmds) {
 }
 
 // The context a plugin command's run(ctx) gets in the CLI. `args` is the named
-// object (CLI positionals mapped via the command's `positional` names) — the same
-// shape the MCP host passes — so one `run` works in both. `env` lets a command
-// branch if it must; `flags` is the parsed CLI flags (CLI only).
+// object (CLI positionals mapped via the command's `positional` names, then any
+// unknown `--flags` overlaid) — the same shape the MCP host passes — so one `run`
+// works in both: a plugin reads `--mode full` at ctx.args.mode, the key MCP fills
+// from inputSchema. `env` lets a command branch if it must; `flags` is the parsed
+// CLI flags (CLI only), with the raw unknown-flag bucket at `flags.extra`.
+// A plugin command's NON-positional inputSchema properties are the args it expects
+// to receive as `--flags` on the CLI (positionals come from `ctx.argv`). Any whose
+// name is a reserved coir flag is unreachable as `--name` (coir eats it first) — we
+// warn the author at dispatch so the collision isn't silent. MCP is unaffected.
+function reservedDeclaredFlags(cmd) {
+  const props = cmd.inputSchema && cmd.inputSchema.properties ? Object.keys(cmd.inputSchema.properties) : [];
+  const positional = new Set((cmd.positional || []).map((n) => String(n).replace(/\?$/, '')));
+  return props.filter((p) => !positional.has(p) && RESERVED_FLAGS.has(p));
+}
+
 function makeCmdCtx({ cmd, pos, flags, projectDir, scan, fp }) {
   return {
     env: 'cli',
     command: cmd.name,
-    args: mapPositionals(cmd, pos), // named args (matches the MCP JSON shape)
+    args: { ...mapPositionals(cmd, pos), ...flags.extra }, // positionals + custom --flags (matches the MCP JSON shape)
     argv: pos,                      // raw positionals (escape hatch)
     flags,
     projectDir,
@@ -635,6 +672,8 @@ async function main() {
   // Plugin-contributed commands run after the built-ins (a plugin cannot shadow a built-in).
   const pcmd = pluginCommands.get(command);
   if (pcmd) {
+    const clash = reservedDeclaredFlags(pcmd);
+    if (clash.length) console.error(`⚠ plugin command '${command}' declares arg(s) [${clash.join(', ')}] that collide with reserved coir CLI flags — on the CLI these are parsed as coir's own flags and never reach ctx.args. Rename them (e.g. --${pcmd.plugin}-${clash[0]}), or read ctx.flags.${clash[0]} deliberately. (MCP is unaffected.)`);
     const res = await pcmd.run(makeCmdCtx({ cmd: pcmd, pos, flags, projectDir, scan, fp }));
     if (res && res.error) {
       console.error(`✗ ${res.error}`);
