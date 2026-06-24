@@ -51,6 +51,15 @@ before(async () => {
       positional: ['who'],
       run(ctx) { return { data: { limit: ctx.args.limit ?? null, builtinLimit: ctx.flags?.limit ?? null } }; },
     },
+    {
+      // SAME collision as 'collide' (reserved 'depth'), but knowingly acknowledged →
+      // no warning. The value is still eaten by coir, read from ctx.flags.depth.
+      name: 'collide-ok',
+      inputSchema: { type: 'object', required: ['who'], properties: { who: { type: 'string' }, depth: { type: 'number' } } },
+      positional: ['who'],
+      allowReservedFlags: ['depth'],
+      run(ctx) { return { data: { depth: ctx.args.depth ?? null, builtinDepth: ctx.flags?.depth ?? null } }; },
+    },
   ],
 };
 `
@@ -98,6 +107,15 @@ test('a declared arg colliding with a reserved coir flag warns; value goes to ct
   const o = JSON.parse(r.stdout.trim());
   assert.equal(o.limit, null);       // --limit did NOT reach ctx.args
   assert.equal(o.builtinLimit, 5);   // coir ate it → ctx.flags.limit
+});
+
+test('allowReservedFlags silences the collision warning; value still goes to ctx.flags', () => {
+  const r = cli('collide-ok', 'x', '--depth', '5', '-o', 'json');
+  assert.equal(r.status, 0);
+  assert.doesNotMatch(r.stderr, /collide with reserved coir CLI flags/); // acknowledged → no warning
+  const o = JSON.parse(r.stdout.trim());
+  assert.equal(o.depth, null);       // --depth did NOT reach ctx.args
+  assert.equal(o.builtinDepth, 5);   // coir ate it → ctx.flags.depth
 });
 
 test('plugin command appears under "Plugin commands" in --help', () => {

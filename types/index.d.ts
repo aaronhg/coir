@@ -301,6 +301,12 @@ export interface PluginCommand {
   inputSchema?: object;
   /** Names mapping CLI positionals → `ctx.args` keys (so it matches the MCP JSON shape). Defaults to the inputSchema property order. A trailing `?` marks optional. */
   positional?: string[];
+  /**
+   * Reserved coir CLI flag names this command knowingly reuses as inputSchema props (e.g. `depth`, `limit`, `type`).
+   * On the CLI such a flag is eaten by coir and read from `ctx.flags.<name>` (not `ctx.args`); listing it here is an
+   * explicit acknowledgement that silences the collision warning. Other colliding names still warn. MCP is unaffected.
+   */
+  allowReservedFlags?: string[];
   run(ctx: CommandContext): CommandResult | void | Promise<CommandResult | void>;
 }
 

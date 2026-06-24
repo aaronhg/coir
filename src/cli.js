@@ -585,10 +585,14 @@ function renderPluginCommandsHelp(cmds) {
 // to receive as `--flags` on the CLI (positionals come from `ctx.argv`). Any whose
 // name is a reserved coir flag is unreachable as `--name` (coir eats it first) — we
 // warn the author at dispatch so the collision isn't silent. MCP is unaffected.
+// A name listed in `cmd.allowReservedFlags` is an explicit "I know — I read it from
+// `ctx.flags.<name>` on the CLI deliberately" → suppressed (still warns for any OTHER
+// colliding name, so the check keeps its value).
 function reservedDeclaredFlags(cmd) {
   const props = cmd.inputSchema && cmd.inputSchema.properties ? Object.keys(cmd.inputSchema.properties) : [];
   const positional = new Set((cmd.positional || []).map((n) => String(n).replace(/\?$/, '')));
-  return props.filter((p) => !positional.has(p) && RESERVED_FLAGS.has(p));
+  const allowed = new Set((cmd.allowReservedFlags || []).map(String)); // author knowingly reuses these → reads ctx.flags.<name>
+  return props.filter((p) => !positional.has(p) && !allowed.has(p) && RESERVED_FLAGS.has(p));
 }
 
 function makeCmdCtx({ cmd, pos, flags, projectDir, scan, fp }) {
@@ -673,7 +677,7 @@ async function main() {
   const pcmd = pluginCommands.get(command);
   if (pcmd) {
     const clash = reservedDeclaredFlags(pcmd);
-    if (clash.length) console.error(`⚠ plugin command '${command}' declares arg(s) [${clash.join(', ')}] that collide with reserved coir CLI flags — on the CLI these are parsed as coir's own flags and never reach ctx.args. Rename them (e.g. --${pcmd.plugin}-${clash[0]}), or read ctx.flags.${clash[0]} deliberately. (MCP is unaffected.)`);
+    if (clash.length) console.error(`⚠ plugin command '${command}' declares arg(s) [${clash.join(', ')}] that collide with reserved coir CLI flags — on the CLI these are parsed as coir's own flags and never reach ctx.args. Rename them (e.g. --${pcmd.plugin}-${clash[0]}), or read ctx.flags.${clash[0]} deliberately and list them in the command's allowReservedFlags to silence this. (MCP is unaffected.)`);
     const res = await pcmd.run(makeCmdCtx({ cmd: pcmd, pos, flags, projectDir, scan, fp }));
     if (res && res.error) {
       console.error(`✗ ${res.error}`);

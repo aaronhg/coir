@@ -35,6 +35,7 @@ export function collectPluginCommands(plugins, warn = (m) => process.stderr.writ
         // Explicit `positional` wins; else fall back to the inputSchema property order.
         positional: Array.isArray(c.positional) ? c.positional
           : (c.inputSchema && c.inputSchema.properties ? Object.keys(c.inputSchema.properties) : []),
+        allowReservedFlags: Array.isArray(c.allowReservedFlags) ? c.allowReservedFlags : [], // reserved names the author knowingly reuses → no warning
         run: c.run,
         plugin: p.name,
       });

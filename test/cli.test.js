@@ -406,6 +406,61 @@ test('exit 2: target not found', () => {
   assert.equal(cli('deps', 'zzz.png').status, 2);
 });
 
+test('fuzzy resolve: a basename WITHOUT its extension resolves', () => {
+  assert.equal(json(cli('info', 'Shop', '-o', 'json')).path, 'Shop.prefab');
+  assert.equal(json(cli('info', 'coin', '-o', 'json')).path, 'coin.png');
+});
+
+test('fuzzy resolve: a leading assets/ prefix is stripped', () => {
+  assert.equal(json(cli('info', 'assets/Shop.prefab', '-o', 'json')).path, 'Shop.prefab');
+  // prefix + subpath disambiguates an otherwise-ambiguous basename
+  assert.equal(json(cli('info', 'assets/a/icon.png', '-o', 'json')).path, 'a/icon.png');
+});
+
+test('fuzzy resolve: an extensionless path-suffix resolves', () => {
+  assert.equal(json(cli('info', 'resources/dyn', '-o', 'json')).path, 'resources/dyn.png');
+});
+
+test('fuzzy resolve: an ambiguous extensionless name still errors with candidates', () => {
+  const r = cli('deps', 'icon'); // a/icon.png + b/icon.png
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /a\/icon\.png/);
+  assert.match(r.stderr, /b\/icon\.png/);
+});
+
+test('fuzzy resolve: strict match wins over the extensionless fallback', () => {
+  // 'icon.png' is an exact basename (tier 1) for BOTH a/ and b/ → ambiguous,
+  // and must NOT silently collapse via the looser tier.
+  assert.equal(cli('deps', 'icon.png').status, 2);
+});
+
+test('fuzzy resolve: a db:// editor "Copy URL" resolves', () => {
+  assert.equal(json(cli('info', 'db://assets/Shop.prefab', '-o', 'json')).path, 'Shop.prefab');
+});
+
+test('fuzzy resolve: a trailing .meta sidecar resolves to its asset', () => {
+  assert.equal(json(cli('info', 'Shop.prefab.meta', '-o', 'json')).path, 'Shop.prefab');
+  assert.equal(json(cli('info', 'db://assets/coin.png.meta', '-o', 'json')).path, 'coin.png');
+});
+
+test('fuzzy resolve: surrounding quotes/whitespace and backslashes are normalized', () => {
+  assert.equal(json(cli('info', '"Shop.prefab"', '-o', 'json')).path, 'Shop.prefab');
+  assert.equal(json(cli('info', '  Shop.prefab  ', '-o', 'json')).path, 'Shop.prefab');
+  assert.equal(json(cli('info', 'assets\\a\\icon.png', '-o', 'json')).path, 'a/icon.png');
+});
+
+test('fuzzy resolve: case-insensitive fallback tier', () => {
+  assert.equal(json(cli('info', 'shop', '-o', 'json')).path, 'Shop.prefab');
+  assert.equal(json(cli('info', 'SHOP.PREFAB', '-o', 'json')).path, 'Shop.prefab');
+});
+
+test('not found prints a "did you mean" suggestion', () => {
+  const r = cli('deps', 'Shoo.prefab'); // typo of Shop.prefab
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /did you mean/);
+  assert.match(r.stderr, /Shop\.prefab/);
+});
+
 test('exit 1: usage (no command) and unknown command', () => {
   assert.equal(cliRaw().status, 1);          // no project/command
   assert.equal(cli('frobnicate', 'x').status, 1);

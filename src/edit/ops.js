@@ -8,7 +8,7 @@
 // (except writeAtomic's concurrent-change guard, surfaced by commitWrites).
 import path from 'node:path';
 import { componentName, typeToken } from '../core/selector.js';
-import { resolveTarget } from '../seam/shared.js';
+import { resolveTarget, fmtDidYouMean } from '../seam/shared.js';
 import { loadDoc, planSwapUuid, serialize, writeAtomic, resolveSelector, getDeep, setDeep,
   eulerToQuat, setParent, removeNode, removeComponent, addNode, addComponent,
   nestedInstanceRoot, subtreeHasInstance, listNodes, verifyDoc, roundTrip, probeInvertible,
@@ -128,7 +128,7 @@ export function resolveRawTypes(scan, v, unknown) {
 // ---- resolution helpers (return data, never exit) --------------------------
 function resolveAssetData(scan, query) {
   const r = resolveTarget(scan, query);
-  if (r.notFound) return { error: OM.notFound(query), code: 2 };
+  if (r.notFound) return { error: OM.notFound(query) + fmtDidYouMean(r.suggestions), code: 2 };
   if (r.candidates) {
     const lines = r.candidates.slice(0, 20);
     if (r.candidates.length > 20) lines.push(`… ${r.candidates.length - 20} more`);

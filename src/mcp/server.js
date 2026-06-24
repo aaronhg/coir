@@ -13,7 +13,7 @@ import { scanProject } from '../core/scan.js';
 import { makeFsProvider, readCocosVersion } from '../node/fsProvider.js';
 import { TOOLS, TOOLS_BY_NAME } from './tools.js';
 import { collectPluginCommands } from '../seam/pluginCommands.js';
-import { base, kb, resolveTarget, edgeMaps } from '../seam/shared.js';
+import { base, kb, resolveTarget, edgeMaps, fmtDidYouMean } from '../seam/shared.js';
 import { mainUuid, subOf, looksCompressed, decompressUuid } from '../core/uuid.js';
 
 const VERSION = (() => { try { return JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version; } catch { return '?'; } })();
@@ -62,7 +62,7 @@ export async function startMcpServer(projectDir, { plugins } = {}) {
   // tools/call's try/catch turns it into a clean { error } tool result.
   const mcpResolveAsset = (scan, q) => {
     const r = resolveTarget(scan, q);
-    if (r.notFound) throw new Error(`not found: "${q}"`);
+    if (r.notFound) throw new Error(`not found: "${q}"${fmtDidYouMean(r.suggestions)}`);
     if (r.candidates) throw new Error(`"${q}" matches ${r.candidates.length} assets — use the full path`);
     return r.uuid;
   };
