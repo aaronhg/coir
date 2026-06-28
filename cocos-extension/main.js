@@ -168,7 +168,7 @@ function listenFrom(server, port, done) {
     server.removeListener('error', onErr);
     server.on('error', (e) => console.error('[coir] native-verify server error:', e));
     verifyPort = port;
-    console.log(`[coir] native-verify on http://127.0.0.1:${port}  (/reimport /read /fixture /ready /uuid)`);
+    console.log(`[coir] native-verify on http://127.0.0.1:${port}  (/reimport /read /scene /fixture /ready /uuid)`);
     if (done) done(port);
   });
 }
@@ -198,6 +198,7 @@ async function handleVerify(req, res) {
   switch (req.url) {
     case '/reimport': await A('reimport-asset', b.url); return sendJson(res, 200, { ok: true }); // engine re-reads from disk; malformed → import error
     case '/read':     return sendJson(res, 200, await Editor.Message.request('scene', 'execute-scene-script', { name: 'coir', method: 'coirRead', args: [b.uuid, b.selectors] })); // instantiate + read selectors (scene.js)
+    case '/scene':    return sendJson(res, 200, await Editor.Message.request('scene', 'execute-scene-script', { name: 'coir', method: 'currentScene', args: [] })); // the editor's OPEN scene (name/uuid/rootChildren) → lets copse identify which coir scene it's driving
     case '/fixture':  return sendJson(res, 200, await fixtureOp(A, b)); // copy/create/delete + refresh → isolated test assets
     case '/ready':    { let ready = true; try { ready = await A('query-ready'); } catch (e) { /* */ } return sendJson(res, 200, { ready, version: cocosVersion(), project: Editor.Project.path, token: verifyToken }); }
     case '/uuid':     return sendJson(res, 200, { uuid: await A('query-uuid', b.url).catch(() => null) });

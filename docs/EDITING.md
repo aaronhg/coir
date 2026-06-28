@@ -29,6 +29,11 @@ Applies to **Cocos Creator 3.5.2 / 3.8.x**, the same code path (reasons in §2).
 
 ## 3. Addressing model (selector)
 
+> **Runtime sibling:** [copse](https://github.com/aaronhg/copse) drives the *live* scene with the
+> same selector vocabulary — a **subset** of this grammar (no `#N`, no component/array `[i]`, always
+> index-parses a trailing `[i]`; adds a `Node` pseudo-component; component class names are minified at
+> runtime). The shared subset is the node-path + `Comp.member` core. See copse's `docs/SELECTORS.md`.
+
 | Selection target | Syntax | Example |
 |---|---|---|
 | Node | `<nodePath>` | `Canvas/Panel/Title` |

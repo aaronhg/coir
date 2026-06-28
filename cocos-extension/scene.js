@@ -12,6 +12,22 @@
 // own name (it's consumed if it matches the instantiated root).
 
 exports.methods = {
+  // Which scene is open in the editor right now — read straight off the live engine
+  // (`cc.director.getScene()`), the same object copse sees at runtime. Returns name +
+  // uuid + the root's child node names, so a runtime driver (copse) can identify WHICH
+  // coir scene it is driving (match by uuid/name, or confirm by `rootChildren` structure —
+  // copse's runtime tree is rooted at these same children). No mutation; safe to poll.
+  currentScene() {
+    const cc = globalThis.cc;
+    if (!cc || !cc.director || !cc.director.getScene) return { error: 'cc.director unavailable in this scene context' };
+    const s = cc.director.getScene();
+    if (!s) return { error: 'no scene loaded' };
+    // Drop editor-only gizmo layers ("Editor Scene Foreground/Background") so `rootChildren`
+    // is the AUTHORED roots — comparable to what a runtime driver (copse) sees (which instead
+    // carries its own tool node, "PROFILER_NODE"). name/uuid stay the primary identifier.
+    const rootChildren = (s.children || []).map((c) => c && c.name).filter((n) => n && !/^Editor Scene /.test(n));
+    return { ok: true, name: s.name || '', uuid: s.uuid || s._id || null, rootChildren };
+  },
   async coirRead(uuid, selectors) {
     const cc = globalThis.cc;
     if (!cc || !cc.assetManager) return { error: 'cc/assetManager unavailable in this scene context' };

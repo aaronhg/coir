@@ -24,7 +24,7 @@
     },
     "scene": {
       "script": "./scene.js",
-      "methods": ["coirRead"]
+      "methods": ["coirRead", "currentScene"]
     },
     "menu": [
       { "path": "i18n:menu.panel/Coir", "label": "i18n:coir.goto_open", "message": "open-goto" },
